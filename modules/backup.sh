@@ -32,7 +32,7 @@ oced_backup() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --no-compress) compress=0 ;;
-            *) o_die "Argumento desconocido: $1" ;;
+            *) o_die "Unknown argument: $1" ;;
         esac
         shift
     done
@@ -44,18 +44,18 @@ oced_backup() {
     snap=$(mktemp /tmp/opencode-db-snap-XXXXXX.db)
     trap 'rm -f -- "${snap:-}" "${snap:-}.gz" /tmp/oced-backup.err' EXIT
 
-    echo "-> Snapshot consistente (sqlite .backup) de $OPENCODE_DB ..."
+    echo "-> Consistent snapshot (sqlite .backup) of $OPENCODE_DB ..."
     rc=1
     for attempt in 1 2 3; do
         if sqlite3 "$OPENCODE_DB" ".backup '$snap'" 2>/tmp/oced-backup.err; then
             rc=0; break
         fi
-        echo "   (intento $attempt: DB ocupada, reintento en 2s)"
+        echo "   (attempt $attempt: DB busy, retrying in 2s)"
         sleep 2
     done
     if [ "$rc" -ne 0 ]; then
         cat /tmp/oced-backup.err >&2
-        o_die "No se pudo crear el snapshot."
+        o_die "Could not create the snapshot."
     fi
 
     local sess msgs parts maxu
@@ -94,51 +94,51 @@ oced_backup() {
     trap - EXIT
 
     echo "✅ Backup: $fpath"
-    printf '   %-16s %s\n' "Creado:" "$stamp"
-    printf '   %-16s %s\n' "Tamaño:" "$(o_human_size "$fsize") (raw $(o_human_size "$size_raw"))"
-    printf '   %-16s %s\n' "Sesiones:" "$sess"
+    printf '   %-16s %s\n' "Created:" "$stamp"
+    printf '   %-16s %s\n' "Size:" "$(o_human_size "$fsize") (raw $(o_human_size "$size_raw"))"
+    printf '   %-16s %s\n' "Sessions:" "$sess"
     printf '   %-16s %s\n' "sha256:" "$fsha"
-    echo "   Alineación: compruébala con: opencode-db.sh status"
+    echo "   Alignment: check with: opencode-db status"
 }
 
 oced_backups() {
     local manifest; manifest=$(manifest_path)
-    [ -f "$manifest" ] || { echo "No hay backups registrados."; return 0; }
+    [ -f "$manifest" ] || { echo "No backups recorded yet."; return 0; }
     local n
     n=$(jq -r '.backups | length' "$manifest")
     case "${1:-list}" in
         list)
             echo "== Backups ($n) =="
-            jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + .value.date + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sesiones)"' "$manifest"
+            jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + .value.date + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
             echo ""
             echo "  verify <file>  ·  prune <N>"
             ;;
         verify)
             local f="${2:-}"
-            [ -n "$f" ] || { echo "Uso: opencode-db.sh backups verify <backup-file>"; return 1; }
+            [ -n "$f" ] || { echo "Usage: opencode-db backups verify <backup-file>"; return 1; }
             local rec
             rec=$(jq -r --arg f "$f" '.backups[] | select(.file == $f)' "$manifest")
-            [ -n "$rec" ] || { echo "No está en el manifiesto: $f"; return 1; }
+            [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
             local expect actual
             expect=$(printf '%s' "$rec" | jq -r '.sha256')
             if [ -f "$OCED_BACKUP_DIR/$f" ]; then
                 actual=$(sha256sum "$OCED_BACKUP_DIR/$f" | cut -d' ' -f1)
-                [ "$actual" = "$expect" ] && echo "✅ $f  OK (sha256 coincide)" \
-                    || { echo "❌ $f  sha256 NO coincide"; echo "   manifiesto: $expect"; echo "   archivo:    $actual"; }
+                [ "$actual" = "$expect" ] && echo "✅ $f  OK (sha256 matches)" \
+                    || { echo "❌ $f  sha256 MISMATCH"; echo "   manifest: $expect"; echo "   file:     $actual"; }
             else
-                echo "No existe el archivo: $OCED_BACKUP_DIR/$f"
+                echo "File not found: $OCED_BACKUP_DIR/$f"
             fi
             ;;
         prune)
             local keep="${2:-}"
             case "$keep" in
-                ''|*[!0-9]*) echo "Uso: opencode-db.sh backups prune <N>  (N = cuántos mantener)"; return 1 ;;
+                ''|*[!0-9]*) echo "Usage: opencode-db backups prune <N>  (N = how many to keep)"; return 1 ;;
             esac
-            [ "$keep" -ge 1 ] || { echo "N debe ser >= 1"; return 1; }
+            [ "$keep" -ge 1 ] || { echo "N must be >= 1"; return 1; }
             local to_delete removed
             to_delete=$(jq -r --argjson k "$keep" '[.backups | sort_by(.date)] | .[0][0:(length - $k)] | .[].file' "$manifest")
             if [ -z "$to_delete" ]; then
-                echo "Nada que podar (hay $n, se mantienen $keep)."
+                echo "Nothing to prune (have $n, keeping $keep)."
                 return 0
             fi
             removed=0
@@ -149,8 +149,8 @@ oced_backups() {
                 fi
             done <<<"$to_delete"
             manifest_write "$(jq --argjson k "$keep" '.backups |= (sort_by(.date) | .[-$k:])' "$manifest")"
-            echo "Prune: eliminados $removed archivos; quedan $keep."
+            echo "Prune: removed $removed file(s); keeping $keep."
             ;;
-        *) echo "Uso: opencode-db.sh backups [list|verify <file>|prune <N>]"; return 1 ;;
+        *) echo "Usage: opencode-db backups [list|verify <file>|prune <N>]"; return 1 ;;
     esac
 }

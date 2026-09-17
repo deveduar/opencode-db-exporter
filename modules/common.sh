@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Defaults (overridable via env or the optional conf file).
 OPENCODE_DB="${OPENCODE_DB:-$HOME/.local/share/opencode/opencode.db}"
-OCED_OUT="${OCED_OUT:-$HOME/.local/share/opencode-db-exporter/exportes}"
+OCED_OUT="${OCED_OUT:-$HOME/.local/share/opencode-db-exporter/exports}"
 OCED_BACKUP_DIR="${OCED_BACKUP_DIR:-$HOME/.local/share/opencode-db-exporter/backups}"
 OCED_COMPRESS="${OCED_COMPRESS:-1}"
 OCED_CONF="${OCED_CONF:-$HOME/.config/opencode-db/opencode-db.conf}"
@@ -29,7 +29,7 @@ o_now_utc() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 o_ts() { date -u +"%Y%m%d-%H%M%S"; }
 
 o_db_exists() {
-    [ -f "$OPENCODE_DB" ] || o_die "No existe la DB: $OPENCODE_DB"
+    [ -f "$OPENCODE_DB" ] || o_die "Database not found: $OPENCODE_DB"
 }
 
 o_db_uri() { printf 'file:%s?mode=ro' "$OPENCODE_DB"; }
@@ -43,7 +43,7 @@ o_human_size() {
 
 o_check_deps() {
     for dep in sqlite3 python3 jq gzip; do
-        o_have "$dep" || o_die "Falta '$dep' (necesario para opencode-db)."
+        o_have "$dep" || o_die "Missing '$dep' (required by opencode-db). Install it with: opencode-db deps"
     done
 }
 

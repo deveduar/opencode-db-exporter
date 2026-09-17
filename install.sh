@@ -13,14 +13,12 @@ CONF_DIR="$HOME/.config/opencode-db"
 CONF_DEST="$CONF_DIR/opencode-db.conf"
 
 check_deps() {
-    local warn=0
+    local missing=""
     for dep in sqlite3 python3 jq gzip; do
-        if ! command -v "$dep" >/dev/null 2>&1; then
-            echo "   ⚠️  Missing '$dep' (needed: apt install $dep)." >&2
-            warn=1
-        fi
+        command -v "$dep" >/dev/null 2>&1 || missing+=" $dep"
     done
-    [ "$warn" -eq 0 ] && echo "   Core dependencies: OK (sqlite3, python3, jq, gzip)."
+    [ -n "$missing" ] && echo "   ⚠️  Missing:$missing  (fix with: ~/.local/bin/opencode-db deps)"
+    command -v fzf >/dev/null 2>&1 || echo "   ⚠️  Missing fzf (only needed for the interactive menu)."
 }
 
 if [ "$SOURCE_ROOT" = "$PREFIX" ]; then
@@ -52,17 +50,17 @@ for path in modules tests; do
     sync_dir "$path"
 done
 
-find "$PREFIX/modules" -type f \( -name '*.sh' \) -exec chmod +x {} +
+find "$PREFIX/modules" -type f -name '*.sh' -exec chmod +x {} +
 ln -sfn "$PREFIX/modules/opencode-db.sh" "$BIN_DIR/opencode-db"
 
 if [ -f "$CONF_DEST" ]; then
-    echo "   Conf existente: $CONF_DEST (no se toca)"
+    echo "   Existing config: $CONF_DEST (not modified)"
 else
     cp "$SOURCE_ROOT/opencode-db.conf.example" "$CONF_DEST"
     chmod 600 "$CONF_DEST"
-    echo "   Conf creada desde ejemplo: $CONF_DEST (permisos 600)"
+    echo "   Config created from example: $CONF_DEST (permissions 600)"
 fi
 
-echo "✅ opencode-db-exporter instalado en $PREFIX"
-echo "   CLI: $BIN_DIR/opencode-db   (también: bash $SOURCE_ROOT/modules/opencode-db.sh)"
-echo "   Prueba: $BIN_DIR/opencode-db status"
+echo "✅ opencode-db-exporter installed in $PREFIX"
+echo "   CLI: $BIN_DIR/opencode-db   (also: bash $SOURCE_ROOT/modules/opencode-db.sh)"
+echo "   Try: $BIN_DIR/opencode-db status"

@@ -1,67 +1,95 @@
 # opencode-db-exporter
 
-Un tool standalone (estilo [byok-manager](https://github.com/.../byok-manager)) para **leer, respaldar y exportar** la base de datos SQLite local de opencode (`~/.local/share/opencode/opencode.db`) a Markdown legible, sin modificar nunca la DB de opencode.
+Read, back up and export the local SQLite database of **opencode** (`opencode` CLI) to readable Markdown. It never writes to the opencode database: every access is read-only (`mode=ro`).
 
-Reemplaza los scripts antiguos `exportar_opencode.py`, `exportar_sin_calls.py` y `exportar_solo_texto.py`.
+Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
 
-## Instalación
+## Requirements
+
+- Linux (tested on Debian/Ubuntu) and the opencode CLI
+- `sqlite3`, `python3`, `jq`, `gzip` (core)
+- `fzf` (only for `opencode-db menu`)
+
+The tool can install its own missing dependencies idempotently:
 
 ```bash
-./install.sh            # + symlink ~/.local/bin/opencode-db (si ~/.local/bin no está en el PATH: export PATH="$HOME/.local/bin:$PATH")
-opencode-db status     # primera prueba
+opencode-db deps --check   # report only (no sudo)
+opencode-db deps           # install what's missing (apt, prompts for sudo)
 ```
 
-Dependencias: `sqlite3`, `python3`, `jq`, `gzip`.
+## Install
 
-## Comandos
+```bash
+./install.sh            # copies modules+tests to ~/.local/share/opencode-db-exporter,
+                        # symlinks ~/.local/bin/opencode-db, creates the config if missing
+export PATH="$HOME/.local/bin:$PATH"
+opencode-db status      # first check
+```
+
+No installation is strictly required: you can run it straight from the repo with `bash modules/opencode-db.sh`.
+
+## Commands
 
 ```
-opencode-db status            # estado de la DB y alineación con el último backup
-opencode-db list [--root] [--sub] [--info] [--filter PATRÓN] [--grouped]
-opencode-db info <session>    # detalle de una sesión (tokens, coste, compactaciones)
-opencode-db compactaciones <session>
-opencode-db backup            # snapshot consistente (sqlite .backup), gzip + sha256 + manifest.json
+opencode-db menu                      # interactive fzf menu
+opencode-db status                    # DB state + alignment with the last backup
+opencode-db list [--root|--sub] [--filter PATTERN] [--info]
+opencode-db info <session_id>         # tokens, cost, compactions, counts
+opencode-db compactions <session_id>  # context-compaction points
+opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
 opencode-db backups [list|verify <file>|prune <N>]
-opencode-db export <perfil> [OPCIONES]   # perfiles: completo | sin-calls | solo-texto
+opencode-db export <profile> [FLAGS]  # profiles: full | no-calls | text-only
+opencode-db deps [--check]            # idempotent dependency check/install
 opencode-db help
 ```
 
-### export — perfiles y opciones
+## Export
 
-| Perfil       | Contenido                                                            |
-|--------------|---------------------------------------------------------------------|
-| `completo`   | Todo: texto + reasoning + tool calls (input/output truncados) + diffs |
-| `sin-calls`  | Texto + reasoning, sin tool calls                                    |
-| `solo-texto` | Solo texto del usuario/asistente                                     |
+Profiles:
 
-Opciones:
-- `--filter `LIKE`` — filtra por id o título (patrón SQL `%...%`).
-- `--sub separate|inline|omit` — cómo incluir los subagentes (lo habitual: `separate`, cada uno en su carpeta).
-- `--marcar-compactaciones` — inserta un aviso `⚙️ Compactación de contexto` donde hubo compactación.
-- `--resumen-diffs` — incluye el resumen de cambios (`summary.diffs`) que opencode guarda por mensaje.
-- `--tool-output` — por defecto el output de las tool calls se trunca; con esta flag se muestra completo.
+| Profile    | Content                                             |
+|------------|-----------------------------------------------------|
+| `full`     | text + reasoning + tool calls (truncated) + patches + compaction markers |
+| `no-calls` | text + reasoning, no tool calls                     |
+| `text-only`| only user/assistant text                            |
 
-Cada run genera una carpeta `exportes/<timestamp>/<perfil>/` con un `index.md` y un `metadatos.json` (resumen exportable/máquina-legible).
+Flags:
 
-## Arquitectura
+- `--filter PATTERN` — SQL `LIKE` on session id/title (e.g. `'ses_f7%'`); useful to export one session or one project.
+- `--sub separate|inline|omit` — how to place subagents (default `separate`: folder per root session with `subagents/` inside).
+- `--tool-output full|truncated|omit` — tool output verbosity (default `truncated`).
+- `--patch full|omit` — include patch parts (default `full`).
+- `--mark-compactions` — annotate where context compaction happened.
+- `--summary-diffs` — include opencode's `summary.diffs` (files + additions/deletions) per message.
+
+Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per session, an `index.md`, and a machine-readable `metadatos.json`.
+
+## Design notes
+
+- The opencode DB uses **WAL mode** (`opencode.db-wal`). Backups use `sqlite3 .backup` (a consistent snapshot), never `cp`.
+- All reads use SQLite `mode=ro` — opencode is never locked or modified.
+- **Subagents** are detected via `session.parent_id`; an orphan without a parent in the result set is exported as a root labeled `Subagent of: <parent>`.
+- Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf` (see `opencode-db.conf.example`).
+
+## Tests
+
+```bash
+bash tests/export_smoke.sh   # runs against a fake DB, never touches real data -> 30 OK / 0 FAIL
+```
+
+## Layout
 
 ```
 modules/
-  opencode-db.sh   dispatcher CLI (sourcea los módulos)
-  common.sh        configuración y helpers (lectura SIEMPRE en modo ro)
-  view.sh          status / list / info / compactaciones (SQL de solo lectura)
-  backup.sh        snapshot consistente + gzip + sha256 + manifest.json
-  export.sh        puente bash → python
-  export.py        renderizador Markdown (perfiles, subagentes, index.md, metadatos)
+  opencode-db.sh   CLI dispatcher
+  common.sh        config + helpers (always read-only)
+  view.sh          status / list / info / compactions
+  backup.sh        consistent snapshots + sha256 + manifest.json
+  export.sh        bash -> python bridge
+  export.py        Markdown renderer (profiles, subagents, index.md, metadata)
+  deps.sh          idempotent dependency check/install
+  menu.sh          interactive fzf menu
 tests/
-  make_fake_db.sh  genera una DB falsa para los smoke tests
-  export_smoke.sh  smoke tests end-to-end (no toca datos reales)
-install.sh / opencode-db.conf.example / AGENTS.md
+  make_fake_db.sh  generates a fake DB for the tests
+  export_smoke.sh  end-to-end assertions
 ```
-
-## Notas de diseño
-
-- **La DB usa modo WAL** (`opencode.db-wal`). El backup usa `sqlite3 .backup` (snapshot consistente), nunca `cp`; si hay un `.wal` pendiente se checkpointea implícitamente.
-- **Lectura siempre en modo `ro`** (`file:...?mode=ro`): nunca se modifica ni lockea la DB de opencode.
-- Los **subagentes** se detectan por `session.parent_id`; si su padre no está en el resultado se exportan como raíz etiquetada `Subagente de: <padre>`.
-- Verificación: `bash tests/export_smoke.sh` (debe dar `28 OK / 0 FALLO`) y comprobaciones previas; ver `AGENTS.md`.
