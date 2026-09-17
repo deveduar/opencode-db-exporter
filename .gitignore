@@ -1,0 +1,15 @@
+x/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Databases / archives (never part of the tool)
+*.db
+*.db-wal
+*.db-shm
+*.gz
+
+# Misc
+*.log
+.DS_Store

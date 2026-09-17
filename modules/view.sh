@@ -136,7 +136,7 @@ oced_compactions() {
     o_check_deps
     o_db_exists
     local id="${1:-}"
-    [ -n "$id" ] || o_die "Usage: opencode-db compactions <session_id>"
+    [ -n "$id" ] || o_die "Usage: opencode-db compactions <session_id> [show [last|N|all]]"
     local n rc
     n=$(o_q "SELECT count(*) FROM part WHERE session_id='${id//\'/\'\'}' AND json_extract(data,'\$.type')='compaction'")
     echo "== Compactions ($id) =="
@@ -150,4 +150,36 @@ oced_compactions() {
         FROM part pt
         WHERE pt.session_id='${id//\'/\'\'}' AND json_extract(pt.data,'\$.type')='compaction'
         ORDER BY pt.time_created;"
+    if [ "${2:-}" = "show" ]; then
+        oced_compactions_digest "$id" "${3:-all}"
+    fi
+}
+
+# oced_compactions_digest <id> <last|N|all> -> the compacted-context summary
+# stored in the following "mode=compaction" assistant message.
+oced_compactions_digest() {
+    local id="${1//\'/\'\'}" sel="${2:-all}"
+    local markers digests
+    markers=$(o_q "SELECT json_group_array(
+        json_object('tc', time_created, 'date', datetime(time_created/1000,'unixepoch'),
+                    'tail', coalesce(json_extract(data,'\$.tail_start_id'),''),
+                    'auto', coalesce(json_extract(data,'\$.auto'),1),
+                    'overflow', coalesce(json_extract(data,'\$.overflow'),0)))
+        FROM part WHERE session_id='$id' AND json_extract(data,'\$.type')='compaction' ORDER BY time_created;")
+    digests=$(o_q "SELECT json_group_array(
+        json_object('tc', m.time_created, 'text', (
+            SELECT group_concat(json_extract(p.data,'\$.text'), char(10))
+            FROM part p WHERE p.message_id=m.id AND json_extract(p.data,'\$.type')='text')))
+        FROM message m WHERE m.session_id='$id'
+            AND json_extract(m.data,'\$.mode')='compaction'
+        ORDER BY m.time_created;")
+    printf '%s\n' "$markers" "$digests" | jq -rn --arg sel "$sel" 'input as $M | input as $D |
+        ($M|length) as $L |
+        ((($sel=="last") | if . then 1 else null end) // ($sel|tonumber?)) as $cnt |
+        (if $cnt == null then 0 else ([$L-$cnt,0]|max) end) as $start |
+        range($start; $L) as $i |
+        ($D | map(select(.tc >= $M[$i].tc)) | first? // null) as $d |
+        ("--- " + $M[$i].date + "  auto:" + ($M[$i].auto|tostring) + "  overflow:" + ($M[$i].overflow|tostring) + "  new queue: " + $M[$i].tail + " ---"),
+        (($d.text) // "(no digest message found)"),
+        ""'
 }

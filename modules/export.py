@@ -76,6 +76,8 @@ class Renderer:
 
     # ---- part inclusion ----
     def include_part(self, ptype: str) -> bool:
+        if self.profile == "compactions":
+            return ptype == "text"
         if self.profile == "text-only":
             return ptype == "text"
         if self.profile == "no-calls":
@@ -214,8 +216,8 @@ def load_messages(con: sqlite3.Connection, sid: str):
     return out
 
 
-def make_outdir_final(base: Path, profile: str) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+def make_outdir_final(base: Path, profile: str, stamp: str | None = None) -> Path:
+    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     target = base / stamp / profile
     n = 2
     while target.exists():
@@ -227,7 +229,7 @@ def make_outdir_final(base: Path, profile: str) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="opencode-db export", description="Export opencode sessions to Markdown.")
-    ap.add_argument("profile", nargs="?", default="full", choices=["full", "no-calls", "text-only"])
+    ap.add_argument("profile", nargs="?", default="full", choices=["full", "no-calls", "text-only", "compactions"])
     ap.add_argument("--filter", help="SQL LIKE on session id/title, e.g. 'ses_f7%'")
     ap.add_argument("--out", help="output root dir")
     ap.add_argument("--sub", default="separate", choices=["separate", "inline", "omit"])
@@ -237,6 +239,7 @@ def main() -> None:
     ap.add_argument("--patch", default="full", choices=["full", "omit"])
     ap.add_argument("--mark-compactions", action="store_true")
     ap.add_argument("--summary-diffs", action="store_true")
+    ap.add_argument("--stamp", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     db_path = Path(default_db())
@@ -244,7 +247,7 @@ def main() -> None:
         die(f"Database not found: {db_path}")
     out_base = Path(args.out) if args.out else Path(default_out())
 
-    out_dir = make_outdir_final(out_base, args.profile)
+    out_dir = make_outdir_final(out_base, args.profile, args.stamp)
     try:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
@@ -350,6 +353,8 @@ def main() -> None:
 def write_transcript(con, renderer, session: dict, fpath: Path):
     title = session["title"] or session["slug"]
     msgs = load_messages(con, session["id"])
+    if renderer.profile == "compactions":
+        msgs = [(m, p) for (m, p) in msgs if m.get("mode") == "compaction"]
     n_comp = session["compactions"]
     n_msgs = len(msgs)
     model = session["model"]
@@ -365,7 +370,10 @@ def write_transcript(con, renderer, session: dict, fpath: Path):
         f.write(f"- **Model:** `{model or '?'}`\n")
         f.write(f"- **Directory:** `{session['directory'] or '?'}`\n")
         f.write(f"- **Created:** {ts_iso(session['time_created'])}\n")
-        f.write(f"- **Messages:** {n_msgs} · **Compaction parts:** {n_comp}\n")
+        if renderer.profile == "compactions":
+            f.write(f"- **Compaction digests:** {n_msgs} · **Compaction parts:** {n_comp}\n")
+        else:
+            f.write(f"- **Messages:** {n_msgs} · **Compaction parts:** {n_comp}\n")
         if session["parent_id"]:
             f.write(f"- **Subagent of:** `{session['parent_id']}`\n")
         f.write("\n---\n\n")
@@ -379,6 +387,8 @@ def write_transcript(con, renderer, session: dict, fpath: Path):
 
 def append_transcript_inline(con, renderer, session: dict, fpath: Path, block_head: str):
     msgs = load_messages(con, session["id"])
+    if renderer.profile == "compactions":
+        msgs = [(m, p) for (m, p) in msgs if m.get("mode") == "compaction"]
     with fpath.open("a", encoding="utf-8") as f:
         f.write("\n\n---\n\n")
         f.write(block_head)

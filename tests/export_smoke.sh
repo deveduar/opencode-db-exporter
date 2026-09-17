@@ -81,6 +81,37 @@ echo "== long output truncation =="
 FT=$(cat "$(last_transcript full 'Proyecto Beta')")
 echo "$FT" | grep -q "truncated:" && ok "long output truncated" || bad "output not truncated"
 
+echo "== compactions show (digest) =="
+CS=$(run compactions ses_A0001 show last)
+printf '%s' "$CS" | grep -q "Total: 1" && ok "compactions total" || bad "compactions total"
+printf '%s' "$CS" | grep -q "DIGEST_A" && ok "compactions show last digest" || bad "compactions show digest"
+
+echo "== export compactions profile =="
+run export compactions --filter ses_A0001 >/dev/null
+CC=$(cat "$(last_transcript compactions 'Proyecto Alfa')")
+echo "$CC" | grep -q "DIGEST_A" && ok "compactions digest exported" || bad "compactions profile digest"
+echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "compactions profile has tools" || ok "compactions profile no tools"
+
+echo "== export all (4 profiles in one run) =="
+ALLOG=$(run export all --filter ses_A0001)
+printf '%s' "$ALLOG" | grep -q "Exported" && ok "export all runs" || bad "export all"
+ALDIR=$(printf '%s' "$ALLOG" | sed -n 's/^.* to: \(.*\)$/\1/p' | head -1)
+ALSTAMP=$(basename "$(dirname "$ALDIR")")
+ALL4=1
+for p in full no-calls text-only compactions; do
+    [ -f "$OUT/$ALSTAMP/$p/metadatos.json" ] || ALL4=0
+done
+[ "$ALL4" -eq 1 ] && ok "export all = 4 profiles in one run" || bad "export all profiles ($ALSTAMP)"
+jq -e '.tool_output == "full" and .summary_diffs == true' "$OUT/$ALSTAMP/full/metadatos.json" >/dev/null \
+    && ok "export all maximal flags" || bad "export all flags"
+grep -rq "DIGEST_A" "$OUT/$ALSTAMP/compactions" && ok "export all compactions digest" || bad "export all digest"
+ALROW=$(run exports list | awk -v s="$ALSTAMP" '$0 ~ s {print; exit}')
+ALLP=1
+for p in full no-calls text-only compactions; do
+    printf '%s' "$ALROW" | grep -q "$p" || ALLP=0
+done
+[ "$ALLP" -eq 1 ] && ok "exports list aggregates profiles" || bad "exports list aggregate"
+
 echo "== filter =="
 run export text-only --filter 'Proyecto Beta' >/dev/null
 ME=$(last_meta text-only)
@@ -103,6 +134,17 @@ run export full --mark-compactions >/dev/null
 IX=$(last_meta full); IX="${IX%/metadatos.json}/index.md"
 grep -q "## Sessions" "$IX" && ok "index.md sessions section" || bad "index.md"
 grep -q "](" "$IX" && ok "index.md links" || bad "index.md links"
+
+echo "== exports management =="
+XL=$(run exports list)
+printf '%s' "$XL" | grep -q "^== Exports (" && ok "exports list" || bad "exports list"
+printf '%s' "$XL" | grep -qE '^[ ]*[0-9]+\.' && ok "exports list rows" || bad "exports list rows"
+STAMP=$(printf '%s' "$XL" | awk '/^[ ]*[0-9]+\./ {print $2; exit}')
+run exports remove "$STAMP" --yes >/dev/null
+printf '%s' "$(run exports list)" | grep -q "$STAMP" && bad "exports remove" || ok "exports remove"
+run exports prune 1 --yes >/dev/null
+NX=$(run exports list | grep -cE '^[ ]*[0-9]+\.')
+[ "$NX" -eq 1 ] && ok "exports prune keeps 1" || bad "exports prune ($NX)"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

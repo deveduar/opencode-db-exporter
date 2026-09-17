@@ -57,7 +57,8 @@ INSERT INTO message VALUES
  ('msg_A_2','ses_A0001',1789000100000,1789000100000,'{"role":"assistant","time":{"created":1789000100000},"agent":"build"}'),
  ('msg_A_3','ses_A0001',1789000200000,1789000200000,'{"role":"user","time":{"created":1789000200000},"summary":{"diffs":[{"file":"src/a.py","patch":"...","additions":5,"deletions":2,"status":"modified"}]}}'),
  ('msg_A_4','ses_A0001',1789000300000,1789000300000,'{"role":"assistant","time":{"created":1789000300000},"agent":"build"}'),
- ('msg_A_5','ses_A0001',1789000400000,1789000400000,'{"role":"assistant","time":{"created":1789000400000},"summary":true,"agent":"build"}');
+ ('msg_A_5','ses_A0001',1789000400000,1789000400000,'{"role":"assistant","time":{"created":1789000400000},"summary":true,"agent":"build"}'),
+ ('msg_A_6','ses_A0001',1789000250000,1789000250000,'{"role":"assistant","mode":"compaction","agent":"compaction","summary":true,"time":{"created":1789000250000}}');
 INSERT INTO part VALUES
  ('prt_A_1','msg_A_1','ses_A0001',1789000000000,1789000000000,'{"type":"text","text":"Hola, analiza el proyecto"}'),
  ('prt_A_2','msg_A_2','ses_A0001',1789000100000,1789000100000,'{"type":"reasoning","text":"Primero pienso"}'),
@@ -67,7 +68,8 @@ INSERT INTO part VALUES
  ('prt_A_6','msg_A_3','ses_A0001',1789000200001,1789000200001,'{"type":"text","text":"Sigo trabajando"}'),
  ('prt_A_7','msg_A_4','ses_A0001',1789000300000,1789000300000,'{"type":"text","text":"Hecho."}'),
  ('prt_A_8','msg_A_4','ses_A0001',1789000300001,1789000300001,'{"type":"step-start","tool":"plan"}'),
- ('prt_A_9','msg_A_5','ses_A0001',1789000400000,1789000400000,'{"type":"text","text":"Resumen booleano inofensivo."}');
+ ('prt_A_9','msg_A_5','ses_A0001',1789000400000,1789000400000,'{"type":"text","text":"Resumen booleano inofensivo."}'),
+ ('prt_A_10','msg_A_6','ses_A0001',1789000250000,1789000250000,'{"type":"text","text":"DIGEST_A: resumen compactado de prueba"}');
 
 -- Subagent A1
 INSERT INTO message VALUES

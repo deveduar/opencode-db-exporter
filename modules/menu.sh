@@ -171,12 +171,18 @@ run_menu() {
 #-----------------------------------------------------------------------
 # Selection helpers
 #-----------------------------------------------------------------------
-# session rows -> one per line: id title date ...
+# session rows -> one per line: id title date ... (sqlite column separators excluded).
 session_rows() {
-    oced_out list --info 2>/dev/null | awk 'NR>2'
+    oced_out list --info 2>/dev/null | awk 'NR>2 && $1 ~ /^ses_/'
 }
 
-# pick_session <title> -> prints a session id (or empty for "all sessions").
+# session_ids -> one session id per line (all sessions, for "all sessions" loops).
+session_ids() {
+    session_rows | awk '{print $1}'
+}
+
+# pick_session <prompt> -> prints a session id, or empty for "all sessions".
+# ESC cancels (rc=1); never selects a default.
 pick_session() {
     local prompt="$1" sel
     sel=$(printf 'ALL SESSIONS (no filter)\n%s' "$(session_rows)" \
@@ -203,7 +209,8 @@ pick_backup_file() {
 oc_root=(
     "db|Database and backups|menu:run_oc_menu_db"
     "sessions|Sessions (list/info/compactions)|menu:run_oc_menu_sessions"
-    "export|Export sessions to Markdown (profile, session, flags)...|fn:oc_export_flow"
+    "export|Export sessions to Markdown (recipes, session)...|fn:oc_export_flow"
+    "exports|Export runs (list/remove/prune)|menu:run_oc_menu_exports"
     "deps|Check/install dependencies...|tool:deps"
     "help|Show help|tool:help"
 )
@@ -222,23 +229,67 @@ oc_menu_sessions=(
     "compactions|Compactions of a session...|fn:oc_pick_compactions"
 )
 
+oc_menu_exports=(
+    "list|List export runs|tool:exports::list"
+    "remove|Remove an export run...|fn:oc_pick_export_remove"
+    "prune|Prune old export runs (keep N)...|fn:oc_pick_export_prune"
+)
+
+# Export recipes: "label|profile|arg1 arg2 ..."
+oc_recipes=(
+    "ALL profiles, maximal (4-in-1)|all|"
+    "full (default)|full|"
+    "full + full tool output|full|--tool-output full"
+    "full + omit tool output|full|--tool-output omit"
+    "full + omit patches|full|--patch omit"
+    "full + context markers|full|--mark-compactions"
+    "full + summary diffs|full|--summary-diffs"
+    "full + context markers + summary diffs|full|--mark-compactions --summary-diffs"
+    "full + subagents inline|full|--sub inline"
+    "full + omit subagents|full|--sub omit"
+    "no-calls (default)|no-calls|"
+    "no-calls + summary diffs|no-calls|--summary-diffs"
+    "no-calls + subagents inline|no-calls|--sub inline"
+    "no-calls + omit subagents|no-calls|--sub omit"
+    "text-only (default)|text-only|"
+    "text-only + subagents inline|text-only|--sub inline"
+    "text-only + omit subagents|text-only|--sub omit"
+)
+
 #-----------------------------------------------------------------------
 # Handlers
 #-----------------------------------------------------------------------
+# run_for_all <cmd> <label>... -> runs the dispatcher cmd for every session.
+run_for_all() {
+    local cmd="$1" label="$2" sid
+    echo "== $label — all sessions =="
+    while IFS= read -r sid; do
+        [ -n "$sid" ] || continue
+        echo ""
+        run_oced_tool "$cmd" "$sid"
+    done <<<"$(session_ids)"
+}
+
 oc_pick_info() {
     local id
-    id=$(pick_session "Session") || return 1
+    id=$(pick_session "Session details") || return 1
     id=$(printf '%s' "$id" | tr -d '\n')
-    [ -n "$id" ] || { echo "   (select a single session)"; return 1; }
-    run_oced_tool info "$id"
+    if [ -z "$id" ]; then
+        run_for_all info "Session details"
+    else
+        run_oced_tool info "$id"
+    fi
 }
 
 oc_pick_compactions() {
     local id
-    id=$(pick_session "Session") || return 1
+    id=$(pick_session "Compactions of session") || return 1
     id=$(printf '%s' "$id" | tr -d '\n')
-    [ -n "$id" ] || { echo "   (select a single session)"; return 1; }
-    run_oced_tool compactions "$id"
+    if [ -z "$id" ]; then
+        run_for_all compactions "Compactions"
+    else
+        run_oced_tool compactions "$id"
+    fi
 }
 
 oc_pick_backup_verify() {
@@ -253,37 +304,55 @@ oc_pick_backup_prune() {
     run_oced_tool backups prune "${keep:-5}"
 }
 
-# oc_export_flow — three screens: profile -> session (or all) -> flags.
-oc_export_flow() {
-    local profile="" selid="" idfilter=()
-    profile=$(printf '%s\n' "full       (text + reasoning + tool calls + patches + markers)" \
-                            "no-calls   (text + reasoning, no tool calls)" \
-                            "text-only  (only user/assistant text)" \
-        | fzf --prompt="Export profile > " --height=40% --border --header="ESC: cancel") || return 1
-    profile=$(printf '%s' "$profile" | awk '{print $1}')
-    [ -n "$profile" ] || return 1
+oc_pick_export_remove() {
+    local stamp
+    stamp=$(pick_export_run "Export run to remove") || return 1
+    confirm_action "Remove export run $stamp? It deletes the generated files." || { echo "   cancelled."; return 0; }
+    run_oced_tool exports remove "$stamp" --yes
+}
 
-    selid=$(pick_session "Sessions to export ($profile)") || return 1
+oc_pick_export_prune() {
+    local keep=""
+    read -r -p "Keep how many recent export runs? [5]: " keep || true
+    run_oced_tool exports prune "${keep:-5}" --yes
+}
+
+# pick_export_run <prompt> -> prints a run stamp (or empty).
+pick_export_run() {
+    local prompt="$1" opts sel
+    opts=$(oced_out exports list 2>/dev/null | awk '/^[ ]*[0-9]+\./ {print $2}')
+    [ -n "$opts" ] || { echo "   (no export runs yet)"; return 1; }
+    sel=$(printf '%s\n' "$opts" | fzf --prompt="$prompt > " --height=40% --border --header="ESC: cancel") || return 1
+    printf '%s\n' "$sel"
+}
+
+# oc_export_flow — two screens: recipes (multi-select) -> session (or all).
+# ESC always cancels; each selected recipe becomes its own export run.
+oc_export_flow() {
+    local picks f pick label rest profile args
+    local -a idfilter=() arr=()
+    f=$(printf '%s\n' "${oc_recipes[@]}" \
+        | fzf --multi --prompt="Export recipes (TAB to select, Enter to export; ESC = cancel) > " \
+            --height=60% --border --header="Each selected recipe produces its own export run.") || return 1
+    [ -n "$f" ] || return 1
+
+    local selid
+    selid=$(pick_session "Sessions to export") || return 1
     selid=$(printf '%s' "$selid" | tr -d '\n')
     [ -n "$selid" ] && idfilter=(--filter "$selid")
 
-    local -a flags=()
-    local f
-    f=$(printf '%s\n' "--mark-compactions      (add context-compaction markers)" \
-                     "--summary-diffs         (include summary.diffs change summaries)" \
-                     "--sub inline            (subagents inline in the root file)" \
-                     "--sub omit              (omit subagents)" \
-                     "--tool-output full      (no tool-output truncation)" \
-        | fzf --multi --prompt="Flags (TAB to select, Enter to run) > " \
-            --height=50% --border --header="ESC: cancel (defaults)") || f=""
-    [ -n "$f" ] && {
-        while IFS= read -r line; do
-            [ -n "$line" ] && flags+=("$(printf '%s' "$line" | awk '{print $1}')")
-        done <<<"$f"
-    }
-
-    echo "   Exporting profile=$profile ${idfilter[*]} ${flags[*]}"
-    run_oced_tool export "$profile" "${idfilter[@]}" "${flags[@]}"
+    while IFS= read -r pick; do
+        [ -n "$pick" ] || continue
+        label="${pick%%|*}"
+        rest="${pick#*|}"
+        profile="${rest%%|*}"
+        args="${rest#*|}"
+        arr=()
+        [ -n "$args" ] && read -r -a arr <<<"$args"
+        echo "   Exporting: $label  (${idfilter[*]:-all sessions})"
+        run_oced_tool export "$profile" "${idfilter[@]}" "${arr[@]}"
+        echo "   ----"
+    done <<<"$f"
 }
 
 #-----------------------------------------------------------------------
@@ -295,6 +364,10 @@ run_oc_menu_db() {
 
 run_oc_menu_sessions() {
     run_menu --cat "opencode-db>sessions" --prompt "Sessions" --entries oc_menu_sessions
+}
+
+run_oc_menu_exports() {
+    run_menu --cat "opencode-db>exports" --prompt "Export runs" --entries oc_menu_exports
 }
 
 run_oc_menu() {

@@ -51,6 +51,8 @@ for path in modules tests; do
 done
 
 find "$PREFIX/modules" -type f -name '*.sh' -exec chmod +x {} +
+cp -f "$SOURCE_ROOT/uninstall.sh" "$PREFIX/uninstall.sh"
+chmod +x "$PREFIX/uninstall.sh"
 ln -sfn "$PREFIX/modules/opencode-db.sh" "$BIN_DIR/opencode-db"
 
 if [ -f "$CONF_DEST" ]; then
