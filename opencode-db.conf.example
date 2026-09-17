@@ -1,0 +1,14 @@
+# opencode-db.conf.example — configuración opcional de opencode-db-exporter.
+# Copiar a ~/.config/opencode-db/opencode-db.conf (permisos 600).
+# Solo rutas y preferencias; no contiene secretos.
+# Cualquier variable omitida usa el valor por defecto de modules/common.sh.
+
+# Ruta a la base de datos de opencode (por defecto).
+# OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
+
+# Carpetas de salida. Por defecto viven bajo ~/.local/share/opencode-db-exporter/.
+# OCED_OUT="$HOME/.local/share/opencode-db-exporter/exportes"
+# OCED_BACKUP_DIR="$HOME/.local/share/opencode-db-exporter/backups"
+
+# Comprimir los backups con gzip: 1 (sí) o 0 (no). Por defecto 1.
+# OCED_COMPRESS=1
