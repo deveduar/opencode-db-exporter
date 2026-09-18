@@ -39,6 +39,7 @@ bash tests/menu_flow.sh           # fzf menu logic (fzf stubbed) -> 10 OK / 0 FA
 - `message.data.summary.diffs` — per-message change summary (`--summary-diffs`); `summary` can be `true` (bool), not only an object.
 - Compactions: parts `type='compaction'` are only markers (`auto`, `overflow`, `tail_start_id`); the compacted-context **digest** is the `text` part of the next message with `data.mode='compaction'`.
 - Session pickers must ignore the sqlite `-column` separator line (rows are filtered by `$1 ~ /^ses_/`).
+- Config precedence is **environment > conf file > default** (`common.sh` snapshots env vars before sourcing `$OCED_CONF`). Keep it that way: never let the conf clobber an explicitly exported variable.
 
 ## Known pitfalls
 

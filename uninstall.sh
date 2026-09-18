@@ -47,9 +47,12 @@ rm -f -- "$SHIM"
 if [ "$all" -eq 1 ]; then
     rm -rf -- "$PREFIX" "$CONF_DIR"
 else
-    rm -rf -- "$PREFIX/modules" "$PREFIX/tests" "$PREFIX/uninstall.sh"
+    rm -rf -- "$PREFIX/modules" "$PREFIX/tests" "$PREFIX/uninstall.sh" "$PREFIX/LICENSE"
     rmdir -- "$PREFIX" 2>/dev/null || true
 fi
 
 echo "✅ opencode-db-exporter uninstalled."
 [ "$all" -eq 1 ] || echo "   Kept: $CONF_DIR, $BACKUP_DIR, $OUT_DIR"
+echo "   Note: system packages installed by 'opencode-db deps' (sqlite3, python3,"
+echo "         jq, gzip; optional fzf) are NOT removed. To drop them:"
+echo "         sudo apt remove sqlite3 python3 jq gzip fzf && sudo apt autoremove"

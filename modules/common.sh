@@ -4,11 +4,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Defaults (overridable via env or the optional conf file).
-OPENCODE_DB="${OPENCODE_DB:-$HOME/.local/share/opencode/opencode.db}"
-OCED_OUT="${OCED_OUT:-$HOME/.local/share/opencode-db-exporter/exports}"
-OCED_BACKUP_DIR="${OCED_BACKUP_DIR:-$HOME/.local/share/opencode-db-exporter/backups}"
-OCED_COMPRESS="${OCED_COMPRESS:-1}"
+# Config precedence: environment > conf file > built-in default.
 OCED_CONF="${OCED_CONF:-$HOME/.config/opencode-db/opencode-db.conf}"
 
 # Optional path config (no secrets): $OCED_CONF (permissions 600).
@@ -16,9 +12,29 @@ OCED_CONF="${OCED_CONF:-$HOME/.config/opencode-db/opencode-db.conf}"
 load_conf() {
     [ -f "$OCED_CONF" ] || return 0
     chmod 600 "$OCED_CONF" 2>/dev/null || true
+
+    # Snapshot variables already present in the environment so the conf file
+    # cannot clobber them (env wins over conf).
+    local v
+    local -A conf_env_set=() conf_env_val=()
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS; do
+        if [ "${!v+x}" = x ]; then
+            conf_env_set[$v]=1
+            conf_env_val[$v]="${!v}"
+        fi
+    done
     set -a; . "$OCED_CONF"; set +a
+    for v in "${!conf_env_set[@]}"; do
+        printf -v "$v" '%s' "${conf_env_val[$v]}"
+    done
 }
 load_conf
+
+# Built-in defaults for whatever neither the environment nor the conf defined.
+: "${OPENCODE_DB:=$HOME/.local/share/opencode/opencode.db}"
+: "${OCED_OUT:=$HOME/.local/share/opencode-db-exporter/exports}"
+: "${OCED_BACKUP_DIR:=$HOME/.local/share/opencode-db-exporter/backups}"
+: "${OCED_COMPRESS:=1}"
 
 o_have() { command -v "$1" >/dev/null 2>&1; }
 

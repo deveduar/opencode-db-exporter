@@ -7,7 +7,7 @@ Intended for Linux with the **opencode CLI**. The database it reads is the share
 ## Requirements
 
 - Linux (tested on Debian/Ubuntu) and the opencode CLI
-- `sqlite3`, `python3`, `jq`, `gzip` (core)
+- `sqlite3`, `python3` (**>= 3.10**, uses `str | None` annotations), `jq`, `gzip` (core)
 - `fzf` (only for `opencode-db menu`)
 
 The tool can install its own missing dependencies idempotently:
@@ -93,6 +93,8 @@ The `compaction` part is only a marker (`auto`, `overflow`, `tail_start_id`). Th
 ./uninstall.sh --all    # also removes config, backups and exports
 ```
 
+It never removes system packages: dependencies installed by `opencode-db deps` stay on the system.
+
 ## Design notes
 
 - The opencode DB uses **WAL mode** (`opencode.db-wal`). Backups use `sqlite3 .backup` (a consistent snapshot), never `cp`.
@@ -100,6 +102,32 @@ The `compaction` part is only a marker (`auto`, `overflow`, `tail_start_id`). Th
 - Every command (status/list/info/compactions/export) reads the **live** DB; backups are offline archives. If you restore an old backup elsewhere, point `OPENCODE_DB` at it. `metadatos.json` records `db` + `db_sha256` so an export can be correlated with a snapshot.
 - **Subagents** are detected via `session.parent_id`; an orphan without a parent in the result set is exported as a root labeled `Subagent of: <parent>`.
 - Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf` (see `opencode-db.conf.example`).
+- Config precedence is **environment > conf file > built-in default**: an explicitly exported `OPENCODE_DB`/`OCED_OUT`/... is never clobbered by the conf.
+
+## Portability (WSL / Windows / portable)
+
+| Scenario | Works? | Notes |
+|----------|--------|-------|
+| Linux (Debian/Ubuntu) | Yes | `opencode-db deps` installs missing packages via `apt`. |
+| WSL, opencode inside WSL | Yes | Defaults match; `deps` uses `apt`/`sudo`. |
+| WSL, opencode is native Windows | Yes, with config | Set `OPENCODE_DB=/mnt/c/Users/<user>/.local/share/opencode/opencode.db`. Residual risk: SQLite WAL file locking over `drvfs`. |
+| Native Windows | No | Bash-only (no `.bat`/`.ps1`); `sqlite3`, `python3`, `jq`, `gzip`, `fzf` are absent. Use WSL. |
+| Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`). |
+| Portable (no install) | Yes | Run `bash modules/opencode-db.sh …` straight from the repo. No config is created; defaults are used. |
+
+- **Portable run**: if `~/.config/opencode-db/opencode-db.conf` does *not* exist it is never created, so nothing on your config is touched; exports/backups still go to `~/.local/share/opencode-db-exporter/{exports,backups}` by default (override with `OCED_OUT`/`OCED_BACKUP_DIR`). If the conf *does* exist it is only read (and `chmod 600`).
+- **Removing data**: `uninstall.sh --all` deletes the config, backups and exports even if you only ever ran it portably.
+
+### Portable configuration
+
+In portable mode you do not need `install.sh`, but you can still keep your settings in any file: copy `opencode-db.conf.example` next to the repo and point `OCED_CONF` at it (no auto-discovery; nothing is created for you):
+
+```bash
+cp opencode-db.conf.example ./portable.conf
+OCED_CONF=./portable.conf bash modules/opencode-db.sh status
+```
+
+Environment variables still win over that file, which in turn wins over the built-in default: **environment > conf > default**.
 
 ## Tests
 
