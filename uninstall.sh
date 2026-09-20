@@ -51,7 +51,7 @@ else
     rmdir -- "$PREFIX" 2>/dev/null || true
 fi
 
-echo "✅ opencode-db-exporter uninstalled."
+echo "[OK] opencode-db-exporter uninstalled."
 [ "$all" -eq 1 ] || echo "   Kept: $CONF_DIR, $BACKUP_DIR, $OUT_DIR"
 echo "   Note: system packages installed by 'opencode-db deps' (sqlite3, python3,"
 echo "         jq, gzip; optional fzf) are NOT removed. To drop them:"

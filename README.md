@@ -4,7 +4,7 @@ Read, back up and export the local SQLite database of **opencode** (`opencode` C
 
 Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
 
-## 🧠 Motivation & Problem Solved
+## Motivation & Problem Solved
 
 OpenCode CLI contextually filters and binds chat sessions to specific Git repository states and working directory paths. When developers switch branches, refactor project structures, or detach HEADs, older sessions frequently become hidden or completely inaccessible through standard CLI commands—even though the raw data remains safely stored inside the global SQLite file.
 
@@ -20,7 +20,7 @@ The tool can install its own missing dependencies idempotently:
 
 ```bash
 opencode-db deps --check   # report only (no sudo)
-opencode-db deps           # install what's missing (apt, prompts for sudo)
+opencode-db deps # install what's missing (apt/pacman/dnf, prompts for sudo)
 ```
 
 ## Install
@@ -115,10 +115,12 @@ It never removes system packages: dependencies installed by `opencode-db deps` s
 | Scenario | Works? | Notes |
 |----------|--------|-------|
 | Linux (Debian/Ubuntu) | Yes | `opencode-db deps` installs missing packages via `apt`. |
+| Linux (Arch/omarchy, pacman) | Yes | `deps` installs via `pacman -S --needed`; all packages are in the repos. |
+| Linux (Fedora, dnf) | Yes | `deps` installs via `dnf install -y`. |
 | WSL, opencode inside WSL | Yes | Defaults match; `deps` uses `apt`/`sudo`. |
 | WSL, opencode is native Windows | Yes, with config | Set `OPENCODE_DB=/mnt/c/Users/<user>/.local/share/opencode/opencode.db`. Residual risk: SQLite WAL file locking over `drvfs`. |
 | Native Windows | No | Bash-only (no `.bat`/`.ps1`); `sqlite3`, `python3`, `jq`, `gzip`, `fzf` are absent. Use WSL. |
-| Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`). |
+| Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`/`pacman`/`dnf`). |
 | Portable (no install) | Yes | Run `bash modules/opencode-db.sh …` straight from the repo. No config is created; defaults are used. |
 
 - **Portable run**: if `~/.config/opencode-db/opencode-db.conf` does *not* exist it is never created, so nothing on your config is touched; exports/backups still go to `~/.local/share/opencode-db-exporter/{exports,backups}` by default (override with `OCED_OUT`/`OCED_BACKUP_DIR`). If the conf *does* exist it is only read (and `chmod 600`).
@@ -138,8 +140,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 43 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 10 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 46 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 23 OK / 0 FAIL
 ```
 
 ## Layout

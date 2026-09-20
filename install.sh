@@ -17,8 +17,8 @@ check_deps() {
     for dep in sqlite3 python3 jq gzip; do
         command -v "$dep" >/dev/null 2>&1 || missing+=" $dep"
     done
-    [ -n "$missing" ] && echo "   ⚠️  Missing:$missing  (fix with: ~/.local/bin/opencode-db deps)"
-    command -v fzf >/dev/null 2>&1 || echo "   ⚠️  Missing fzf (only needed for the interactive menu)."
+    [ -n "$missing" ] && echo "   [!]  Missing:$missing  (fix with: ~/.local/bin/opencode-db deps)"
+    command -v fzf >/dev/null 2>&1 || echo "   [!]  Missing fzf (only needed for the interactive menu)."
 }
 
 if [ "$SOURCE_ROOT" = "$PREFIX" ]; then
@@ -66,6 +66,6 @@ else
     echo "   Config created from example: $CONF_DEST (permissions 600)"
 fi
 
-echo "✅ opencode-db-exporter installed in $PREFIX"
+echo "[OK] opencode-db-exporter installed in $PREFIX"
 echo "   CLI: $BIN_DIR/opencode-db   (also: bash $SOURCE_ROOT/modules/opencode-db.sh)"
 echo "   Try: $BIN_DIR/opencode-db status"

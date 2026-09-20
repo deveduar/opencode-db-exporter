@@ -15,6 +15,8 @@ oced_status() {
     local bytes
     bytes=$(stat -c %s "$OPENCODE_DB" 2>/dev/null || echo 0)
     printf '   %-16s %s (%s)\n' "Size:" "$(o_human_size "$bytes")" "$bytes bytes"
+    printf '   %-16s %s\n' "Exports:" "$OCED_OUT"
+    printf '   %-16s %s\n' "Backups:" "$OCED_BACKUP_DIR"
     if [ -f "$OPENCODE_DB-wal" ]; then
         local wbytes
         wbytes=$(stat -c %s "$OPENCODE_DB-wal" 2>/dev/null || echo 0)
@@ -25,7 +27,7 @@ oced_status() {
     local tables rc
     tables=$(o_q ".tables" 2>&1); rc=$?
     if [ "$rc" -ne 0 ]; then
-        echo "   ⚠️  Could not read the tables (possible corruption or locked DB):"
+        echo "   [!]  Could not read the tables (possible corruption or locked DB):"
         printf '      %s\n' "$tables"
         return 1
     fi
@@ -61,9 +63,9 @@ oced_status() {
         echo "      Last: $OCED_BACKUP_DIR/$mfile"
         printf '      %-18s %s\n' "Created:" "$(jq -r --argjson i "$last_idx" '.backups[$i].date' "$manifest")"
         if [ "$msess" = "$tsess" ] && [ "$mmess" = "$tmess" ] && [ "$mu" = "$tu" ]; then
-            echo "      ✅ Aligned with the current DB (same sessions/messages/last activity)."
+            echo "      [OK]  Aligned with the current DB (same sessions/messages/last activity)."
         else
-            echo "      ⚠️  Out of sync with the current DB (it changed after that backup)."
+            echo "      [!]  Out of sync with the current DB (it changed after that backup)."
             [ "$msess" != "$tsess" ] && echo "         sessions: $msess → $tsess"
             [ "$mmess" != "$tmess" ] && echo "         messages: $mmess → $tmess"
         fi
@@ -137,9 +139,15 @@ oced_compactions() {
     o_db_exists
     local id="${1:-}"
     [ -n "$id" ] || o_die "Usage: opencode-db compactions <session_id> [show [last|N|all]]"
+    local title agent sess_row
+    sess_row=$(o_q -separator $'\t' "SELECT coalesce(NULLIF(title,''),slug), coalesce(agent,'') FROM session WHERE id='${id//\'/\'\'}' LIMIT 1")
+    if [ -n "$sess_row" ]; then
+        IFS=$'\t' read -r title agent <<<"$sess_row"
+    fi
     local n rc
     n=$(o_q "SELECT count(*) FROM part WHERE session_id='${id//\'/\'\'}' AND json_extract(data,'\$.type')='compaction'")
-    echo "== Compactions ($id) =="
+    echo "== Compactions ($id)${title:+ — $title} =="
+    [ -n "$agent" ] && printf '   %-10s %s\n' "Agent:" "$agent"
     echo "   Total: $n"
     [ "$n" = "0" ] && { echo "   (no compactions)"; return 0; }
     o_q -header -column "

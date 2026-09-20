@@ -37,7 +37,7 @@ Usage: opencode-db.sh [command]
                        a run with several profiles shows them joined with '+'
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
-  deps [--check]       check/install the dependencies (apt, idempotent, needs sudo)
+  deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
   help                 this help
 
 export profiles (default: full):
@@ -61,6 +61,14 @@ export flags:
   --patch full|omit   include patch parts (default full)
   --mark-compactions   include compaction markers in any profile
   --summary-diffs    render user-message summary.diffs (files+additions/deletions)
+
+Configuration (env > conf file > built-in default):
+  OPENCODE_DB       SQLite database (default ~/.local/share/opencode/opencode.db;
+                    WSL with native-Windows opencode: /mnt/c/Users/<user>/.../opencode.db)
+  OCED_OUT          export output root (default ~/.local/share/opencode-db-exporter/exports)
+  OCED_BACKUP_DIR   backup folder (default ~/.local/share/opencode-db-exporter/backups)
+  OCED_COMPRESS     1 gzip backups (default) / 0 raw
+  OCED_CONF         config file (default ~/.config/opencode-db/opencode-db.conf)
 EOF
 }
 

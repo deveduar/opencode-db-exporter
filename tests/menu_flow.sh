@@ -20,8 +20,8 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 . "$MOD/exports.sh"
 
 pass=0; fail=0
-ok() { echo "  ✅ $1"; pass=$((pass+1)); }
-bad() { echo "  ❌ $1"; fail=$((fail+1)); }
+ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
+bad() { echo "  [FAIL] $1"; fail=$((fail+1)); }
 # reset → restore real function definitions (undo test overrides)
 reset() { . "$MOD/menu.sh"; }
 count_meta() { find "$OUT" -path "*/$1/*" -name metadatos.json 2>/dev/null | wc -l; }

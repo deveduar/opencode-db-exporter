@@ -59,7 +59,7 @@ def truncate(text: str, limit: int) -> str:
     return text[:limit] + f"\n[… truncated: {len(text) - limit} bytes more …]"
 
 
-ROLE_HEADER = {"user": "## 👤 User", "assistant": "## 🤖 Assistant"}
+ROLE_HEADER = {"user": "## User", "assistant": "## Assistant"}
 
 
 class Renderer:
@@ -135,7 +135,7 @@ class Renderer:
             auto = p.get("auto", True)
             extra = " (auto)" if auto else ""
             out.append(
-                "---\n\n> ⚙️ **Context compaction**" + extra
+                "---\n\n> **Context compaction**" + extra
                 + (f" — new queue from `{tail}`" if tail else "")
                 + "\n"
             )
@@ -343,7 +343,7 @@ def main() -> None:
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    print(f"✅ Exported ({args.profile}) to: {out_dir}")
+    print(f"[OK] Exported ({args.profile}) to: {out_dir}")
     print(f"   Root sessions : {len(written)}")
     print(f"   Subagents     : {sum(len(s[1]) for s in written)}")
     print(f"   Compactions   : {total_comp}")

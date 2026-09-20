@@ -11,7 +11,7 @@ oced_deps_usage() {
     cat <<'EOF'
 Usage: opencode-db deps [--check]
   --check    only report missing tools (no sudo, no install); rc=0 if all core deps present
-  (no flag)  install any missing dependency (Linux/apt, prompts for sudo); idempotent
+  (no flag)  install any missing dependency (Linux/apt/pacman/dnf, prompts for sudo); idempotent
 EOF
 }
 
@@ -68,9 +68,17 @@ oced_deps() {
             if command -v apt-get >/dev/null 2>&1; then
                 echo "-> Installing with apt (needs sudo): ${to_install[*]}"
                 sudo apt-get install -y --no-install-recommends "${to_install[@]}"
-                echo "✅ Dependencies installed."
+                echo "[OK] Dependencies installed."
+            elif command -v pacman >/dev/null 2>&1; then
+                echo "-> Installing with pacman (needs sudo): ${to_install[*]}"
+                sudo pacman -S --needed --noconfirm "${to_install[@]}"
+                echo "[OK] Dependencies installed."
+            elif command -v dnf >/dev/null 2>&1; then
+                echo "-> Installing with dnf (needs sudo): ${to_install[*]}"
+                sudo dnf install -y "${to_install[@]}"
+                echo "[OK] Dependencies installed."
             else
-                echo "No apt-get found. Install manually: ${to_install[*]}"
+                echo "No supported package manager (apt/pacman/dnf) found. Install manually: ${to_install[*]}"
                 return 1
             fi
             ;;

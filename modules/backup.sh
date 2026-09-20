@@ -108,7 +108,7 @@ oced_backup() {
     manifest_write "$(manifest_read | jq --argjson e "$entry" '.backups += [$e]')"
     trap - EXIT
 
-    echo "✅ Backup: $fpath"
+    echo "[OK] Backup: $fpath"
     printf '   %-16s %s\n' "Created:" "$stamp"
     printf '   %-16s %s\n' "Size:" "$(o_human_size "$fsize") (raw $(o_human_size "$size_raw"))"
     printf '   %-16s %s\n' "Sessions:" "$sess"
@@ -138,8 +138,8 @@ oced_backups() {
             expect=$(printf '%s' "$rec" | jq -r '.sha256')
             if [ -f "$OCED_BACKUP_DIR/$f" ]; then
                 actual=$(sha256sum "$OCED_BACKUP_DIR/$f" | cut -d' ' -f1)
-                [ "$actual" = "$expect" ] && echo "✅ $f  OK (sha256 matches)" \
-                    || { echo "❌ $f  sha256 MISMATCH"; echo "   manifest: $expect"; echo "   file:     $actual"; }
+                [ "$actual" = "$expect" ] && echo "[OK]   $f  sha256 matches" \
+                    || { echo "[FAIL] $f  sha256 MISMATCH"; echo "   manifest: $expect"; echo "   file:     $actual"; }
             else
                 echo "File not found: $OCED_BACKUP_DIR/$f"
             fi

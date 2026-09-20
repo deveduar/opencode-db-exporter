@@ -18,8 +18,8 @@ export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$BK"
 
 pass=0; fail=0
-ok() { echo "  ✅ $1"; pass=$((pass+1)); }
-bad() { echo "  ❌ $1"; fail=$((fail+1)); }
+ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
+bad() { echo "  [FAIL] $1"; fail=$((fail+1)); }
 run() { bash "$MOD/opencode-db.sh" "$@" 2>&1; }
 grep_run() { # $1=pattern, rest=CLI args: capture output before grep (avoids SIGPIPE/pipefail)
     local pat="$1"; shift

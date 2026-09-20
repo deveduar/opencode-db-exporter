@@ -95,5 +95,5 @@ INSERT INTO part VALUES
  ('prt_B2_1','msg_B2_1','ses_B0002',1789001100000,1789001100000,'{"type":"text","text":"Traduce los docs"}');
 SQL
 
-echo "✅ Fake DB created: $DB"
+echo "[OK] Fake DB created: $DB"
 echo "   sessions: $(sqlite3 "$DB" 'SELECT count(*) FROM session')  messages: $(sqlite3 "$DB" 'SELECT count(*) FROM message')  parts: $(sqlite3 "$DB" 'SELECT count(*) FROM part')"
