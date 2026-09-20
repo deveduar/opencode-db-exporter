@@ -59,6 +59,7 @@ after=$(count_meta full)
 
 echo "== each selected recipe becomes its own export run =="
 reset
+confirm_action() { return 0; }
 before_full=$(count_meta full); before_text=$(count_meta text-only)
 FZF_RECIPES=$'full (default)|full|\ntext-only (default)|text-only|' \
 FZF_SESSION="ses_A0001  Proyecto Alfa  2026-09-10 00:00:00  build" \
@@ -91,6 +92,7 @@ FZF_SESSION="" oc_pick_info >/dev/null
 
 echo "== ALL sessions export means no filter =="
 reset
+confirm_action() { return 0; }
 FZF_RECIPES="full (default)|full|" FZF_SESSION="ALL SESSIONS (no filter)" \
     oc_export_flow >/dev/null
 MA=$(newest_meta full)
@@ -99,11 +101,23 @@ jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" ||
 
 echo "== export flow pauses after the runs finish =="
 reset
+confirm_action() { return 0; }
 PAUSES="$TMP/pauses.txt"; : > "$PAUSES"
 menu_pause() { printf 'pause\n' >> "$PAUSES"; }
 FZF_RECIPES="text-only (default)|text-only|" FZF_SESSION="ses_A0001  Proyecto Alfa  2026-09-10 00:00:00  build" \
     oc_export_flow >/dev/null
 [ "$(wc -l < "$PAUSES")" -eq 1 ] && ok "pause after export flow" || bad "no pause after export flow"
+
+echo "== export flow asks for confirmation before running =="
+reset
+CONFIRME="$TMP/confirm.txt"; : > "$CONFIRME"
+confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
+before=$(count_meta full)
+FZF_RECIPES="full (default)|full|" FZF_SESSION="ALL SESSIONS (no filter)" \
+    oc_export_flow >/dev/null
+after=$(count_meta full)
+[ -s "$CONFIRME" ] && ok "export plan asked for confirmation" || bad "no confirmation asked"
+[ "$before" -eq "$after" ] && ok "cancelled -> no export created" || bad "cancelled but exported"
 
 echo "== prune: ESC/empty cancel, value + confirm reaches the dispatcher =="
 reset

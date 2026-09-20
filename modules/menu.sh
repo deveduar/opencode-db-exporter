@@ -46,14 +46,24 @@ confirm_action() {
     [[ "$answer" =~ ^[yYsS]$ ]]
 }
 
-# oc_read_int <label> -> reads a positive integer.
-# Empty, ESC or a non-numeric value cancels (rc=1). On success prints the number.
+# oc_read_int <label> -> reads a positive integer. ESC cancels IMMEDIATELY
+# (no Enter needed); empty or non-numeric input cancels too (rc=1).
+# Prompt/feedback go to stderr so the value is clean on stdout (capture-safe).
 oc_read_int() {
-    local label="$1" v
-    read -r -p "$label (number · ESC/empty = cancel): " v || return 1
+    local label="$1" c rest v
+    printf '%s (number · ESC/empty = cancel): ' "$label" >&2
+    IFS= read -r -s -n1 c >&2 || { echo >&2; return 1; }
+    case "$c" in
+        "" ) echo "   cancelled." >&2; return 1 ;;
+        $'\e' ) echo "   cancelled." >&2; return 1 ;;
+        $'\n' ) echo "   cancelled." >&2; return 1 ;;  # Enter alone = cancel (destructive)
+    esac
+    printf '%s' "$c" >&2
+    IFS= read -r rest || true
+    v="$c${rest:-}"
+    echo >&2
     case "$v" in
-        "" | *$'\e'*) return 1 ;;
-        *[!0-9]*) echo "   (cancelled: '$v' is not a number)"; return 1 ;;
+        *[!0-9]*) echo "   (cancelled: '$v' is not a number)" >&2; return 1 ;;
     esac
     printf '%s\n' "$v"
 }
@@ -396,6 +406,20 @@ oc_export_flow() {
     selid=$(pick_session "Sessions to export") || return 1
     selid=$(printf '%s' "$selid" | tr -d '\n')
     [ -n "$selid" ] && idfilter=(--filter "$selid")
+
+    # Export plan + confirmation: heavy on large DBs, show paths & sizes first.
+    local db_est=0 n_recipes
+    [ -f "${OPENCODE_DB}-wal" ] && db_est=$((db_est + $(stat -c %s "${OPENCODE_DB}-wal"))) || true
+    [ -f "${OPENCODE_DB}-shm" ] && db_est=$((db_est + $(stat -c %s "${OPENCODE_DB}-shm"))) || true
+    db_est=$((db_est + $(stat -c %s "$OPENCODE_DB")))
+    n_recipes=$(printf '%s\n' "$f" | sed '/^[[:space:]]*$/d' | wc -l)
+    echo ""
+    echo "-> Export plan"
+    printf '   %-9s %s  %s\n' "Source:" "$OPENCODE_DB" "($(command -v o_human_size >/dev/null 2>&1 && o_human_size "$db_est" || echo "$db_est bytes") raw)"
+    printf '   %-9s %s\n' "Filter:" "${selid:-ALL sessions (no filter)}"
+    printf '   %-9s %s\n' "Output:" "$OCED_OUT/<timestamp>"
+    printf '   %-9s %d run(s), one per selected recipe\n' "Recipes:" "$n_recipes"
+    confirm_action "Start these export(s)? Heavy on a large DB." || { echo "   cancelled."; return 0; }
 
     while IFS= read -r pick; do
         [ -n "$pick" ] || continue
