@@ -46,12 +46,32 @@ confirm_action() {
     [[ "$answer" =~ ^[yYsS]$ ]]
 }
 
-menu_loop_prompt() {
-    printf '\nPress Enter to return to %s...' "$1"
-    read -r _ || return 1
+# oc_read_int <label> -> reads a positive integer.
+# Empty, ESC or a non-numeric value cancels (rc=1). On success prints the number.
+oc_read_int() {
+    local label="$1" v
+    read -r -p "$label (number · ESC/empty = cancel): " v || return 1
+    case "$v" in
+        "" | *$'\e'*) return 1 ;;
+        *[!0-9]*) echo "   (cancelled: '$v' is not a number)"; return 1 ;;
+    esac
+    printf '%s\n' "$v"
 }
 
-# choose_action <cat> <entry>... -> returns the chosen key (or 1 on ESC/EOF).
+# menu_pause <label> -> light pause after a REPORT action (entry marked "|pause")
+# so the user can copy the output (fzf closed). Returns 0 (Enter) or 2 (ESC).
+# Skipped when stdin is not a TTY (scripts/tests never hang).
+menu_pause() {
+    [ -t 0 ] || return 0
+    printf '\n— %s · Enter: back to menu · Esc: exit this submenu — ' "$1"
+    local key
+    read -r -s -n1 key || return 2
+    [ "$key" = $'\e' ] && return 2
+    return 0
+}
+
+# choose_action <cat> <entry>... -> returns the chosen key.
+# Returns 0 + key on success, 1 on EOF/no selection, 130 on ESC.
 choose_action() {
     local category="$1"
     shift
@@ -68,7 +88,9 @@ choose_action() {
         fi
         printf '%s\t%s\n' "$key" "$label"
     done | fzf --ansi --delimiter=$'\t' --with-nth=2.. --height=60% --reverse --border \
-        --prompt="[$category] > " --header="$header") || return 1
+        --prompt="[$category] > " --header="$header")
+    local fzf_rc=$?
+    [ $fzf_rc -eq 130 ] && return 130  # ESC pressed
     [ -n "$selected" ] || return 1
     printf '%s\n' "${selected%%$'\t'*}"
 }
@@ -77,6 +99,8 @@ choose_action() {
 #   tool:<cmd>[::args] (*)    dispatches to the opencode-db binary (OC_DISPATCHER)
 #   menu:<fn> | fn:<fn>       submenu / handler of this module
 #   builtin:exit              signal end (rc=2)
+# Returns 0 always, except builtin:exit (2). Nested menus closing (any rc) are
+# swallowed: the parent reloads its own list.
 _oc_menu_call() {
     local action="$1"
     local spec fn
@@ -99,16 +123,17 @@ _oc_menu_call() {
                 fn="$spec"
             fi
             "$fn" "${args[@]}" || true
+            return 0
             ;;
         builtin:exit)
             return 2
             ;;
         *) return 1 ;;
     esac
-    return 0
 }
 
-# run_menu — data-driven submenu loop.
+# run_menu — data-driven submenu loop. No forced pause except "|pause" (report): the
+# fzf menu reloads immediately after an action; ESC on fzf climbs exactly ONE level.
 run_menu() {
     local cat="menu" promptlabel="menu" entries="" refresh_cb="" empty_msg="" no_prompt=0
     while [ $# -gt 0 ]; do
@@ -141,8 +166,11 @@ run_menu() {
             return 0
         fi
 
-        local key e rest action=""
-        key=$(choose_action "$cat" "${arr[@]}") || return 0
+        local key e rest action="" pause=0
+        key=$(choose_action "$cat" "${arr[@]}")
+        local choose_rc=$?
+        [ $choose_rc -eq 130 ] && return 2  # ESC in fzf -> climb one level
+        [ $choose_rc -ne 0 ] && return 0    # other error -> close submenu
         for e in "${arr[@]}"; do
             if [ "${e%%|*}" = "$key" ]; then
                 rest="${e#*|}"
@@ -155,16 +183,20 @@ run_menu() {
         if [ -z "$action" ]; then
             continue
         fi
+        if [[ "$action" == *"|pause" ]]; then
+            pause=1
+            action="${action%|pause}"
+        fi
 
         local rc=0
         _oc_menu_call "$action" || rc=$?
         if [ "$rc" -eq 2 ]; then
-            return 0
+            return 0  # builtin:exit -> close this submenu (parent reloads)
         fi
-        if [ "$no_prompt" -eq 1 ]; then
-            continue
+        if [ "$pause" -eq 1 ]; then
+            menu_pause "$promptlabel" || return 0
         fi
-        menu_loop_prompt "$promptlabel" || return 0
+        continue  # menu reloads immediately (unless |pause)
     done
 }
 
@@ -211,26 +243,26 @@ oc_root=(
     "sessions|Sessions (list/info/compactions)|menu:run_oc_menu_sessions"
     "export|Export sessions to Markdown (recipes, session)...|fn:oc_export_flow"
     "exports|Export runs (list/remove/prune)|menu:run_oc_menu_exports"
-    "deps|Check/install dependencies...|tool:deps"
-    "help|Show help|tool:help"
+    "deps|Check/install dependencies...|tool:deps|pause"
+    "help|Show help|tool:help|pause"
 )
 
 oc_menu_db=(
-    "status|Status report (DB + last backup alignment)|tool:status"
-    "backup|Create backup (consistent snapshot)|tool:backup"
-    "list|List backups|tool:backups"
+    "status|Status report (DB + last backup alignment)|tool:status|pause"
+    "backup|Create backup (consistent snapshot)|tool:backup|pause"
+    "list|List backups|tool:backups|pause"
     "verify|Verify a backup (sha256)...|fn:oc_pick_backup_verify"
     "prune|Prune old backups (keep N)...|fn:oc_pick_backup_prune"
 )
 
 oc_menu_sessions=(
-    "list|List sessions (with info)|tool:list::--info"
+    "list|List sessions (with info)|tool:list::--info|pause"
     "info|Session details...|fn:oc_pick_info"
     "compactions|Compactions of a session...|fn:oc_pick_compactions"
 )
 
 oc_menu_exports=(
-    "list|List export runs|tool:exports::list"
+    "list|List export runs|tool:exports::list|pause"
     "remove|Remove an export run...|fn:oc_pick_export_remove"
     "prune|Prune old export runs (keep N)...|fn:oc_pick_export_prune"
 )
@@ -279,6 +311,7 @@ oc_pick_info() {
     else
         run_oced_tool info "$id"
     fi
+    menu_pause "Sessions" || return 0
 }
 
 oc_pick_compactions() {
@@ -290,6 +323,7 @@ oc_pick_compactions() {
     else
         run_oced_tool compactions "$id"
     fi
+    menu_pause "Sessions" || return 0
 }
 
 oc_pick_backup_verify() {
@@ -299,9 +333,17 @@ oc_pick_backup_verify() {
 }
 
 oc_pick_backup_prune() {
-    local keep=""
-    read -r -p "Keep how many recent backups? [5]: " keep || true
-    run_oced_tool backups prune "${keep:-5}"
+    local keep n
+    keep=$(oc_read_int "How many recent backups to keep") || { echo "   cancelled."; return 0; }
+    keep=$(printf '%s' "$keep" | tr -d '\n')
+    n=$(jq -r '.backups | length' "$(manifest_path)" 2>/dev/null || echo 0)
+    if [ "$n" -le "$keep" ]; then
+        echo "   Nothing to prune (have $n, keeping $keep)."
+        return 0
+    fi
+    confirm_action "Prune: WILL DELETE $((n - keep)) backup file(s), keeping the $keep most recent. Continue?" \
+        || { echo "   cancelled."; return 0; }
+    run_oced_tool backups prune "$keep"
 }
 
 oc_pick_export_remove() {
@@ -312,9 +354,17 @@ oc_pick_export_remove() {
 }
 
 oc_pick_export_prune() {
-    local keep=""
-    read -r -p "Keep how many recent export runs? [5]: " keep || true
-    run_oced_tool exports prune "${keep:-5}" --yes
+    local keep n
+    keep=$(oc_read_int "How many recent export runs to keep") || { echo "   cancelled."; return 0; }
+    keep=$(printf '%s' "$keep" | tr -d '\n')
+    n=$(exports_run_count)
+    if [ "$n" -le "$keep" ]; then
+        echo "   Nothing to prune (have $n, keeping $keep)."
+        return 0
+    fi
+    confirm_action "Prune: WILL DELETE $((n - keep)) export run(s), keeping the $keep most recent. Continue?" \
+        || { echo "   cancelled."; return 0; }
+    run_oced_tool exports prune "$keep"
 }
 
 # pick_export_run <prompt> -> prints a run stamp (or empty).
@@ -324,6 +374,12 @@ pick_export_run() {
     [ -n "$opts" ] || { echo "   (no export runs yet)"; return 1; }
     sel=$(printf '%s\n' "$opts" | fzf --prompt="$prompt > " --height=40% --border --header="ESC: cancel") || return 1
     printf '%s\n' "$sel"
+}
+
+# exports_run_count -> number of export run dirs under OCED_OUT.
+exports_run_count() {
+    [ -d "$OCED_OUT" ] || { echo 0; return; }
+    find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l
 }
 
 # oc_export_flow — two screens: recipes (multi-select) -> session (or all).
@@ -353,6 +409,8 @@ oc_export_flow() {
         run_oced_tool export "$profile" "${idfilter[@]}" "${arr[@]}"
         echo "   ----"
     done <<<"$f"
+
+    menu_pause "Export runs" || return 0
 }
 
 #-----------------------------------------------------------------------

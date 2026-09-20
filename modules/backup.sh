@@ -28,16 +28,31 @@ manifest_write() {
 oced_backup() {
     o_check_deps
     o_db_exists
-    local compress="$OCED_COMPRESS"
+    local compress="$OCED_COMPRESS" yes=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --no-compress) compress=0 ;;
+            --yes) yes=1 ;;
             *) o_die "Unknown argument: $1" ;;
         esac
         shift
     done
 
     mkdir -p "$OCED_BACKUP_DIR"
+    local est_raw est_extra=0 ans
+    [ -f "${OPENCODE_DB}-wal" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-wal"))) || true
+    [ -f "${OPENCODE_DB}-shm" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-shm"))) || true
+    est_raw=$(( $(stat -c %s "$OPENCODE_DB") + est_extra ))
+    echo "-> Backup plan"
+    printf '   %-11s %s\n' "Source:" "$OPENCODE_DB"
+    printf '   %-11s %s/opencode-<timestamp>.db%s\n' "Target:" "$OCED_BACKUP_DIR" "$([ "$compress" -eq 1 ] && echo ' (gzipped)')"
+    printf '   %-11s ~%s raw snapshot (sqlite .backup; gzip compresses on save)\n' "Est. size:" "$(o_human_size "$est_raw")"
+    if [ "$yes" -ne 1 ] && [ -t 0 ]; then
+        printf '   Create this backup? [y/N] '
+        read -r ans || ans=""
+        [[ "$ans" =~ ^[yYsS]$ ]] || { echo "   Backup cancelled."; return 1; }
+    fi
+
     local ts stamp snap rc sha size_raw
     ts=$(o_ts)
     stamp=$(o_now_utc)

@@ -4,6 +4,12 @@ Read, back up and export the local SQLite database of **opencode** (`opencode` C
 
 Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
 
+## 🧠 Motivation & Problem Solved
+
+OpenCode CLI contextually filters and binds chat sessions to specific Git repository states and working directory paths. When developers switch branches, refactor project structures, or detach HEADs, older sessions frequently become hidden or completely inaccessible through standard CLI commands—even though the raw data remains safely stored inside the global SQLite file.
+
+`opencode-db-exporter` resolves this by acting as an independent auditing and recovery tool. By opening the database directly in **strict read-only mode (`mode=ro`)**, it completely bypasses environment-driven CLI filters. This ensures your valuable prompt histories, agent execution paths, and metrics are always accessible, clean, and easily exportable into standard Markdown files for your personal documentation.
+
 ## Requirements
 
 - Linux (tested on Debian/Ubuntu) and the opencode CLI

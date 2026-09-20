@@ -25,8 +25,10 @@ Usage: opencode-db.sh [command]
                        list compaction points (date + new queue) of a session;
                        'show' also prints the compacted-context digest stored in
                        the following "mode=compaction" message (last / N / all)
-  backup [--no-compress]   consistent snapshot (sqlite .backup) with timestamp
-                       + sha256 + stats in backups/manifest.json (gzip by default)
+  backup [--no-compress] [--yes]   consistent snapshot (sqlite .backup) with timestamp
+                       + sha256 + stats in backups/manifest.json (gzip by default);
+                       shows the plan (source/target/estimated size) and asks to
+                       confirm before starting (--yes skips the confirmation)
   backups list         list stored backups
   backups verify <file>   check sha256 of a backup against the manifest
   backups prune <N>    keep only the N most recent backups

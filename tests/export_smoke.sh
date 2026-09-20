@@ -49,7 +49,11 @@ C=$(run compactions ses_A0001); printf "%s" "$C" | grep -vq "no compactions" && 
 
 echo "== backup =="
 grep_run "No backups recorded yet." backups list && ok "backups list w/o manifest" || bad "backups list w/o manifest"
-B=$(run backup); printf "%s" "$B" | grep -qE "opencode-[0-9-]+\.db\.gz" && ok "compressed backup" || bad "backup"
+B=$(run backup --yes)
+printf "%s" "$B" | grep -qE "opencode-[0-9-]+\.db\.gz" && ok "compressed backup" || bad "backup"
+printf "%s" "$B" | grep -q "Backup plan" && ok "backup shows the plan" || bad "backup plan"
+printf "%s" "$B" | grep -qE "Est\. size:" && ok "backup shows estimated size" || bad "backup estimate"
+printf "%s" "$B" | grep -q "Target:" && ok "backup shows target dir" || bad "backup target"
 grep_run "opencode-" backups list && ok "backups list" || bad "backups list"
 FNAME=$(run backups list | grep -oE 'opencode-[0-9-]+\.db\.gz' | head -1)
 grep_run "OK" backups verify "$FNAME" && ok "backups verify" || bad "backups verify"
