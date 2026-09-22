@@ -2,11 +2,15 @@
 # menu.sh — interactive (fzf) menu for opencode-db, standalone.
 #
 # Level navigation: ESC goes up one level; on the main level ESC exits.
-# Entry contract (array per submenu):
-#   "key|label|action"
-#     - key:   token (returned by choose_action)
-#     - label: text shown in fzf (accepts ANSI)
-#     - action: tool:<cmd>[::args] | menu:<fn> | fn:<fn> | builtin:exit | (empty = no-op)
+# Root entries and pickers:
+#   status    status report (DB · backups · deps · version/schema)
+#   backups   level 2 = a real fzf picker over the backups (mode toggle verify/delete)
+#   sessions  level 2 = a real fzf picker over the sessions (mode toggle details/export)
+#   exports   level 2 = a real fzf picker over the export runs (mode toggle view/remove)
+# The pickers use TSV rows (key<TAB>display); fzf shows only the display column
+# and the full selected line keeps the hidden key for parse-back.
+# No TAB multi-select anywhere: the "switch mode" is itself a menu row, and bulk
+# deletes are their own rows ([delete all] / [delete olds]).
 
 # Colon gates (without them it can only run as a dispatcher module).
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -68,9 +72,9 @@ oc_read_int() {
     printf '%s\n' "$v"
 }
 
-# menu_pause <label> -> light pause after a REPORT action (entry marked "|pause")
-# so the user can copy the output (fzf closed). Returns 0 (Enter) or 2 (ESC).
-# Skipped when stdin is not a TTY (scripts/tests never hang).
+# menu_pause <label> -> light pause after a REPORT action so the user can copy
+# the output (fzf closed). Returns 0 (Enter) or 2 (ESC). Skipped when stdin is
+# not a TTY (scripts/tests never hang).
 menu_pause() {
     [ -t 0 ] || return 0
     printf '\n— %s · Enter: back to menu · Esc: exit this submenu — ' "$1"
@@ -223,84 +227,6 @@ session_ids() {
     session_rows | awk '{print $1}'
 }
 
-# pick_session <prompt> -> prints a session id, or empty for "all sessions".
-# ESC cancels (rc=1); never selects a default.
-pick_session() {
-    local prompt="$1" sel
-    sel=$(printf 'ALL SESSIONS (no filter)\n%s' "$(session_rows)" \
-        | fzf --prompt="$prompt > " --height=60% --border --header="ESC: cancel") || return 1
-    [ -n "$sel" ] || return 1
-    case "$sel" in
-        ALL*) printf '\n' ;;
-        *) printf '%s\n' "$sel" | awk '{print $1}' ;;
-    esac
-}
-
-# pick_backup_file -> prints a backup file name (or empty).
-pick_backup_file() {
-    local prompt="$1" opts sel
-    opts=$(oced_out backups list 2>/dev/null | awk '/^[ ]*[0-9]+\./ {print $3}')
-    [ -n "$opts" ] || { echo "   (no backups yet: run Backup first)"; return 1; }
-    sel=$(printf '%s\n' "$opts" | fzf --prompt="$prompt > " --height=40% --border --header="ESC: cancel") || return 1
-    printf '%s\n' "$sel"
-}
-
-#-----------------------------------------------------------------------
-# Submenu data
-#-----------------------------------------------------------------------
-oc_root=(
-    "db|Database and backups|menu:run_oc_menu_db"
-    "sessions|Sessions (list/info/compactions)|menu:run_oc_menu_sessions"
-    "export|Export sessions to Markdown (recipes, session)...|fn:oc_export_flow"
-    "exports|Export runs (list/remove/prune)|menu:run_oc_menu_exports"
-    "deps|Check/install dependencies...|tool:deps|pause"
-    "help|Show help|tool:help|pause"
-)
-
-oc_menu_db=(
-    "status|Status report (DB + last backup alignment)|tool:status|pause"
-    "backup|Create backup (consistent snapshot)|tool:backup|pause"
-    "list|List backups|tool:backups|pause"
-    "verify|Verify a backup (sha256)...|fn:oc_pick_backup_verify"
-    "prune|Prune old backups (keep N)...|fn:oc_pick_backup_prune"
-)
-
-oc_menu_sessions=(
-    "list|List sessions (with info)|tool:list::--info|pause"
-    "info|Session details...|fn:oc_pick_info"
-    "compactions|Compactions of a session...|fn:oc_pick_compactions"
-)
-
-oc_menu_exports=(
-    "list|List export runs|tool:exports::list|pause"
-    "remove|Remove an export run...|fn:oc_pick_export_remove"
-    "prune|Prune old export runs (keep N)...|fn:oc_pick_export_prune"
-)
-
-# Export recipes: "label|profile|arg1 arg2 ..."
-oc_recipes=(
-    "ALL profiles, maximal (4-in-1)|all|"
-    "full (default)|full|"
-    "full + full tool output|full|--tool-output full"
-    "full + omit tool output|full|--tool-output omit"
-    "full + omit patches|full|--patch omit"
-    "full + context markers|full|--mark-compactions"
-    "full + summary diffs|full|--summary-diffs"
-    "full + context markers + summary diffs|full|--mark-compactions --summary-diffs"
-    "full + subagents inline|full|--sub inline"
-    "full + omit subagents|full|--sub omit"
-    "no-calls (default)|no-calls|"
-    "no-calls + summary diffs|no-calls|--summary-diffs"
-    "no-calls + subagents inline|no-calls|--sub inline"
-    "no-calls + omit subagents|no-calls|--sub omit"
-    "text-only (default)|text-only|"
-    "text-only + subagents inline|text-only|--sub inline"
-    "text-only + omit subagents|text-only|--sub omit"
-)
-
-#-----------------------------------------------------------------------
-# Handlers
-#-----------------------------------------------------------------------
 # run_for_all <cmd> <label>... -> runs the dispatcher cmd for every session.
 run_for_all() {
     local cmd="$1" label="$2" sid
@@ -312,78 +238,153 @@ run_for_all() {
     done <<<"$(session_ids)"
 }
 
-oc_pick_info() {
-    local id
-    id=$(pick_session "Session details") || return 1
-    id=$(printf '%s' "$id" | tr -d '\n')
-    if [ -z "$id" ]; then
-        run_for_all info "Session details"
-    else
-        run_oced_tool info "$id"
-    fi
-    menu_pause "Sessions" || return 0
+#-----------------------------------------------------------------------
+# fzf picker plumbing (TSV: key<TAB>display; no TAB multi-select state)
+#-----------------------------------------------------------------------
+# oc_fzf_sel <prompt> <header> -> reads key<TAB>display rows on stdin, shows only
+# the display, prints the FULL selected line (key kept for parse-back).
+oc_fzf_sel() {
+    local prompt="$1" header="$2"
+    fzf --prompt="$prompt > " --height=60% --border --header="$header" \
+        --delimiter=$'\t' --with-nth=2..
 }
 
-oc_pick_compactions() {
-    local id
-    id=$(pick_session "Compactions of session") || return 1
-    id=$(printf '%s' "$id" | tr -d '\n')
-    if [ -z "$id" ]; then
-        run_for_all compactions "Compactions"
-    else
-        run_oced_tool compactions "$id"
-    fi
-    menu_pause "Sessions" || return 0
+oc_sel_key() { printf '%s\n' "$1" | cut -f1; }
+
+# The mode-switch row. Selecting it flips the picker mode and reloads the list.
+oc_toggle_row() {
+    local mode="$1" other="$2"
+    printf '__TOGGLE__\t[mode: %s]  switch to %s\n' "$mode" "$other"
 }
 
-oc_pick_backup_verify() {
+#-----------------------------------------------------------------------
+# Backups picker
+#-----------------------------------------------------------------------
+oc_backups_rows() {
+    local m="$OCED_BACKUP_DIR/manifest.json"
+    printf '__CREATE__\t[create backup (consistent snapshot)]\n'
+    printf '__SHRINK__\t[shrink (lighter copy from the LIVE DB)...]\n'
+    printf '__DELETE_ALL__\t[delete ALL backups]\n'
+    printf '__KEEP_NEWEST__\t[delete olds (keep only the newest)]\n'
+    [ -f "$m" ] || { printf '__NONE__\t(no backups recorded yet)\n'; return 0; }
+    local file dt sz szh ss ms sha
+    jq -r '.backups | sort_by(.date) | reverse | .[] | [.file, (.date|sub("T";" ")|sub("Z$";"")), (.size|tostring), (.sessions|tostring), ((.messages//0)|tostring), ((.sha256//"-")[:8])] | @tsv' "$m" \
+    | while IFS=$'\t' read -r file dt sz ss ms sha; do
+        szh=$(o_human_size "$sz")
+        printf '%s\t%s\n' "$file" "$(printf '%s  %-9s  %5s sess  %6s msg  sha:%s' "$dt" "$szh" "$ss" "$ms" "$sha")"
+    done
+}
+
+# Bulk deletions from the backup picker (all / keep newest only).
+oc_backups_bulk() {
+    local what="$1" m="$OCED_BACKUP_DIR/manifest.json"
+    [ -f "$m" ] || { echo "   (no backups yet)"; return 1; }
+    local total
+    total=$(jq -r '.backups | length' "$m" 2>/dev/null || echo 0)
+    [ "$total" -gt 0 ] || { echo "   (no backups yet)"; return 1; }
+    local -a files=()
+    if [ "$what" = "all" ]; then
+        confirm_action "DELETE ALL $total backups? This cannot be undone." || { echo "   cancelled."; return 0; }
+        mapfile -t files < <(jq -r '.backups[].file' "$m")
+    else
+        [ "$total" -le 1 ] && { echo "   Already only 1 backup."; return 0; }
+        confirm_action "DELETE $((total - 1)) older backups, keeping only the newest?" || { echo "   cancelled."; return 0; }
+        mapfile -t files < <(jq -r '.backups | sort_by(.date) | reverse | .[1:][] | .file' "$m")
+    fi
     local f
-    f=$(pick_backup_file "Backup to verify") || return 1
-    run_oced_tool backups verify "$f"
+    for f in "${files[@]}"; do
+        run_oced_tool backups remove "$f" --yes
+    done
 }
 
-oc_pick_backup_prune() {
-    local keep n
-    keep=$(oc_read_int "How many recent backups to keep") || { echo "   cancelled."; return 0; }
-    keep=$(printf '%s' "$keep" | tr -d '\n')
-    n=$(jq -r '.backups | length' "$(manifest_path)" 2>/dev/null || echo 0)
-    if [ "$n" -le "$keep" ]; then
-        echo "   Nothing to prune (have $n, keeping $keep)."
-        return 0
+oc_backups_picker() {
+    local sel key
+    while true; do
+        local header
+        header="Database and backups — select a backup to delete, or use the actions above"
+        sel=$(oc_backups_rows | oc_fzf_sel "backups (delete)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __CREATE__)     run_oced_tool backup; continue ;;
+            __SHRINK__)     oc_pick_shrink; continue ;;
+            __DELETE_ALL__) oc_backups_bulk all; continue ;;
+            __KEEP_NEWEST__) oc_backups_bulk newest; continue ;;
+            __NONE__)       continue ;;
+            *)
+                confirm_action "DELETE backup $key?" || continue
+                run_oced_tool backups remove "$key" --yes
+                continue
+                ;;
+        esac
+    done
+}
+
+#-----------------------------------------------------------------------
+# Sessions details picker (info + compactions)
+#-----------------------------------------------------------------------
+oc_sessions_rows() {
+    session_rows | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '%s\t%s\n' "$(awk '{print $1}' <<<"$line")" "$line"
+    done
+}
+
+oc_sessions_picker() {
+    local sel key
+    while true; do
+        local header
+        header=$'Sessions — select one to inspect (full info + compaction digests)'
+        sel=$(oc_sessions_rows | oc_fzf_sel "sessions (details)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __NONE__) continue ;;
+            *)
+                run_oced_tool info "$key"
+                menu_pause "Sessions" || return 0
+                ;;
+        esac
+    done
+}
+
+#-----------------------------------------------------------------------
+# Export picker (session or ALL -> export wizard)
+#-----------------------------------------------------------------------
+oc_export_rows() {
+    printf '__ALL__\tALL SESSIONS (no filter)\n'
+    oc_sessions_rows
+}
+
+oc_export_picker() {
+    local sel key
+    while true; do
+        local header
+        header=$'Sessions to export — pick one session, or ALL SESSIONS'$'\n'$'(then choose a profile and its variant; ESC: back)'
+        sel=$(oc_export_rows | oc_fzf_sel "sessions (export)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __ALL__)    oc_export_flow ""  || continue ;;
+            __NONE__)   continue ;;
+            *)          oc_export_flow "$key" || continue ;;
+        esac
+    done
+}
+
+#-----------------------------------------------------------------------
+# Manage exports picker (view / remove)
+#-----------------------------------------------------------------------
+oc_exports_rows() {
+    local mode="$1"
+    oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
+    if [ "$mode" = "remove" ]; then
+        printf '__DELETE_ALL__\t[delete ALL export runs]\n'
+        printf '__KEEP_NEWEST__\t[delete all except the newest]\n'
     fi
-    confirm_action "Prune: WILL DELETE $((n - keep)) backup file(s), keeping the $keep most recent. Continue?" \
-        || { echo "   cancelled."; return 0; }
-    run_oced_tool backups prune "$keep"
-}
-
-oc_pick_export_remove() {
-    local stamp
-    stamp=$(pick_export_run "Export run to remove") || return 1
-    confirm_action "Remove export run $stamp? It deletes the generated files." || { echo "   cancelled."; return 0; }
-    run_oced_tool exports remove "$stamp" --yes
-}
-
-oc_pick_export_prune() {
-    local keep n
-    keep=$(oc_read_int "How many recent export runs to keep") || { echo "   cancelled."; return 0; }
-    keep=$(printf '%s' "$keep" | tr -d '\n')
-    n=$(exports_run_count)
-    if [ "$n" -le "$keep" ]; then
-        echo "   Nothing to prune (have $n, keeping $keep)."
-        return 0
-    fi
-    confirm_action "Prune: WILL DELETE $((n - keep)) export run(s), keeping the $keep most recent. Continue?" \
-        || { echo "   cancelled."; return 0; }
-    run_oced_tool exports prune "$keep"
-}
-
-# pick_export_run <prompt> -> prints a run stamp (or empty).
-pick_export_run() {
-    local prompt="$1" opts sel
-    opts=$(oced_out exports list 2>/dev/null | awk '/^[ ]*[0-9]+\./ {print $2}')
-    [ -n "$opts" ] || { echo "   (no export runs yet)"; return 1; }
-    sel=$(printf '%s\n' "$opts" | fzf --prompt="$prompt > " --height=40% --border --header="ESC: cancel") || return 1
-    printf '%s\n' "$sel"
+    [ -d "$OCED_OUT" ] || { printf '__NONE__\t(no export runs yet)\n'; return 0; }
+    local run
+    exports_runs_find | while IFS= read -r run; do
+        [ -d "$run" ] || continue
+        oc_exports_run_row "${run##*/}"
+    done
 }
 
 # exports_run_count -> number of export run dirs under OCED_OUT.
@@ -392,67 +393,452 @@ exports_run_count() {
     find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l
 }
 
-# oc_export_flow — two screens: recipes (multi-select) -> session (or all).
-# ESC always cancels; each selected recipe becomes its own export run.
-oc_export_flow() {
-    local picks f pick label rest profile args
-    local -a idfilter=() arr=()
-    f=$(printf '%s\n' "${oc_recipes[@]}" \
-        | fzf --multi --prompt="Export recipes (TAB to select, Enter to export; ESC = cancel) > " \
-            --height=60% --border --header="Each selected recipe produces its own export run.") || return 1
-    [ -n "$f" ] || return 1
+# oc_stamp_human <stamp> -> human readable date of an export run stamp.
+oc_stamp_human() {
+    local s="$1"
+    case "$s" in
+        [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
+            printf '%s %s UTC' "${s:0:10}" "${s:11:2}:${s:14:2}" ;;
+        *) printf '%s' "$s" ;;
+    esac
+}
 
-    local selid
-    selid=$(pick_session "Sessions to export") || return 1
-    selid=$(printf '%s' "$selid" | tr -d '\n')
-    [ -n "$selid" ] && idfilter=(--filter "$selid")
+# oc_exports_run_row <stamp> -> one TSV row aggregating a run's metadatos.
+oc_exports_run_row() {
+    local stamp="$1"
+    local run="$OCED_OUT/$stamp"
+    local meta profiles="" roots=0 subs=0 msgs=0 found=0 m p r s
+    local -a metas
+    mapfile -t metas < <(find "$run" -name metadatos.json -type f 2>/dev/null | sort)
+    for m in "${metas[@]}"; do
+        [ -f "$m" ] || continue
+        found=1
+        p=$(jq -r '.profile // "?"' "$m")
+        profiles="${profiles:+$profiles+}$p"
+        r=$(jq -r '.sessions.roots // 0' "$m")
+        s=$(jq -r '.sessions.subagents // 0' "$m")
+        [ "$r" -gt "$roots" ] && roots="$r"
+        [ "$s" -gt "$subs" ] && subs="$s"
+        msgs=$((msgs + $(jq -r '.messages // 0' "$m")))
+    done
+    [ "$found" -eq 1 ] || profiles="?"
+    local size
+    size=$(du -sb "$run" 2>/dev/null | cut -f1); size=${size:-0}
+    printf '%s\t%s\n' "$stamp" "$(printf '%-16s  %-30s  %s root · %s msg · %s' \
+        "$(oc_stamp_human "$stamp")" "$profiles" "$roots" "$msgs" "$(o_human_size "$size")")"
+}
 
-    # Export plan + confirmation: heavy on large DBs, show paths & sizes first.
-    local db_est=0 n_recipes
-    [ -f "${OPENCODE_DB}-wal" ] && db_est=$((db_est + $(stat -c %s "${OPENCODE_DB}-wal"))) || true
-    [ -f "${OPENCODE_DB}-shm" ] && db_est=$((db_est + $(stat -c %s "${OPENCODE_DB}-shm"))) || true
+# Bulk removals from the exports picker (all / keep newest only).
+oc_exports_bulk() {
+    local what="$1"
+    local -a runs
+    mapfile -t runs < <(exports_runs_find | xargs -n1 basename 2>/dev/null | sort -r)
+    local total=${#runs[@]}
+    [ "$total" -gt 0 ] || { echo "   (no export runs yet)"; return 1; }
+    local -a targets=()
+    if [ "$what" = "all" ]; then
+        confirm_action "DELETE ALL $total export runs? This cannot be undone." || { echo "   cancelled."; return 0; }
+        targets=("${runs[@]}")
+    else
+        [ "$total" -le 1 ] && { echo "   Already only 1 export run."; return 0; }
+        confirm_action "DELETE $((total - 1)) older export runs, keeping only the newest?" || { echo "   cancelled."; return 0; }
+        targets=("${runs[@]:1}")
+    fi
+    local s
+    for s in "${targets[@]}"; do
+        run_oced_tool exports remove "$s" --yes
+    done
+}
+
+oc_exports_picker() {
+    local mode="view" sel key
+    while true; do
+        local header
+        header="Manage exports — mode: $mode"$'\n'"$(
+            if [ "$mode" = view ]; then printf 'view: show the report of an export run';
+            else printf 'remove: delete a run (with confirmation)'; fi
+        )"
+        sel=$(oc_exports_rows "$mode" | oc_fzf_sel "exports ($mode)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
+            __DELETE_ALL__) oc_exports_bulk all; continue ;;
+            __KEEP_NEWEST__) oc_exports_bulk newest; continue ;;
+            __NONE__)       continue ;;
+            *)
+                if [ "$mode" = view ]; then
+                    run_oced_tool exports view "$key"
+                    menu_pause "Manage exports" || return 0
+                    return 0
+                fi
+                confirm_action "Remove export run $key? It deletes the generated files." || continue
+                run_oced_tool exports remove "$key" --yes
+                continue
+                ;;
+        esac
+    done
+}
+
+#-----------------------------------------------------------------------
+# Export flow: session (done by the picker) -> product -> variant/custom
+#-----------------------------------------------------------------------
+# oc_pick_product -> selects one export product (key<TAB>label).
+# product = the document to produce (transcript | memory | compactions).
+oc_pick_product() {
+    printf '%s\n' \
+        $'transcript\ttranscript: the conversation in markdown (text + reasoning + tools + patches) + optional faithful JSON' \
+        $'memory\tmemory: RAG corpus (corpus.jsonl, one entry per root session)' \
+        $'compactions\tcompactions: only the compacted-context digests' \
+        | oc_fzf_sel "export product" "Product = the document you want to produce. Next step: choose how it is configured (variant)."
+}
+
+# oc_recipes_for <product> -> TSV rows (args<TAB>label) for that product.
+# variant = how the product is configured; bundle = several products in one run.
+oc_recipes_for() {
+    case "$1" in
+        transcript) printf '%s\n' \
+            $'transcript\tdefault' \
+            $'transcript --tool-output full\ttool output: full' \
+            $'transcript --tool-output omit\tomit tool output' \
+            $'transcript --patch omit\tomit patches' \
+            $'transcript --no-reasoning\tno reasoning' \
+            $'transcript --summary-diffs\t+ summary diffs' \
+            $'transcript --mark-compactions\t+ compaction markers' \
+            $'transcript --mark-compactions --summary-diffs\t+ markers + diffs' \
+            $'transcript --sub inline\tsubagents: inline' \
+            $'transcript --sub omit\tsubagents: omit' \
+            $'transcript --json\t+ faithful JSON archive' \
+            $'transcript --json --sanitize\t+ JSON archive, secrets redacted' \
+            $'__FULLMEM__\tbundle: transcript + memory corpus (one run)' \
+            $'__CUSTOM__\tcustom… (choose my own options)' ;;
+        compactions) printf '%s\n' \
+            $'compactions\tdefault' \
+            $'compactions --sub inline\tsubagents: inline' \
+            $'compactions --sub omit\tsubagents: omit' \
+            $'compactions --json\t+ faithful JSON archive' \
+            $'__CUSTOM__\tcustom… (choose my own options)' ;;
+        memory) printf '%s\n' \
+            $'memory\tdefault' \
+            $'memory --files\t+ touched files' \
+            $'__CUSTOM__\tcustom… (cap / files)' ;;
+        *) return 1 ;;
+    esac
+}
+
+# oc_export_confirm <profile-label> <filter-or-empty> <spec> -> print the plan + ask.
+oc_export_confirm() {
+    local profile="$1" selid="$2" spec="$3"
+    local db_est=0
+    [ -f "$OPENCODE_DB-wal" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-wal"))) || true
+    [ -f "$OPENCODE_DB-shm" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-shm"))) || true
     db_est=$((db_est + $(stat -c %s "$OPENCODE_DB")))
-    n_recipes=$(printf '%s\n' "$f" | sed '/^[[:space:]]*$/d' | wc -l)
     echo ""
     echo "-> Export plan"
-    printf '   %-9s %s  %s\n' "Source:" "$OPENCODE_DB" "($(command -v o_human_size >/dev/null 2>&1 && o_human_size "$db_est" || echo "$db_est bytes") raw)"
+    printf '   %-9s %s\n' "Source:" "$OPENCODE_DB"
     printf '   %-9s %s\n' "Filter:" "${selid:-ALL sessions (no filter)}"
+    printf '   %-9s %s\n' "Profile:" "$profile"
+    printf '   %-9s %s\n' "Spec:" "$spec"
     printf '   %-9s %s\n' "Output:" "$OCED_OUT/<timestamp>"
-    printf '   %-9s %d run(s), one per selected recipe\n' "Recipes:" "$n_recipes"
-    confirm_action "Start these export(s)? Heavy on a large DB." || { echo "   cancelled."; return 0; }
+    if [ "$db_est" -ge 1073741824 ]; then
+        confirm_action "Start this export? The DB is ~$(o_human_size "$db_est") — may take a while." || { echo "   cancelled."; return 1; }
+    else
+        confirm_action "Start this export?" || { echo "   cancelled."; return 1; }
+    fi
+    return 0
+}
 
-    while IFS= read -r pick; do
-        [ -n "$pick" ] || continue
-        label="${pick%%|*}"
-        rest="${pick#*|}"
-        profile="${rest%%|*}"
-        args="${rest#*|}"
-        arr=()
-        [ -n "$args" ] && read -r -a arr <<<"$args"
-        echo "   Exporting: $label  (${idfilter[*]:-all sessions})"
-        run_oced_tool export "$profile" "${idfilter[@]}" "${arr[@]}"
-        echo "   ----"
-    done <<<"$f"
+# oc_export_flow [session-id|"") -> product-first export wizard. Empty = ALL sessions.
+oc_export_flow() {
+    local selid="${1:-}"
+    local -a idfilter=()
+    [ -n "$selid" ] && idfilter=(--filter "$selid")
 
-    menu_pause "Export runs" || return 0
+    local prod prodkey
+    prod=$(oc_pick_product) || return 1
+    prodkey=$(oc_sel_key "$prod")
+
+    local rec reckey
+    rec=$(oc_recipes_for "$prodkey" | oc_fzf_sel "variant ($prodkey)" \
+        "Choose the '$prodkey' variant — product = the document to produce · variant = how it is configured · bundle = several products in one run · custom… = my own options") || return 1
+    reckey=$(oc_sel_key "$rec")
+
+    case "$reckey" in
+        __FULLMEM__)
+            oc_export_confirm "transcript + memory" "$selid" "transcript + RAG corpus (one run)" || return 0
+            local stamp
+            stamp=$(date -u +%Y%m%d-%H%M%S)
+            run_oced_tool export transcript --stamp "$stamp" "${idfilter[@]}"
+            run_oced_tool export memory --stamp "$stamp" --files "${idfilter[@]}"
+            menu_pause "Export" || return 0
+            return 0
+            ;;
+        __CUSTOM__)
+            local cmdline args
+            if [ "$prodkey" = memory ]; then
+                args=$(oc_memory_custom) || return 1
+                cmdline="memory ${args:-}"
+            else
+                args=$(oc_custom_run "$prodkey") || return 1
+                cmdline="$prodkey ${args:-}"
+            fi
+            cmdline=${cmdline% }
+            oc_export_confirm "$prodkey" "$selid" "custom: $cmdline" || return 0
+            # shellcheck disable=SC2086  # cmdline must split ("--sub inline --role user")
+            run_oced_tool export $cmdline "${idfilter[@]}"
+            menu_pause "Export" || return 0
+            return 0
+            ;;
+        *)
+            oc_export_confirm "$prodkey" "$selid" "$reckey" || return 0
+            local -a parts
+            read -r -a parts <<<"$reckey"
+            local profile_only="${parts[0]}"
+            local -a extra=("${parts[@]:1}")
+            run_oced_tool export "$profile_only" "${extra[@]}" "${idfilter[@]}"
+            menu_pause "Export" || return 0
+            return 0
+            ;;
+    esac
 }
 
 #-----------------------------------------------------------------------
-# Levels
+# Custom (checkbox checklist, "sistema asus" style: toggled one row per Enter)
 #-----------------------------------------------------------------------
-run_oc_menu_db() {
-    run_menu --cat "opencode-db>db" --prompt "Database and backups" --entries oc_menu_db
+# oc_custom_set <product> -> initializes the global ingredient arrays.
+#   OC_CK_KEY/OC_CK_LABEL/OC_CK_TYPE(bool|cycle)/OC_CK_VAL
+oc_custom_set() {
+    local p="$1"
+    OC_CK_KEY=(); OC_CK_LABEL=(); OC_CK_TYPE=(); OC_CK_VAL=()
+    case "$p" in
+        transcript)
+            OC_CK_KEY=(tools outfull patches markers diffs sub role reasoning json sanitize)
+            OC_CK_LABEL=("tool calls + inputs" "tool output (full)" "patches" "compaction markers" "summary diffs" "subagents" "role" "reasoning" "faithful JSON archive" "sanitize (redact secrets)")
+            OC_CK_TYPE=(bool bool bool bool bool cycle cycle bool bool bool)
+            OC_CK_VAL=(on off on off off separate all on off off) ;;
+        compactions)
+            OC_CK_KEY=(sub role json sanitize)
+            OC_CK_LABEL=("subagents" "role" "faithful JSON archive" "sanitize (redact secrets)")
+            OC_CK_TYPE=(cycle cycle bool bool)
+            OC_CK_VAL=(separate all off off) ;;
+    esac
 }
 
-run_oc_menu_sessions() {
-    run_menu --cat "opencode-db>sessions" --prompt "Sessions" --entries oc_menu_sessions
+# oc_custom_args <product> -> builds the command-line ingredients from the arrays.
+oc_custom_args() {
+    local p="$1" args=""
+    case "$p" in
+        transcript)
+            if [ "${OC_CK_VAL[0]}" = off ]; then
+                args+=" --tool-output omit"
+            elif [ "${OC_CK_VAL[1]}" = on ]; then
+                args+=" --tool-output full"
+            fi
+            [ "${OC_CK_VAL[2]}" = off ] && args+=" --patch omit"
+            [ "${OC_CK_VAL[3]}" = on ] && args+=" --mark-compactions"
+            [ "${OC_CK_VAL[4]}" = on ] && args+=" --summary-diffs"
+            args+=" --sub ${OC_CK_VAL[5]} --role ${OC_CK_VAL[6]}"
+            [ "${OC_CK_VAL[7]}" = off ] && args+=" --no-reasoning"
+            [ "${OC_CK_VAL[8]}" = on ] && args+=" --json"
+            [ "${OC_CK_VAL[9]}" = on ] && args+=" --sanitize" ;;
+        compactions)
+            args+=" --sub ${OC_CK_VAL[0]} --role ${OC_CK_VAL[1]}"
+            [ "${OC_CK_VAL[2]}" = on ] && args+=" --json"
+            [ "${OC_CK_VAL[3]}" = on ] && args+=" --sanitize" ;;
+    esac
+    printf '%s\n' "$args"
 }
 
-run_oc_menu_exports() {
-    run_menu --cat "opencode-db>exports" --prompt "Export runs" --entries oc_menu_exports
+# oc_custom_run <profile> -> interactive checklist; prints the args on stdout.
+oc_custom_run() {
+    local profile="$1" i rows sel key
+    oc_custom_set "$profile"
+    while true; do
+        rows=""
+        for i in "${!OC_CK_KEY[@]}"; do
+            case "${OC_CK_TYPE[$i]}" in
+                bool)
+                    rows+=$(printf '%s\t%s\n' "${OC_CK_KEY[$i]}" "- [${OC_CK_VAL[$i]}] ${OC_CK_LABEL[$i]}") ;;
+                cycle)
+                    rows+=$(printf '%s\t%s\n' "${OC_CK_KEY[$i]}" "- ${OC_CK_LABEL[$i]}: ${OC_CK_VAL[$i]}") ;;
+            esac
+            rows+=$'\n'
+        done
+        rows+=$(printf '%s\t%s\n' "__RUN__" "[run this custom export]"); rows+=$'\n'
+        rows+=$(printf '%s\t%s\n' "__ABORT__" "[cancel]"); rows+=$'\n'
+        sel=$(printf '%b' "$rows" | oc_fzf_sel "custom ($profile)" "Checklist: Enter toggles a row · '[run]' executes") || return 1
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __RUN__)  break ;;
+            __ABORT__) echo "   cancelled."; return 1 ;;
+            *)
+                for i in "${!OC_CK_KEY[@]}"; do
+                    [ "${OC_CK_KEY[$i]}" = "$key" ] || continue
+                    if [ "${OC_CK_TYPE[$i]}" = bool ]; then
+                        [ "${OC_CK_VAL[$i]}" = on ] && OC_CK_VAL[$i]=off || OC_CK_VAL[$i]=on
+                    else
+                        case "${OC_CK_VAL[$i]}" in
+                            separate) OC_CK_VAL[$i]=inline ;;
+                            inline)   OC_CK_VAL[$i]=omit ;;
+                            omit)     OC_CK_VAL[$i]=separate ;;
+                            all)      OC_CK_VAL[$i]=user ;;
+                            user)     OC_CK_VAL[$i]=assistant ;;
+                            assistant) OC_CK_VAL[$i]=all ;;
+                        esac
+                    fi
+                done
+                ;;
+        esac
+    done
+    printf '%s\n' "$(oc_custom_args "$profile")"
+}
+
+# oc_memory_custom -> checklist for the memory profile (files / cap); prints args.
+oc_memory_custom() {
+    local files=off cap="0" rows sel key n
+    while true; do
+        rows=$(printf '%s\t%s\n' "files" "- [${files}] touched files per session"; printf '%s\t%s\n' "cap" "- cap N chars per text (now: $cap)"; printf '%s\t%s\n' "__RUN__" "[run this memory export]"; printf '%s\t%s\n' "__ABORT__" "[cancel]")
+        sel=$(printf '%b\n' "$rows" | oc_fzf_sel "custom (memory)" "Checklist: Enter toggles · '[run]' executes") || return 1
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __RUN__) break ;;
+            __ABORT__) echo "   cancelled."; return 1 ;;
+            files) [ "$files" = on ] && files=off || files=on ;;
+            cap)
+                n=$(oc_read_int "Cap per text in chars (0 = unlimited)") || continue
+                cap=$(printf '%s' "$n" | tr -d '\n') ;;
+        esac
+    done
+    local args=""
+    [ "$files" = on ] && args+=" --files"
+    [ "$cap" != "0" ] && args+=" --cap $cap"
+    printf '%s\n' "$args"
+}
+
+#-----------------------------------------------------------------------
+# shrink in the menu: named recipes (like the export recipes), custom N/days/date
+# and dry-run. shrink only WRITES a copy (never modifies the live DB); the
+# swap is manual.
+#-----------------------------------------------------------------------
+pick_shrink_profile() {
+    local sel
+    sel=$(printf 'lean: keep 10 most recent + strip reasoning|shrink|lean\nrecent: sessions updated in the last 90 days|shrink|recent\nfull: keep ALL sessions, strip reasoning only|shrink|full\nbare: keep 10 most recent, keep reasoning|shrink|bare\ndry-run (no file)|shrink|lean --dry-run\ncustom (choose exactly what to keep)...|shrink|custom\n' \
+        | fzf --prompt="shrink recipe > " --height=50% --border --header="Shrink works on the LIVE DB (own snapshot), not on a backup. ESC: cancel") || return 1
+    [ -n "$sel" ] || return 1
+    printf '%s\n' "$sel"
+}
+
+oc_pick_shrink_custom() {
+    local sel n
+    sel=$(printf 'keep N most recent sessions\nkeep sessions from the last N days\nkeep sessions since a date (real range)\n' \
+        | fzf --prompt="custom shrink criteria > " --height=35% --border --header="ESC: cancel") || return 1
+    [ -n "$sel" ] || return 1
+    case "$sel" in
+        *"N most recent"*)
+            n=$(oc_read_int "Number of most recent sessions to keep") || return 1
+            printf 'shrink --keep %s\n' "$(printf '%s' "$n" | tr -d '\n')" ;;
+        *"N days"*)
+            n=$(oc_read_int "Days to keep (updated within the last N days)") || return 1
+            printf 'shrink --older-than %s\n' "$(printf '%s' "$n" | tr -d '\n')" ;;
+        *"since a date"*)
+            local min_ts max_ts min_dt max_dt d
+            min_ts=$(sqlite3 "$(o_db_uri)" "SELECT coalesce(min(time_updated),0) FROM session;")
+            max_ts=$(sqlite3 "$(o_db_uri)" "SELECT coalesce(max(time_updated),0) FROM session;")
+            if [ "$min_ts" -gt 0 ] && [ "$max_ts" -gt 0 ]; then
+                min_dt=$(date -u -d "@$((min_ts/1000))" +%Y-%m-%d 2>/dev/null || date -u -r $((min_ts/1000)) +%Y-%m-%d 2>/dev/null)
+                max_dt=$(date -u -d "@$((max_ts/1000))" +%Y-%m-%d 2>/dev/null || date -u -r $((max_ts/1000)) +%Y-%m-%d 2>/dev/null)
+                echo "   Available range: $min_dt .. $max_dt" >&2
+            fi
+            d=$(oc_read_int "Since date (YYYYMMDD, e.g. 20260115)") || return 1
+            # Convert YYYYMMDD to YYYY-MM-DD
+            d=$(printf '%s' "$d" | tr -d '\n')
+            if [ ${#d} -eq 8 ]; then
+                d="${d:0:4}-${d:4:2}-${d:6:2}"
+            fi
+            printf 'shrink --since %s\n' "$d" ;;
+    esac
+}
+
+oc_pick_shrink() {
+    local presel runargs
+    presel=$(pick_shrink_profile) || return 1
+    runargs="${presel##*|}"
+    if [ "$runargs" = "custom" ]; then
+        runargs=$(oc_pick_shrink_custom) || { echo "   cancelled."; return 0; }
+        runargs="${runargs#shrink }"
+    fi
+    if [[ "$runargs" != *"--dry-run"* ]]; then
+        echo ""
+        echo "-> shrink plan (workflow: backup -> export memory -> shrink)"
+        printf '   %-9s %s\n' "Action:" "write a pruned + VACUUMed COPY ($runargs)"
+        printf '   %-9s %s\n' "Source:" "$OPENCODE_DB (LIVE DB, own snapshot)"
+        printf '   %-9s %s\n' "Output:" "$OCED_BACKUP_DIR/shrink/<timestamp>/ (swap manually)"
+        confirm_action "Continue? The live DB is never modified; export memory first to keep its knowledge." \
+            || { echo "   cancelled."; return 0; }
+    fi
+    # shellcheck disable=SC2086  # runargs must split ("--keep 30")
+    run_oced_tool shrink $runargs
+    menu_pause "Backups" || return 0
+}
+
+#-----------------------------------------------------------------------
+# Root
+#-----------------------------------------------------------------------
+oc_root=(
+    "status|Status report (DB · backups · deps · version/schema)|fn:oc_show_status"
+    "backups|Database and backups (picker)|fn:oc_backups_picker"
+    "sessions|Sessions (details picker)|fn:oc_sessions_picker"
+    "export|Export sessions (wizard picker)|fn:oc_export_picker"
+    "exports|Manage exports (view / remove picker)|fn:oc_exports_picker"
+    "guide|Guided workflow (inspect -> backup -> export memory -> shrink)|tool:guide|pause"
+    "help|Show help|tool:help|pause"
+)
+
+# oc_root_status -> builds ACTION_STATUS for the root menu header
+# Shows: DB path/size, sessions count, WAL state, last backup alignment, export runs count
+oc_root_status() {
+    ACTION_STATUS=""
+    o_db_exists 2>/dev/null || { ACTION_STATUS="DB not found: $OPENCODE_DB"; return 0; }
+    local bytes sessions wal_size backup_align export_count
+    bytes=$(stat -c %s "$OPENCODE_DB" 2>/dev/null || echo 0)
+    sessions=$(o_q "SELECT count(*) FROM session" 2>/dev/null || echo 0)
+    if [ -f "$OPENCODE_DB-wal" ]; then
+        wal_size=$(stat -c %s "$OPENCODE_DB-wal" 2>/dev/null || echo 0)
+    else
+        wal_size=0
+    fi
+    local manifest="$OCED_BACKUP_DIR/manifest.json"
+    if [ -f "$manifest" ]; then
+        local last_idx msess mmess mu tsess tmess tu
+        last_idx=$(jq -r '.backups | length - 1' "$manifest" 2>/dev/null || echo -1)
+        if [ "$last_idx" -ge 0 ]; then
+            msess=$(jq -r --argjson i "$last_idx" '.backups[$i].sessions' "$manifest" 2>/dev/null || echo 0)
+            mmess=$(jq -r --argjson i "$last_idx" '.backups[$i].messages' "$manifest" 2>/dev/null || echo 0)
+            mu=$(jq -r --argjson i "$last_idx" '.backups[$i].max_updated' "$manifest" 2>/dev/null || echo 0)
+            tsess=$(o_q "SELECT count(*) FROM session" 2>/dev/null || echo 0)
+            tmess=$(o_q "SELECT count(*) FROM message" 2>/dev/null || echo 0)
+            tu=$(o_q "SELECT max(time_updated) FROM session" 2>/dev/null || echo 0)
+            if [ "$msess" = "$tsess" ] && [ "$mmess" = "$tmess" ] && [ "$mu" = "$tu" ]; then
+                backup_align="[OK] aligned"
+            else
+                backup_align="[!] out of sync"
+            fi
+        else
+            backup_align="no backups"
+        fi
+    else
+        backup_align="no backups"
+    fi
+    export_count=$(exports_run_count 2>/dev/null || echo 0)
+    ACTION_STATUS="DB: $(o_human_size "$bytes") | Sessions: $sessions | WAL: $(o_human_size "$wal_size") | Backup: $backup_align | Exports: $export_count"
+}
+
+oc_show_status() {
+    run_oced_tool status
+    menu_pause "Status" || return 0
 }
 
 run_oc_menu() {
     menu_require_fzf
+    oc_root_status
     run_menu --cat "opencode-db" --prompt "actions" --entries oc_root
 }

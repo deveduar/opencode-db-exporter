@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # menu_flow.sh — logic tests for the fzf menu (fzf is stubbed; no TTY needed).
 # Usage: tests/menu_flow.sh
+# NOTE: FZF_QUEUE is ALWAYS assigned on its own line, never as a command prefix:
+# with `set -u`, `VAR=("a") fn` makes the array invisible inside fn (bash quirk).
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,6 +15,7 @@ OUT="$TMP/out"
 export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$TMP/backups"
+export OCED_DISPATCHER="$MOD/opencode-db.sh"
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
 . "$MOD/common.sh"
@@ -22,134 +25,356 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 pass=0; fail=0
 ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; fail=$((fail+1)); }
-# reset → restore real function definitions (undo test overrides)
-reset() { . "$MOD/menu.sh"; }
+FZF_HIST="$TMP/fzf.log"
+# reset -> restore real function definitions (undo test overrides).
+# menu_pause is neutralised: its real body would block on a TTY stdin.
+reset() { unset FZF_QUEUE FZF_FAIL; . "$MOD/menu.sh"; menu_pause() { return 0; }; : > "$FZF_HIST"; }
 count_meta() { find "$OUT" -path "*/$1/*" -name metadatos.json 2>/dev/null | wc -l; }
 newest_meta() { find "$OUT" -path "*/$1/*" -name metadatos.json -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
+CALLS="$TMP/calls.txt"
+call_log() { run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }; }
+# FZF queue lives in a FILE: fzf() runs inside $(...) pipelines (subshells), so
+# shell-side mutation would never reach the caller. qset/qempty manage the file.
+FZF_QUEUE_FILE="$TMP/fzf.queue"
+qset()  { printf '%s\n' "$@" > "$FZF_QUEUE_FILE"; }
+qempty(){ : > "$FZF_QUEUE_FILE"; }
 
-# ---- fzf stub: keys off --prompt, drains stdin (like real fzf) ----
+# ---- fzf stub: pops one item from the queue file (like real fzf selections) ----
+# Logs each invocation's args (prompt) for mode-toggle assertions.
+# Empty queue -> return 130 (ESC). FZF_FAIL -> return 1 (cancelled picker).
 fzf() {
-    local args="$*"
-    cat >/dev/null
+    local args="$*" item
+    printf '%s\n' "$args" >> "$FZF_HIST"
+    cat >/dev/null  # drain the piped rows like real fzf (avoids SIGPIPE under pipefail)
     if [ -n "${FZF_FAIL:-}" ] && [[ "$args" == *"$FZF_FAIL"* ]]; then
         return 1
     fi
-    case "$args" in
-        *"Export recipes"*)     [ -n "${FZF_RECIPES:-}" ] && printf '%s\n' "$FZF_RECIPES"; return 0 ;;
-        *"Sessions to export"*|*"Session details"*|*"Compactions of session"*)
-                               [ -n "${FZF_SESSION:-}" ] && printf '%s' "$FZF_SESSION"; return 0 ;;
-    esac
-    return 1
+    if [ ! -s "$FZF_QUEUE_FILE" ]; then
+        return 130
+    fi
+    IFS= read -r item < "$FZF_QUEUE_FILE"
+    tail -n +2 "$FZF_QUEUE_FILE" > "$FZF_QUEUE_FILE.tmp" && mv "$FZF_QUEUE_FILE.tmp" "$FZF_QUEUE_FILE"
+    printf '%s\n' "$item"
+    return 0
 }
 . "$MOD/menu.sh"
+# menu_pause with a real function but a non-TTY stdin returns immediately.
+# (Inside the picker tests menu_pause is neutralised by reset().)
+menu_pause "test" </dev/null; [ $? -eq 0 ] && echo "  [OK]   menu_pause returns immediately off-TTY" || echo "  [FAIL] menu_pause TTY handling"
 
 echo "== session picker excludes the sqlite separator row =="
 ROWS=$(session_rows)
 printf '%s' "$ROWS" | grep -qE '^[[:space:]]*-' && bad "separator row leaked into picker" || ok "separator rows excluded"
 printf '%s' "$ROWS" | grep -q '^ses_' && ok "session rows present" || bad "session rows missing"
 
-echo "== ESC cancels the export flow =="
+echo "== small helpers =="
 reset
-before=$(count_meta full)
-FZF_FAIL="Export recipes" oc_export_flow >/dev/null 2>&1
+[ "$(oc_sel_key $'keyX\tlabel')" = "keyX" ] && ok "oc_sel_key extracts the hidden key" || bad "oc_sel_key"
+[ "$(oc_toggle_row verify delete)" = "__TOGGLE__	[mode: verify]  switch to delete" ] && ok "oc_toggle_row builds the toggle row" || bad "oc_toggle_row"
+[ "$(oc_stamp_human '2026-09-21_08-30')" = "2026-09-21 08:30 UTC" ] && ok "oc_stamp_human formats a stamp" || bad "oc_stamp_human"
+mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
+[ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
+
+echo "== recipe tables per product =="
+reset
+R=$(oc_recipes_for transcript)
+printf '%s' "$R" | grep -q '__FULLMEM__' && ok "transcript table offers the transcript+memory bundle" || bad "transcript lacks __FULLMEM__"
+printf '%s' "$R" | grep -q -- "--role user" && bad "solo-prompts preset leaked back" || ok "transcript has NO solo-prompts/answers presets (--role is a flag, not a preset)"
+printf '%s' "$R" | grep -q 'transcript --json' && ok "transcript table offers the faithful JSON archive" || bad "transcript lacks --json"
+printf '%s' "$R" | grep -q 'transcript --no-reasoning' && ok "transcript table offers no-reasoning" || bad "transcript lacks --no-reasoning"
+printf '%s' "$R" | grep -q '__CUSTOM__' && ok "transcript table offers Custom…" || bad "transcript lacks __CUSTOM__"
+oc_recipes_for memory | grep -q 'memory --files' && ok "memory table offers +files" || bad "memory lacks --files"
+oc_recipes_for memory | grep -q 'transcript --patch' && bad "memory table leaked a transcript-only preset" || ok "memory table is filtered"
+oc_recipes_for compactions | grep -q -- "--role user" && bad "role preset leaked into compactions table" || ok "compactions table has no role presets"
+
+echo "== every product/recipe row carries a real TAB (visible in fzf --with-nth=2..) =="
+reset
+oc_fzf_sel() { cat; }   # pass-through: expose the generated rows
+PROD=$(oc_pick_product)
+unset -f oc_fzf_sel
+rows_with_label() { local n=0 line; while IFS= read -r line; do
+    [[ "$line" == *$'\t'* ]] || continue
+    [ -n "${line%%$'\t'*}" ] && [ -n "${line#*$'\t'}" ] && n=$((n + 1))
+done; echo "$n"; }
+[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "3" ] && ok "product picker rows (3) have key+label" || bad "product rows: $PROD"
+for p in transcript compactions memory; do
+    n=$(oc_recipes_for "$p" | rows_with_label)
+    expected=14; [ "$p" = compactions ] && expected=5
+    [ "$p" = memory ] && expected=3
+    [ "$n" -eq "$expected" ] && ok "recipes for '$p': $n rows with real labels" || bad "recipes '$p': n=$n expected=$expected"
+done
+
+echo "== custom checklist ingredients =="
+reset
+oc_custom_set transcript
+[ "${OC_CK_VAL[5]}" = "separate" ] && ok "oc_custom_set transcript defaults (subagents separate)" || bad "custom transcript defaults"
+ARGS=$(oc_custom_args transcript)
+[ "$ARGS" = " --sub separate --role all" ] && ok "oc_custom_args transcript defaults" || bad "custom transcript args: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(off on on off off separate all on off off); ARGS=$(oc_custom_args transcript)
+[ "$ARGS" = " --tool-output omit --sub separate --role all" ] && ok "oc_custom_args transcript tools-off" || bad "custom transcript tools-off: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(on off on off on separate all on off off); ARGS=$(oc_custom_args transcript)
+[ "$ARGS" = " --summary-diffs --sub separate --role all" ] && ok "oc_custom_args transcript diffs-on" || bad "custom transcript diffs: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(on off on off off separate user on off off); ARGS=$(oc_custom_args transcript)
+[ "$ARGS" = " --sub separate --role user" ] && ok "oc_custom_args transcript role user" || bad "custom transcript role: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(on off on off off separate all off off off); ARGS=$(oc_custom_args transcript)
+[ "$ARGS" = " --sub separate --role all --no-reasoning" ] && ok "oc_custom_args transcript reasoning-off adds --no-reasoning" || bad "custom transcript reasoning: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(on off on off off separate all on on on); ARGS=$(oc_custom_args transcript)
+printf '%s' "$ARGS" | grep -q -- "--json" && printf '%s' "$ARGS" | grep -q -- "--sanitize" && ok "oc_custom_args transcript json+sanitize" || bad "custom transcript json/sanitize: '$ARGS'"
+oc_custom_set compactions
+[ "$(oc_custom_args compactions)" = " --sub separate --role all" ] && ok "oc_custom_args compactions defaults" || bad "compactions args"
+oc_custom_set compactions; OC_CK_VAL=(separate all on on); ARGS=$(oc_custom_args compactions)
+printf '%s' "$ARGS" | grep -q -- "--json" && printf '%s' "$ARGS" | grep -q -- "--sanitize" && ok "oc_custom_args compactions json+sanitize" || bad "compactions json/sanitize: '$ARGS'"
+oc_custom_set transcript; OC_CK_VAL=(off on off off off omit user on off off); ARGS=$(oc_custom_args transcript)
+printf '%s' "$ARGS" | grep -q -- "--tool-output omit" && ! printf '%s' "$ARGS" | grep -q -- "--tool-output full" && ok "oc_custom_args transcript: tools wins over outfull" || bad "custom transcript tools/outfull: '$ARGS'"
+
+echo "== oc_read_int (interactive integer input) =="
+reset
+V=$(printf '5\n' | oc_read_int "Count" 2>/dev/null); [ "$V" = "5" ] && ok "oc_read_int reads a number" || bad "oc_read_int number: '$V'"
+printf '\n' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int cancel on Enter alone" || bad "oc_read_int Enter"
+printf '\033' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int cancels on ESC" || bad "oc_read_int ESC"
+printf 'ab\n' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int rejects non-numeric" || bad "oc_read_int non-numeric"
+
+echo "== root status header =="
+reset
+oc_root_status
+printf '%s' "$ACTION_STATUS" | grep -q "Sessions:" && printf '%s' "$ACTION_STATUS" | grep -q "DB:" && ok "root status header set" || bad "root status: '$ACTION_STATUS'"
+
+echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
+reset
+oc_test_entries=(
+    "alpha|Action alpha|tool:backups list"
+    "beta|Action beta|builtin:exit"
+)
+: > "$CALLS"; call_log
+qset "alpha" "beta"
+run_menu --cat "test" --entries oc_test_entries >/dev/null
+[ $? -eq 0 ] && grep -qx "backups list" "$CALLS" && ok "run_menu dispatches a tool action and exits on builtin" || bad "run_menu dispatch: $(cat "$CALLS")"
+qempty
+run_menu --cat "test" --entries oc_test_entries >/dev/null; [ $? -eq 2 ] && ok "run_menu ESC climbs a level (rc 2)" || bad "run_menu ESC climb"
+
+echo "== backups picker (single mode: create / shrink / bulk / per-file delete) =="
+reset
+mkdir -p "$OCED_BACKUP_DIR"
+jq -n '{backups: [
+    {"file": "fake-0.db", "date": "2026-01-01T00:00:00Z", "size": 100, "sessions": 1, "messages": 2, "sha256": "aaa"},
+    {"file": "fake-1.db", "date": "2026-01-02T00:00:00Z", "size": 100, "sessions": 1, "messages": 2, "sha256": "bbb"},
+    {"file": "fake-2.db", "date": "2026-01-03T00:00:00Z", "size": 100, "sessions": 1, "messages": 2, "sha256": "ccc"},
+    {"file": "fake-3.db", "date": "2026-01-04T00:00:00Z", "size": 100, "sessions": 1, "messages": 2, "sha256": "ddd"},
+    {"file": "fake-4.db", "date": "2026-01-05T00:00:00Z", "size": 100, "sessions": 1, "messages": 2, "sha256": "eee"}
+]}' > "$OCED_BACKUP_DIR/manifest.json"
+confirm_action() { return 0; }
+
+: > "$CALLS"; call_log
+qset "fake-2.db"
+oc_backups_picker >/dev/null
+grep -qx "backups remove fake-2.db --yes" "$CALLS" && ok "selecting a backup row deletes it (confirmed)" || bad "backups delete: $(cat "$CALLS")"
+
+echo "== backups rows: create first, shrink second, no mode toggle =="
+reset
+ROWS=$(oc_backups_rows)
+printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "create backup is the first row" || bad "create not first"
+printf '%s\n' "$ROWS" | sed -n '2p' | grep -q '^__SHRINK__' && ok "shrink is the second row" || bad "shrink not second"
+printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && bad "mode toggle leaked into backups" || ok "backups picker has a single mode (no toggle)"
+
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "__CREATE__"
+oc_backups_picker >/dev/null
+grep -qx "backup" "$CALLS" && ok "backups picker offers create backup" || bad "backups create: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__SHRINK__" "lean: keep 10 most recent + strip reasoning|shrink|lean"
+oc_backups_picker >/dev/null
+grep -qx "shrink lean" "$CALLS" && ok "shrink runs from the backups picker (own LIVE-DB snapshot)" || bad "backups shrink: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__DELETE_ALL__"
+oc_backups_picker >/dev/null
+grep -qx "backups remove fake-0.db --yes" "$CALLS" && grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups delete-all removes every backup (confirmed)" || bad "backups delete-all: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__KEEP_NEWEST__"
+oc_backups_picker >/dev/null
+grep -qx "backups remove fake-3.db --yes" "$CALLS" && ! grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups keep-newest removes all but the newest" || bad "backups keep-newest: $(cat "$CALLS")"
+
+: > "$CALLS"
+confirm_action() { return 1; }
+qset "__DELETE_ALL__"
+oc_backups_picker >/dev/null
+[ ! -s "$CALLS" ] && ok "backups delete-all cancelled on 'n'" || bad "backups delete-all ran on 'n'"
+confirm_action() { return 0; }
+
+echo "== sessions details picker (independent, no toggle) =="
+reset
+: > "$CALLS"; call_log
+qset "ses_A0001"
+oc_sessions_picker >/dev/null
+grep -qx "info ses_A0001" "$CALLS" && ok "sessions details dispatches info for the session" || bad "sessions details: $(cat "$CALLS")"
+grep -q "sessions (details)" "$FZF_HIST" && ok "sessions picker is details-only" || bad "sessions title"
+printf '%s\n' "$(oc_sessions_rows)" | grep -q '__TOGGLE__' && bad "toggle leaked into sessions" || ok "sessions details has no mode toggle"
+
+echo "== export picker (independent entry: session or ALL -> wizard) =="
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "ses_A0001" "transcript" "transcript"
+oc_export_picker >/dev/null
+grep -qx "export transcript --filter ses_A0001" "$CALLS" && ok "export picker ran the flow with the session filter" || bad "export picker flow: $(cat "$CALLS")"
+grep -q "sessions (export)" "$FZF_HIST" && ok "export picker reached its own picker" || bad "export picker title"
+
+: > "$CALLS"
+qset "__ALL__" "compactions" "compactions"
+oc_export_picker >/dev/null
+grep -qx "export compactions" "$CALLS" && ok "export picker ALL runs the flow with no filter" || bad "export picker ALL: $(cat "$CALLS")"
+
+: > "$CALLS"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__ALL__' && ok "export picker lists ALL SESSIONS first" || bad "export rows ALL missing"
+
+echo "== exports picker (view / toggle to remove / bulk) =="
+reset
+mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
+for d in aaa bbb ccc; do
+    echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadatos.json"
+done
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "ccc"
+oc_exports_picker >/dev/null
+grep -qx "exports view ccc" "$CALLS" && ok "exports view dispatches for the run" || bad "exports view: $(cat "$CALLS")"
+grep -q "exports (view)" "$FZF_HIST" && ok "exports picker starts in view mode" || bad "exports initial mode"
+
+: > "$CALLS"
+qset "__TOGGLE__" "aaa"
+oc_exports_picker >/dev/null
+grep -qx "exports remove aaa --yes" "$CALLS" && ok "exports picker toggles to remove and removes the run" || bad "exports remove: $(cat "$CALLS")"
+grep -q "exports (remove)" "$FZF_HIST" && ok "exports picker reached remove mode" || bad "exports remove mode not reached"
+
+: > "$CALLS"
+qset "__TOGGLE__" "__DELETE_ALL__"
+oc_exports_picker >/dev/null
+grep -qx "exports remove aaa --yes" "$CALLS" && grep -qx "exports remove ccc --yes" "$CALLS" && ok "exports delete-all removes every run (confirmed)" || bad "exports delete-all: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__TOGGLE__" "__KEEP_NEWEST__"
+oc_exports_picker >/dev/null
+grep -qx "exports remove aaa --yes" "$CALLS" && grep -qx "exports remove bbb --yes" "$CALLS" && ! grep -qx "exports remove ccc --yes" "$CALLS" && ok "exports keep-newest removes all but the newest" || bad "exports keep-newest: $(cat "$CALLS")"
+
+: > "$CALLS"
+confirm_action() { return 1; }
+qset "__TOGGLE__" "__DELETE_ALL__"
+oc_exports_picker >/dev/null
+[ ! -s "$CALLS" ] && ok "exports delete-all cancelled on 'n'" || bad "exports delete-all ran on 'n'"
+confirm_action() { return 0; }
+
+echo "== export flow: product -> variant -> dispatcher =="
+reset
+: > "$CALLS"; call_log
+confirm_action() { :; return 0; }
+qset "transcript" "transcript --summary-diffs"
+oc_export_flow "ses_A0001" >/dev/null
+grep -qx "export transcript --summary-diffs --filter ses_A0001" "$CALLS" && ok "flow runs the chosen variant with the session filter" || bad "flow variant: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "transcript" "transcript --role user"
+oc_export_flow "" >/dev/null
+grep -qx "export transcript --role user" "$CALLS" && ok "flow + ALL sessions: no filter, --role applied" || bad "flow --role: $(cat "$CALLS")"
+
+echo "== export flow: ESC cancels without creating a run =="
+reset
+before=$(count_meta transcript)
+FZF_FAIL="export product"
+oc_export_flow "ses_A0001" >/dev/null 2>&1
 rc=$?
-after=$(count_meta full)
-[ "$rc" -ne 0 ] && ok "ESC returns non-zero ($rc)" || bad "ESC did not cancel"
-[ "$before" -eq "$after" ] && ok "ESC created no export" || bad "ESC created an export"
+after=$(count_meta transcript)
+[ "$rc" -ne 0 ] && ok "ESC cancels the product picker ($rc)" || bad "ESC did not cancel"
+[ "$before" -eq "$after" ] && ok "cancelled flow created no export" || bad "cancelled flow exported"
 
-echo "== each selected recipe becomes its own export run =="
+echo "== export flow: confirmation gates the run =="
+reset
+: > "$CALLS"; call_log
+CONFIRME="$TMP/confirm.txt"
+confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
+before=$(count_meta transcript)
+qset "transcript" "transcript"
+oc_export_flow "ses_A0001" >/dev/null
+after=$(count_meta transcript)
+[ -s "$CONFIRME" ] && grep -q "Start this export" "$CONFIRME" && ok "confirmation asked with the plan" || bad "no confirmation asked"
+[ "$before" -eq "$after" ] && ok "declined confirmation -> no export" || bad "declined but exported"
+
+echo "== export flow: transcript+memory bundle shares one stamp =="
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "transcript" "__FULLMEM__"
+oc_export_flow "ses_A0001" >/dev/null
+FULL=$(grep -o 'export transcript --stamp [0-9_-]*' "$CALLS" | awk '{print $4}')
+MEM=$(grep -o 'export memory --stamp [0-9_-]*' "$CALLS" | awk '{print $4}')
+[ -n "$FULL" ] && [ "$FULL" = "$MEM" ] && grep -q "export memory --stamp $MEM --files" "$CALLS" && ok "bundle runs transcript+memory with a shared stamp" || bad "bundle stamps: transcript=$FULL mem=$MEM / $(cat "$CALLS")"
+
+echo "== export flow: custom checklist drives the ingredients =="
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "transcript" "__CUSTOM__" "tools" "__RUN__"
+oc_export_flow "ses_A0001" >/dev/null
+grep -qx "export transcript --tool-output omit --sub separate --role all --filter ses_A0001" "$CALLS" && ok "custom toggling tools-off builds the flags" || bad "custom transcript: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "memory" "__CUSTOM__" "files" "__RUN__"
+oc_export_flow "ses_A0001" >/dev/null
+grep -qx "export memory --files --filter ses_A0001" "$CALLS" && ok "custom memory toggles --files" || bad "custom memory: $(cat "$CALLS")"
+
+echo "== export flow: real runs against the fake DB =="
 reset
 confirm_action() { return 0; }
-before_full=$(count_meta full); before_text=$(count_meta text-only)
-FZF_RECIPES=$'full (default)|full|\ntext-only (default)|text-only|' \
-FZF_SESSION="ses_A0001  Proyecto Alfa  2026-09-10 00:00:00  build" \
-    oc_export_flow >/dev/null
-[ "$(count_meta full)" -eq $((before_full + 1)) ] && ok "recipe full exported" || bad "recipe full missing"
-[ "$(count_meta text-only)" -eq $((before_text + 1)) ] && ok "recipe text-only exported" || bad "recipe text-only missing"
-ME=$(newest_meta full)
-jq -e '.filter == "ses_A0001"' "$ME" >/dev/null && ok "recipe applied the session filter" || bad "recipe filter"
+before=$(count_meta transcript)
+qset "transcript" "transcript"
+oc_export_flow "ses_A0001" >/dev/null
+[ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "flow exports the transcript" || bad "flow export transcript missing"
+ME=$(newest_meta transcript)
+jq -e '.filter == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
-echo "== ALL sessions loops info over every session =="
-reset
-CALLS="$TMP/calls.txt"; : > "$CALLS"
-run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }
-FZF_SESSION="ALL SESSIONS (no filter)" oc_pick_info >/dev/null
-n_calls=$(wc -l < "$CALLS")
-n_sessions=$(session_rows | wc -l)
-[ "$n_calls" -eq "$n_sessions" ] && ok "info ran for all $n_calls sessions" || bad "info loop: $n_calls vs $n_sessions"
-
-echo "== report pickers pause after the report (and not when cancelled) =="
-reset
-PAUSES="$TMP/pauses.txt"; : > "$PAUSES"
-run_oced_tool() { :; }
-menu_pause() { printf 'pause\n' >> "$PAUSES"; }
-FZF_SESSION="ALL SESSIONS (no filter)" oc_pick_info >/dev/null
-[ "$(wc -l < "$PAUSES")" -eq 1 ] && ok "pause after ALL sessions info" || bad "no pause after ALL info"
-FZF_SESSION="ses_A0001  Proyecto Alfa  2026-09-10 00:00:00  build" oc_pick_compactions >/dev/null
-[ "$(wc -l < "$PAUSES")" -eq 2 ] && ok "pause after single-session compactions" || bad "no pause after compactions"
-FZF_SESSION="" oc_pick_info >/dev/null
-[ "$(wc -l < "$PAUSES")" -eq 2 ] && ok "picker cancelled -> no pause" || bad "pause on cancelled picker"
-
-echo "== ALL sessions export means no filter =="
-reset
-confirm_action() { return 0; }
-FZF_RECIPES="full (default)|full|" FZF_SESSION="ALL SESSIONS (no filter)" \
-    oc_export_flow >/dev/null
-MA=$(newest_meta full)
-jq -e '.filter == null' "$MA" >/dev/null && ok "no filter applied for ALL" || bad "ALL filter not null"
+qset "transcript" "transcript"
+oc_export_flow "" >/dev/null
+MA=$(newest_meta transcript)
+jq -e '.filter == null' "$MA" >/dev/null && ok "ALL sessions -> no filter" || bad "ALL filter not null"
 jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
 
-echo "== export flow pauses after the runs finish =="
+qset "memory" "memory"
+oc_export_flow "" >/dev/null
+MEM=$(newest_meta memory); MEM="${MEM%/metadatos.json}"
+[ -f "$MEM/corpus.jsonl" ] && ok "memory flow wrote a corpus" || bad "memory flow corpus"
+[ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
+
+echo "== shrink in the menu: recipes / custom / dry-run / ESC / confirm =="
 reset
+: > "$CALLS"; call_log
 confirm_action() { return 0; }
-PAUSES="$TMP/pauses.txt"; : > "$PAUSES"
-menu_pause() { printf 'pause\n' >> "$PAUSES"; }
-FZF_RECIPES="text-only (default)|text-only|" FZF_SESSION="ses_A0001  Proyecto Alfa  2026-09-10 00:00:00  build" \
-    oc_export_flow >/dev/null
-[ "$(wc -l < "$PAUSES")" -eq 1 ] && ok "pause after export flow" || bad "no pause after export flow"
+FZF_FAIL="shrink recipe"
+oc_pick_shrink >/dev/null
+unset FZF_FAIL
+[ ! -s "$CALLS" ] && ok "ESC cancels shrink picker" || bad "ESC still ran shrink"
 
-echo "== export flow asks for confirmation before running =="
-reset
-CONFIRME="$TMP/confirm.txt"; : > "$CONFIRME"
-confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
-before=$(count_meta full)
-FZF_RECIPES="full (default)|full|" FZF_SESSION="ALL SESSIONS (no filter)" \
-    oc_export_flow >/dev/null
-after=$(count_meta full)
-[ -s "$CONFIRME" ] && ok "export plan asked for confirmation" || bad "no confirmation asked"
-[ "$before" -eq "$after" ] && ok "cancelled -> no export created" || bad "cancelled but exported"
+qset "lean: keep 10 most recent + strip reasoning|shrink|lean"
+oc_pick_shrink >/dev/null
+grep -qx "shrink lean" "$CALLS" && ok "shrink recipe lean reaches the dispatcher" || bad "shrink lean: $(cat "$CALLS")"
 
-echo "== prune: ESC/empty cancel, value + confirm reaches the dispatcher =="
-reset
-CALLS="$TMP/calls.txt"; : > "$CALLS"
-run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }
-mkdir -p "$OCED_BACKUP_DIR"
-jq -n '{backups: [range(0;5) | {"file": ("fake-" + (.|tostring) + ".db")}]}' > "$OCED_BACKUP_DIR/manifest.json"
-manifest_path() { printf '%s/manifest.json' "$OCED_BACKUP_DIR"; }
-printf '\033\n' | oc_pick_backup_prune >/dev/null
-[ ! -s "$CALLS" ] && ok "ESC cancels backup prune" || bad "ESC still pruned: $(cat "$CALLS")"
-printf '3\ny\n' | oc_pick_backup_prune >/dev/null
-grep -qx "backups prune 3" "$CALLS" && ok "prune 3 confirmed reached the dispatcher" || bad "prune 3 missing: $(cat "$CALLS")"
 : > "$CALLS"
-printf '3\nn\n' | oc_pick_backup_prune >/dev/null
-[ ! -s "$CALLS" ] && ok "prune rejected on 'n'" || bad "prune ran on 'n'"
-: > "$CALLS"
-printf '\n' | oc_pick_backup_prune >/dev/null
-[ ! -s "$CALLS" ] && ok "empty cancels backup prune" || bad "empty still pruned"
-: > "$CALLS"
-printf 'x\n' | oc_pick_backup_prune >/dev/null
-[ ! -s "$CALLS" ] && ok "non-numeric cancels backup prune" || bad "non-numeric still pruned"
+qset "dry-run (no file)|shrink|lean --dry-run"
+oc_pick_shrink >/dev/null
+grep -qx "shrink lean --dry-run" "$CALLS" && ok "shrink dry-run reaches the dispatcher (no confirm)" || bad "shrink dry-run: $(cat "$CALLS")"
 
-echo "== prune exports: value + confirm reaches the dispatcher =="
-reset
-CALLS="$TMP/calls.txt"; : > "$CALLS"
-run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }
-mkdir -p "$OCED_OUT/aaa" "$OCED_OUT/bbb" "$OCED_OUT/ccc"
-printf '2\ny\n' | oc_pick_export_prune >/dev/null
-grep -qx "exports prune 2" "$CALLS" && ok "exports prune 2 confirmed" || bad "exports prune missing: $(cat "$CALLS")"
 : > "$CALLS"
-printf '\033\n' | oc_pick_export_prune >/dev/null
-[ ! -s "$CALLS" ] && ok "ESC cancels exports prune" || bad "ESC still pruned exports"
+qset "custom (choose exactly what to keep)...|shrink|custom" "keep sessions since a date (real range)"
+printf '20260115\n' | oc_pick_shrink >/dev/null
+grep -qx "shrink --since 2026-01-15" "$CALLS" && ok "shrink custom since-date reaches the dispatcher" || bad "shrink custom since-date: $(cat "$CALLS")"
+
+: > "$CALLS"
+confirm_action() { return 1; }
+qset "bare: keep 10 most recent, keep reasoning|shrink|bare"
+oc_pick_shrink >/dev/null
+[ ! -s "$CALLS" ] && ok "shrink rejected on 'n'" || bad "shrink ran on 'n'"
+confirm_action() { return 0; }
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

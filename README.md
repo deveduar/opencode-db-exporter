@@ -4,11 +4,14 @@ Read, back up and export the local SQLite database of **opencode** (`opencode` C
 
 Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
 
-## Motivation & Problem Solved
+## Motivation
 
-OpenCode CLI contextually filters and binds chat sessions to specific Git repository states and working directory paths. When developers switch branches, refactor project structures, or detach HEADs, older sessions frequently become hidden or completely inaccessible through standard CLI commands—even though the raw data remains safely stored inside the global SQLite file.
-
-`opencode-db-exporter` resolves this by acting as an independent auditing and recovery tool. By opening the database directly in **strict read-only mode (`mode=ro`)**, it completely bypasses environment-driven CLI filters. This ensures your valuable prompt histories, agent execution paths, and metrics are always accessible, clean, and easily exportable into standard Markdown files for your personal documentation.
+OpenCode's CLI binds sessions to Git states and working directories, so switching
+branches or HEAD can hide older sessions even though the data is still in the global
+SQLite file. `opencode-db` reads that file directly in **strict read-only mode** — no
+CLI filters, no writes — so every prompt history, agent path and metric stays
+exportable. The full design rationale (data model, export pipeline, sanitization, menu
+and `shrink --swap` safeguards) is in **[docs/arquitectura.md](docs/arquitectura.md)**.
 
 ## Requirements
 
@@ -38,30 +41,63 @@ No installation is strictly required: you can run it straight from the repo with
 
 ```bash
 opencode-db menu                      # interactive fzf menu
-opencode-db status                    # DB state + alignment with the last backup
+opencode-db status                    # DB state + alignment with the last backup + version/schema + dependency check
+opencode-db version                   # tool version + opencode CLI version + schema probe
 opencode-db list [--root|--sub] [--filter PATTERN] [--info]
 opencode-db info <session_id>         # tokens, cost, compactions, counts
 opencode-db compactions <session_id> [show [last|N|all]]
                                       # compaction points; 'show' prints the digest
 opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
 opencode-db backups [list|verify <file>|prune <N>]
-opencode-db export <profile> [FLAGS]  # profiles: full | no-calls | text-only | compactions | all
+opencode-db export <product> [FLAGS]  # products: transcript | memory | compactions
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
-opencode-db deps [--check]            # idempotent dependency check/install
+opencode-db shrink [--keep N|--older-than DAYS] [--dry-run] [--swap]
+                                      # pruned + VACUUMed COPY (never touches the live DB
+                                      # unless --swap replaces it safely)
+opencode-db guide [--list]            # step-by-step console wizard (safe workflow)
+opencode-db deps [--check]            # idempotent dependency check/install (apt|pacman|dnf)
 opencode-db help
 ```
 
+## Menu (opencode-db menu)
+
+The interactive menu is **picker-driven**: the main pickers are real fzf lists, not nested
+menus. There is **no TAB multi-select** — mode switching and bulk operations are their own
+rows. The `backups`, `sessions` (details) and `export` pickers are **single-mode**.
+
+- **status** — the full report (DB, backups alignment, version/schema, dependencies) + pause.
+- **backups** picker (single mode) — rows: `[create backup]`, `[shrink…]` (from the LIVE
+  DB, own snapshot), `[delete ALL backups]`, `[delete olds (keep newest)]` and one row
+  per backup (date/size/sessions/msgs/sha). Selecting a row removes it with confirmation.
+  Verify stays in the CLI (`backups verify <file>`), for after-copy or before `--from-backup`
+  checks.
+- **sessions** picker (details only) — one row per session; selecting one shows the full
+  info + compaction digests.
+- **export** picker — `ALL SESSIONS` or a single session, then the export wizard
+  (product → variant → plan).
+- **Manage exports** picker (mode `view` / `remove`) — rows: toggle,
+  `[delete ALL export runs]`, `[delete all except the newest]`, one row per run
+  (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
+
+Export wizard: session (**or ALL**) → **product** (`transcript`/`memory`/`compactions`)
+→ **variant** for that product (product = the document to produce, variant = how it is
+configured, bundle = several products in one run), or `Custom…` (checkbox checklist:
+toggle ingredients one per Enter — `- [x]` / `- [ ]`, no TAB) → plan confirmation.
+`transcript` offers a `transcript + memory corpus` **bundle variant** (one shared stamp
+↔ two runs) and JSON/sanitize/no-reasoning variants; there are **no** *solo prompts* /
+*solo answers* presets — `--role` is a flag available in the custom checklist, not a
+preset. `shrink` lives inside the backups picker: recipes built from the live DB
+(default, dry-run, custom keep-N / last-N-days / since date).
+
 ## Export
 
-Profiles:
+Products:
 
-| Profile       | Content                                             |
+| Product       | Content                                             |
 |---------------|-----------------------------------------------------|
-| `full`        | text + reasoning + tool calls (truncated by default) + patches |
-| `no-calls`    | text + reasoning, no tool calls                     |
-| `text-only`   | only user/assistant text                            |
+| `transcript`  | the conversation in markdown: text + reasoning + tool calls (truncated by default) + patches. `full` is accepted as an alias |
 | `compactions` | only the compacted-context digests (`mode=compaction` messages) |
-| `all`         | meta-profile: the four above in **one run folder**, each with maximal capabilities |
+| `memory`      | RAG/memory corpus: one JSON per **root** session (metadata + first/last user/assistant text + **all** compaction digests) in `corpus.jsonl` |
 
 Flags:
 
@@ -69,12 +105,31 @@ Flags:
 - `--sub separate|inline|omit` — how to place subagents (default `separate`: folder per root session with `subagents/` inside).
 - `--tool-output full|truncated|omit` — tool output verbosity (default `truncated`).
 - `--patch full|omit` — include patch parts (default `full`).
-- `--mark-compactions` — annotate where context compaction happened.
+- `--mark-compactions` — annotate where context compaction happened (transcripts only).
+- `--no-reasoning` — omit the reasoning parts (transcripts only).
 - `--summary-diffs` — include opencode's `summary.diffs` (files + additions/deletions) per message.
+- `--role all|user|assistant` — render only one role's messages (default `all`; `user` = prompts only, `assistant` = answers only). Applied by `transcript`/`compactions`; `memory` ignores it.
+- `--json` — also write a **faithful JSON archive** per session (native `{info, messages:[{info, parts}]}` shape), next to each markdown file.
+- `--sanitize` — redact secret-looking values (API keys `sk-`/`ghp_`/`github_pat_`/`xox…`/`AIza…`/`AKIA…`, Bearer tokens, JWTs, private PEM keys, `key=value` pairs) recursively, in markdown, JSON and the memory corpus.
+- `--cap N` / `--files` — `memory` tuning: truncate every text value to N chars (`0` = unlimited, default) and/or list the touched files per session.
 
-> `full` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). The `menu` exposes the same combinations as ready-made **recipes** (select several and each becomes its own run).
+> `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). The `menu` exposes the same combinations as ready-made **variants** per product, plus a `Custom…` checklist.
 
-`export all` is the "everything" profile: it writes the four profiles into a single run folder, each with maximal capabilities (`--tool-output full --patch full --mark-compactions --summary-diffs --sub separate`). `export all --filter <ses>` scopes it to a session and overrides may be appended afterwards.
+**Token backfill** — sessions with `0`/NULL token/cost columns are reconstructed from the
+per-step `step-finish` parts at export time (flagged `tokens_backfilled`). The mechanism
+is described in [docs/arquitectura.md](docs/arquitectura.md).
+
+`memory` is a RAG-ready corpus, **not** a readable transcript: one `corpus.jsonl` entry per
+root session, subagents summarized inline, `first_user` (the goal), `last_assistant` (the
+outcome) and all `compaction_digests[]`. Keys are documented in each run's `index.md`.
+
+```bash
+opencode-db export memory                  # full text, no truncation (default)
+opencode-db export memory --files          # also list the touched files per session
+opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 = unlimited)
+```
+
+No text is ever truncated by default; `--cap N` caps every text value (first_user, last_assistant, digests) to N chars — a guard only you choose to raise if feeding the corpus to a strict model.
 
 Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per session, an `index.md`, and a machine-readable `metadatos.json`.
 
@@ -90,7 +145,61 @@ opencode-db exports prune 5           # keep only the 5 most recent runs
 
 ## Compaction digests
 
-The `compaction` part is only a marker (`auto`, `overflow`, `tail_start_id`). The actual compacted-context summary is stored in the following `mode=compaction` assistant message. `compactions <id> show` prints it, and the `compactions` export profile writes one Markdown file per session with just those digests.
+`compactions <id> show` prints a session's digests; the `compactions` export product
+writes one markdown file per session with them. How a compaction digest is stored in the
+DB (markers vs. the following `mode=compaction` message) is explained in
+[docs/arquitectura.md](docs/arquitectura.md).
+
+## shrink — a lighter DB copy to swap over opencode
+
+The opencode DB only grows, and most of the weight is the event store (`event` alone is ~375 MB of a typical 490 MB file): deleting sessions frees pages for reuse but does **not** shrink the file (only a `VACUUM` does, and it needs exclusive locks on the live DB). `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot and never writes to the live database — you swap the copy in manually:
+
+```bash
+opencode-db shrink                         # default: copy with the 10 most recent sessions
+opencode-db shrink lean                    # keep 10 most recent + strip reasoning (recommended)
+opencode-db shrink recent                  # keep sessions updated in the last 90 days
+opencode-db shrink full                    # keep ALL sessions, strip reasoning + vacuum
+opencode-db shrink bare                    # keep 10 most recent, physically shrink only
+opencode-db shrink --keep 5 --dry-run      # only report what would be pruned
+opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
+opencode-db shrink lean --swap             # build the copy AND replace the live DB (safe: --yes to skip the prompt)
+```
+
+The named recipes are presets, like the export recipes: `lean` = `--keep 10 --strip-reasoning`, `recent` = `--older-than 90`, `full` = keep everything + strip reasoning (pure space reclamation), `bare` = `--keep 10` without stripping. Raw flags compose over a recipe (`shrink lean --keep 30` keeps 30 and still strips reasoning). `shrink --help` lists them.
+
+The kept set is **closed**: parents and subagents of a kept session are kept too (no orphan links), and the sessions-bound tables (message, part, todo, session_message, session_share, session_context_epoch, session_input) plus the `event`/`event_sequence` aggregates of the deleted sessions are pruned — orphans are never shipped. Output is written to `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (profile/criteria, counts, per-table removed rows, sizes, `integrity_check` and `foreign_key_check`). The copy is verified (`PRAGMA integrity_check` = ok, `PRAGMA foreign_key_check` = 0 rows) before being stored. If the swap is fine, replace the DB yourself:
+
+```bash
+cp "$OPENCODE_DB" "$OPENCODE_DB.pre-shrink$(date +%s)"   # safety copy
+cp <shrunk.db> "$OPENCODE_DB"
+rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
+```
+
+> **Stop opencode before swapping.** Replacing the DB behind a running opencode process
+> drops the WAL tail and can corrupt state. Prefer `opencode-db shrink --swap`, which
+> aborts if opencode is still running, snapshots a `.pre-shrink` safety copy (sqlite
+> `.backup`, WAL-safe), swaps atomically and rolls back if the new DB does not open
+> read-only (see [docs/arquitectura.md](docs/arquitectura.md) §6).
+
+Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. Prefer the guided version: `opencode-db guide` walks the same steps with explanations.
+
+`--strip-reasoning` additionally removes the `reasoning` parts on the copy (the weighty chain-of-thought, rarely useful once a session is over). Community tooling reports ~77% extra savings — the combined copy (`delete sessions → strip reasoning → VACUUM`) is the smallest file we can hand you. Reasoning is a *part* stored per message; the exported transcript reads it from the original DB (toggle `--no-reasoning`), so stripping never touches what you can re-export. Stripped reasoning is only **recoverable while you keep the original DB or a backup**: keep `opencode-db backup` and the `.pre-shrink` safety copy if you ever need it.
+
+## Activity log (opt-in)
+
+`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG` (default `~/.local/state/opencode-db/activity.log`), one tab-separated line per event. Nothing is ever logged by default.
+
+## Reading from a backup
+
+The global flag `--from-backup` (before the subcommand) points every read command at a stored backup instead of the live DB. It accepts a filename under `OCED_BACKUP_DIR` or an absolute path, and transparently decompresses `.gz` backups to a temp file. The live DB is never touched.
+
+```bash
+opencode-db --from-backup opencode-20260920-155652.db.gz status
+opencode-db --from-backup opencode-20260920-155652.db.gz list --root
+opencode-db --from-backup opencode-20260920-155652.db.gz export memory
+```
+
+`status`/`version` report whether the backup is `[OK] aligned` with the live DB or `[!] out of sync` (same sessions/messages/last activity), so you know how stale the source is.
 
 ## Uninstall
 
@@ -103,12 +212,19 @@ It never removes system packages: dependencies installed by `opencode-db deps` s
 
 ## Design notes
 
-- The opencode DB uses **WAL mode** (`opencode.db-wal`). Backups use `sqlite3 .backup` (a consistent snapshot), never `cp`.
-- All reads use SQLite `mode=ro` — opencode is never locked or modified.
-- Every command (status/list/info/compactions/export) reads the **live** DB; backups are offline archives. If you restore an old backup elsewhere, point `OPENCODE_DB` at it. `metadatos.json` records `db` + `db_sha256` so an export can be correlated with a snapshot.
-- **Subagents** are detected via `session.parent_id`; an orphan without a parent in the result set is exported as a root labeled `Subagent of: <parent>`.
-- Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf` (see `opencode-db.conf.example`).
-- Config precedence is **environment > conf file > built-in default**: an explicitly exported `OPENCODE_DB`/`OCED_OUT`/... is never clobbered by the conf.
+The detailed architecture — read-only discipline (WAL, `.backup`, `--from-backup`),
+the opencode data model, the export pipeline (products, sanitization **in memory on
+native types before serializing**, token backfill, streaming corpus), the menu design and
+the `shrink --swap` safeguards — lives in **[docs/arquitectura.md](docs/arquitectura.md)**.
+The [`docs/export-analysis.md`](docs/export-analysis.md) log records how the export
+redesign decisions were reached. This README covers usage only.
+
+A few facts that are good to know anyway:
+
+- Config precedence is **environment > conf file > built-in default**: an explicitly
+  exported `OPENCODE_DB`/`OCED_OUT`/`OCED_ACTIVITY_LOG`/... is never clobbered by the conf.
+- Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf`
+  (see `opencode-db.conf.example`).
 
 ## Portability (WSL / Windows / portable)
 
@@ -140,8 +256,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 46 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 23 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 119 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 78 OK / 0 FAIL
 ```
 
 ## Layout
@@ -153,10 +269,15 @@ modules/
   view.sh          status / list / info / compactions (+ digests)
   backup.sh        consistent snapshots + sha256 + manifest.json
   export.sh        bash -> python bridge
-  export.py        Markdown renderer (profiles, subagents, index.md, metadata)
+  export.py        renderer (products transcript/memory/compactions, subagents, --json/--sanitize, index.md, metadata)
   exports.sh       list/remove/prune of past export runs
+  shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
   deps.sh          idempotent dependency check/install
-  menu.sh          interactive fzf menu (recipes)
+  guide.sh         step-by-step console wizard (safe workflow)
+  menu.sh          interactive fzf menu (pickers + export wizard)
+docs/
+  arquitectura.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
+  export-analysis.md  decision log of the export redesign
 install.sh         copies modules+tests, symlinks the CLI
 uninstall.sh       removes the install (keeps data unless --all)
 tests/

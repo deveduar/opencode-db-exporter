@@ -2,6 +2,8 @@
 # Copy to ~/.config/opencode-db/opencode-db.conf (permissions 600).
 # Paths and preferences only; contains no secrets.
 # Any omitted variable uses the default from modules/common.sh.
+# Precedence: environment > this conf file > built-in default (an exported
+# variable is never clobbered by this file).
 
 # Path to the opencode database (default).
 # OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
@@ -12,3 +14,8 @@
 
 # Compress backups with gzip: 1 (yes) or 0 (no). Default 1.
 # OCED_COMPRESS=1
+
+# Opt-in activity log: 1 appends one timestamped line per significant action
+# (backup, prune, shrink) to OCED_ACTIVITY_LOG. Default 0 (no log file).
+# OCED_LOG=0
+# OCED_ACTIVITY_LOG="$HOME/.local/state/opencode-db/activity.log"

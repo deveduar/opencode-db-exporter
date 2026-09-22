@@ -34,10 +34,11 @@ CREATE TABLE session_input (
   time_created integer NOT NULL
 );
 
--- Root A with subagents
+-- Root A with subagents. tokens_*/cost on the session row are ZERO (like old
+-- sessions): the export-time backfill must recover them from the step-finish part.
 INSERT INTO session VALUES
  ('ses_A0001','proj1','alfa-alpha','/tmp/projA','Proyecto Alfa','1.0',NULL,NULL,'build','{"id":"model-a","providerID":"opencode"}',
-  0,1000,500,0,0,0,1789000000000,1789000600000,NULL,NULL),
+  0,0,0,0,0,0,1789000000000,1789000600000,NULL,NULL),
  ('ses_A0002','proj1','gaps','/tmp/projA','Explorar gaps (@explore subagent)','1.0',NULL,'ses_A0001','explore','{"id":"model-b","providerID":"opencode"}',
   0,200,30,0,0,0,1789000100000,1789000200000,NULL,NULL),
  ('ses_A0003','proj1','bugs','/tmp/projA','Find false bugs (@explore subagent)','1.0',NULL,'ses_A0001','explore','{"id":"model-b","providerID":"opencode"}',
@@ -69,7 +70,11 @@ INSERT INTO part VALUES
  ('prt_A_7','msg_A_4','ses_A0001',1789000300000,1789000300000,'{"type":"text","text":"Hecho."}'),
  ('prt_A_8','msg_A_4','ses_A0001',1789000300001,1789000300001,'{"type":"step-start","tool":"plan"}'),
  ('prt_A_9','msg_A_5','ses_A0001',1789000400000,1789000400000,'{"type":"text","text":"Resumen booleano inofensivo."}'),
- ('prt_A_10','msg_A_6','ses_A0001',1789000250000,1789000250000,'{"type":"text","text":"DIGEST_A: resumen compactado de prueba"}');
+ ('prt_A_10','msg_A_6','ses_A0001',1789000250000,1789000250000,'{"type":"text","text":"DIGEST_A: resumen compactado de prueba"}'),
+ -- step-finish with real per-step usage (tokens/cost): source of the export-time backfill
+ ('prt_A_11','msg_A_4','ses_A0001',1789000300002,1789000300002,'{"type":"step-finish","reason":"tool-calls","snapshot":"","tokens":{"total":1780,"input":1100,"output":600,"reasoning":80,"cache":{"read":50,"write":120}},"cost":0.05}'),
+ -- tool with a fake API key to exercise --sanitize (output redacted at export time)
+ ('prt_A_12','msg_A_3','ses_A0001',1789000200002,1789000200002,'{"type":"tool","tool":"bash","state":{"status":"success","input":{"command":"echo \$SECRET"},"output":"sk-test1234567890abcdefghijkl"}}');
 
 -- Subagent A1
 INSERT INTO message VALUES
@@ -93,6 +98,66 @@ INSERT INTO message VALUES
  ('msg_B2_1','ses_B0002',1789001100000,1789001100000,'{"role":"user","time":{"created":1789001100000}}');
 INSERT INTO part VALUES
  ('prt_B2_1','msg_B2_1','ses_B0002',1789001100000,1789001100000,'{"type":"text","text":"Traduce los docs"}');
+
+-- Orphan subagent (its parent no longer exists): give it real content so the
+-- shrink keep-set test can verify its transcript survives the prune.
+INSERT INTO message VALUES
+ ('msg_O_1','ses_ORPHAN01',1789002000000,1789002000000,'{"role":"user","time":{"created":1789002000000}}');
+INSERT INTO part VALUES
+ ('prt_O_1','msg_O_1','ses_ORPHAN01',1789002000000,1789002000000,'{"type":"text","text":"Reporta el estado"}');
+
+-- Auxiliary tables opencode also keeps: todo + the event store. Their rows must
+-- be pruned by shrink too (session- and aggregate-bound) or they stay behind as
+-- orphan references and the space is not reclaimed.
+CREATE TABLE todo (
+  session_id text NOT NULL,
+  content text NOT NULL,
+  status text NOT NULL,
+  priority text NOT NULL,
+  position integer,
+  time_created integer NOT NULL,
+  time_updated integer NOT NULL
+);
+CREATE TABLE event (
+  id text PRIMARY KEY,
+  aggregate_id text NOT NULL,
+  seq integer NOT NULL,
+  type text NOT NULL,
+  data text NOT NULL
+);
+CREATE TABLE event_sequence (
+  aggregate_id text NOT NULL,
+  seq integer NOT NULL,
+  owner_id text NOT NULL
+);
+INSERT INTO todo VALUES
+ ('ses_A0001','implement helper','pending','high',1,1789000000000,1789000600000),
+ ('ses_B0001','rename module','done','low',2,1789001000000,1789001600000),
+ ('ses_B0001','add tests','pending','medium',3,1789001100000,1789001600000);
+INSERT INTO event (id, aggregate_id, seq, type, data) VALUES
+ ('evt_A_1','ses_A0001',1,'session.created.1','{"n":1}'),
+ ('evt_A_2','ses_A0001',2,'session.updated.1','{"n":2}'),
+ ('evt_A_3','ses_A0001',3,'message.updated.1','{"n":3}'),
+ ('evt_B_1','ses_B0001',1,'session.created.1','{"n":1}'),
+ ('evt_B_2','ses_B0001',2,'session.updated.1','{"n":2}'),
+ ('evt_B_3','ses_B0001',3,'message.updated.1','{"n":3}'),
+ ('evt_O_1','ses_ORPHAN01',1,'session.created.1','{"n":1}'),
+ ('evt_O_2','ses_ORPHAN01',2,'session.updated.1','{"n":2}'),
+ ('evt_O_3','ses_ORPHAN01',3,'message.updated.1','{"n":3}');
+INSERT INTO event_sequence VALUES
+ ('ses_A0001',3,''),('ses_B0001',3,''),('ses_ORPHAN01',3,'');
+
+-- Remaining real tables (empty): the tool probes for them ('version' schema
+-- check) and shrink prunes the session-bound ones.
+CREATE TABLE session_share (session_id text PRIMARY KEY, id text NOT NULL, secret text NOT NULL, url text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+CREATE TABLE session_context_epoch (session_id text PRIMARY KEY, baseline text NOT NULL, snapshot text NOT NULL, baseline_seq integer NOT NULL);
+CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);
+CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text, time_created integer NOT NULL, time_updated integer NOT NULL, sandboxes text NOT NULL);
+CREATE TABLE project_directory (project_id text NOT NULL, directory text NOT NULL, time_created integer NOT NULL, PRIMARY KEY(project_id, directory));
+CREATE TABLE workspace (id text PRIMARY KEY, type text NOT NULL, name text DEFAULT '' NOT NULL, branch text, directory text, extra text, project_id text NOT NULL, time_used integer NOT NULL);
+CREATE TABLE migration (id text PRIMARY KEY, time_completed integer NOT NULL);
+CREATE TABLE data_migration (name text PRIMARY KEY, time_completed integer NOT NULL);
+INSERT INTO migration VALUES ('20260101000000_test_migration', 1789000000000);
 SQL
 
 echo "[OK] Fake DB created: $DB"

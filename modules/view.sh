@@ -7,21 +7,103 @@ o_like_literal() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
 }
 
+# o_version_block -> tool version + opencode CLI version + migrations (3-space prefix).
+o_version_block() {
+    local oc_version mig_count mig_last
+    oc_version=$(o_q "SELECT COALESCE(max(version),'unknown') FROM session" 2>/dev/null || echo unknown)
+    printf '   %-16s %s\n' "opencode-db:" "$OCED_VERSION (tool)"
+    printf '   %-16s %s\n' "opencode:" "$oc_version (CLI, max session.version)"
+    mig_count=$(o_q "SELECT count(*) FROM migration" 2>/dev/null || echo 0)
+    mig_last=$(o_q "SELECT id FROM migration ORDER BY time_completed DESC LIMIT 1" 2>/dev/null || echo "")
+    printf '   %-16s %s\n' "Migrations:" "$mig_count"
+    printf '   %-16s %s\n' "Latest migr.:" "$mig_last"
+}
+
+# o_schema_probe -> prints the schema probe block; returns 0 when compatible.
+o_schema_probe() {
+    local tables
+    tables=$(o_q "SELECT name FROM sqlite_master WHERE type='table'" 2>/dev/null || true)
+    local t missing_tables=()
+    for t in $OCED_EXPECTED_TABLES; do
+        printf '%s\n' "$tables" | grep -qx "$t" || missing_tables+=("$t")
+    done
+
+    local spec tbl cols have col
+    local missing_cols=()
+    while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+        tbl="${spec%%:*}"
+        cols="${spec#*:}"
+        printf '%s\n' "$tables" | grep -qx "$tbl" || continue  # missing table already reported
+        have=$(o_q "SELECT group_concat(name,',') FROM pragma_table_info('$tbl')" 2>/dev/null || true)
+        local -a carr=()
+        IFS=',' read -r -a carr <<<"$cols"
+        for col in "${carr[@]}"; do
+            [ -n "$col" ] || continue
+            case ",$have," in
+                *",$col,"*) ;;
+                *) missing_cols+=("$tbl.$col") ;;
+            esac
+        done
+    done <<<"$OCED_EXPECTED_COLUMNS"
+
+    if [ "${#missing_tables[@]}" -eq 0 ] && [ "${#missing_cols[@]}" -eq 0 ]; then
+        echo "      [OK]  All expected tables and columns are present."
+        return 0
+    fi
+    [ "${#missing_tables[@]}" -gt 0 ] && echo "      [!]  Missing tables: ${missing_tables[*]}"
+    [ "${#missing_cols[@]}" -gt 0 ] && echo "      [!]  Missing columns: ${missing_cols[*]}"
+    echo "      The opencode DB schema may have changed; some commands may fail."
+    return 1
+}
+
+# o_deps_report -> lists core/optional dependency presence (no sudo). rc=0 always.
+o_deps_report() {
+    local dep
+    for dep in sqlite3 python3 jq gzip; do
+        if o_have "$dep"; then printf '      OK        %s\n' "$dep"; else printf '      MISSING   %s\n' "$dep"; fi
+    done
+    if o_have fzf; then printf '      OK        %s (menu)\n' fzf; else printf '      MISSING   %s (menu, optional)\n' fzf; fi
+}
+
 oced_status() {
     o_check_deps
     o_db_exists
+    local db_path
+    db_path=$(o_effective_db)
     echo "== opencode DB =="
-    printf '   %-16s %s\n' "Path:" "$OPENCODE_DB"
+    printf '   %-16s %s\n' "Path:" "$db_path"
+    if [ -n "${OCED_FROM_BACKUP:-}" ]; then
+        printf '   %-16s %s\n' "Source:" "backup (${OCED_FROM_BACKUP})"
+        local align
+        align=$(o_backup_aligned 2>/dev/null || echo "unknown")
+        if [ "$align" = "aligned" ]; then
+            printf '   %-16s %s\n' "Alignment:" "[OK] aligned with live DB"
+        elif [ "$align" = "out of sync" ]; then
+            printf '   %-16s %s\n' "Alignment:" "[!] OUT OF SYNC with live DB"
+        else
+            printf '   %-16s %s\n' "Alignment:" "unknown"
+        fi
+    fi
     local bytes
-    bytes=$(stat -c %s "$OPENCODE_DB" 2>/dev/null || echo 0)
+    bytes=$(stat -c %s "$db_path" 2>/dev/null || echo 0)
     printf '   %-16s %s (%s)\n' "Size:" "$(o_human_size "$bytes")" "$bytes bytes"
     printf '   %-16s %s\n' "Exports:" "$OCED_OUT"
     printf '   %-16s %s\n' "Backups:" "$OCED_BACKUP_DIR"
-    if [ -f "$OPENCODE_DB-wal" ]; then
+    if [ -z "${OCED_FROM_BACKUP:-}" ] && [ -f "$OPENCODE_DB-wal" ]; then
         local wbytes
         wbytes=$(stat -c %s "$OPENCODE_DB-wal" 2>/dev/null || echo 0)
         printf '   %-16s %s (WAL active, %d bytes not yet checkpointed)\n' "WAL:" "$(o_human_size "$wbytes")" "$wbytes"
         echo "   Use 'backup' (sqlite .backup) for a consistent snapshot, not cp."
+    fi
+    if [ "$bytes" -ge 1073741824 ]; then
+        echo ""
+        echo "   [!]  DB is over 1 GiB. It only grows: deleting sessions frees pages for"
+        echo "        reuse but does NOT shrink the file. To reclaim space:"
+        echo "          1. opencode-db backup                     (safe snapshot first)"
+        echo "          2. opencode-db exports prune N            (drop old export runs)"
+        echo "          3. opencode-db shrink --older-than 90         (pruned + VACUUMed copy)"
+        echo "        shrink never writes to the live DB; it writes a copy you swap manually."
     fi
 
     local tables rc
@@ -31,7 +113,18 @@ oced_status() {
         printf '      %s\n' "$tables"
         return 1
     fi
-    printf '   %-16s %s\n' "Tables:" "$(echo "$tables" | tr '\n' ' ')"
+    local tnames
+    tnames=$(printf '%s\n' "$tables" | tr ' ' '\n' | sed '/^[[:space:]]*$/d')
+    printf '   %-16s\n' "Tables:"
+    if command -v column >/dev/null 2>&1; then
+        printf '%s\n' "$tnames" | column -c "$(tput cols 2>/dev/null || echo 80)" | sed 's/^/      /'
+    else
+        local -a tarr=($tnames)
+        local i
+        for ((i = 0; i < ${#tarr[@]}; i += 4)); do
+            printf '      %-20s%-20s%-20s%s\n' "${tarr[i]:-}" "${tarr[i+1]:-}" "${tarr[i+2]:-}" "${tarr[i+3]:-}"
+        done
+    fi
     echo ""
     echo "   Data:"
     local sessions messages parts last_ts last_title
@@ -70,6 +163,33 @@ oced_status() {
             [ "$mmess" != "$tmess" ] && echo "         messages: $mmess → $tmess"
         fi
     fi
+
+    echo ""
+    echo "   Version / schema:"
+    o_version_block
+    echo "   Schema probe:"
+    o_schema_probe || true
+
+    echo ""
+    echo "   Dependencies:"
+    o_deps_report
+}
+
+# oced_version -> tool version, the opencode CLI version and a schema probe.
+# Returns 0 when the schema looks compatible, 1 when something expected is missing.
+oced_version() {
+    o_check_deps
+    o_db_exists
+    local db_path
+    db_path=$(o_effective_db)
+    echo "== opencode-db =="
+    printf '   %-16s %s\n' "Path:" "$db_path"
+    [ -n "${OCED_FROM_BACKUP:-}" ] && printf '   %-16s %s\n' "Source:" "backup (${OCED_FROM_BACKUP})"
+    o_version_block
+
+    echo ""
+    echo "   Schema probe:"
+    o_schema_probe
 }
 
 oced_list() {
@@ -110,8 +230,10 @@ oced_info() {
     local row rc
     row=$(o_q -line "
         SELECT
-            s.id, s.slug, s.title, coalesce(s.agent,'') AS agent, s.model, s.directory, s.version,
-            datetime(s.time_created/1000,'unixepoch') AS created, datetime(s.time_updated/1000,'unixepoch') AS updated,
+            s.id, s.slug, s.title, s.project_id,
+            coalesce(s.agent,'') AS agent, s.model, s.directory, s.version,
+            datetime(s.time_created/1000,'unixepoch') AS created,
+            datetime(s.time_updated/1000,'unixepoch') AS updated,
             datetime(s.time_archived/1000,'unixepoch') AS archived,
             datetime(s.time_compacting/1000,'unixepoch') AS compacted,
             s.share_url, s.cost, s.tokens_input, s.tokens_output, s.tokens_reasoning,
@@ -120,7 +242,17 @@ oced_info() {
             (SELECT count(*) FROM session c WHERE c.parent_id = s.id) AS subagents,
             (SELECT count(*) FROM message m WHERE m.session_id = s.id) AS messages,
             (SELECT count(*) FROM part pt WHERE pt.session_id = s.id) AS parts,
-            (SELECT count(*) FROM session_input i WHERE i.session_id = s.id) AS inputs
+            (SELECT count(*) FROM session_input i WHERE i.session_id = s.id) AS inputs,
+            (SELECT count(*) FROM todo t WHERE t.session_id = s.id AND t.status != 'done') AS todos_open,
+            (SELECT count(*) FROM todo t WHERE t.session_id = s.id AND t.status = 'done') AS todos_done,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='text') AS parts_text,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='reasoning') AS parts_reasoning,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='tool') AS parts_tool,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='patch') AS parts_patch,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='file') AS parts_file,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='step-start') AS parts_step_start,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='step-finish') AS parts_step_finish,
+            (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='compaction') AS parts_compaction
         FROM session s LEFT JOIN session p ON p.id = s.parent_id
         WHERE s.id = '${id//\'/\'\'}' LIMIT 1;" 2>&1); rc=$?
     if [ "$rc" -ne 0 ]; then echo "$row" >&2; return 1; fi

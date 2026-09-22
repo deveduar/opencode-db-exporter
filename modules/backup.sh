@@ -108,6 +108,7 @@ oced_backup() {
     manifest_write "$(manifest_read | jq --argjson e "$entry" '.backups += [$e]')"
     trap - EXIT
 
+    o_log "backup created: $fpath (sessions=$sess messages=$msgs parts=$parts)"
     echo "[OK] Backup: $fpath"
     printf '   %-16s %s\n' "Created:" "$stamp"
     printf '   %-16s %s\n' "Size:" "$(o_human_size "$fsize") (raw $(o_human_size "$size_raw"))"
@@ -124,7 +125,7 @@ oced_backups() {
     case "${1:-list}" in
         list)
             echo "== Backups ($n) =="
-            jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + .value.date + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
+            jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + (.value.date | sub("T"; "_") | sub("Z$"; "")) + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
             echo ""
             echo "  verify <file>  ·  prune <N>"
             ;;
@@ -143,6 +144,26 @@ oced_backups() {
             else
                 echo "File not found: $OCED_BACKUP_DIR/$f"
             fi
+            ;;
+        remove)
+            local f="${2:-}" yes=0
+            [ -n "$f" ] || { echo "Usage: opencode-db backups remove <backup-file> [--yes]"; return 1; }
+            [ "${3:-}" = "--yes" ] && yes=1
+            local rec
+            rec=$(jq -r --arg f "$f" '.backups[] | select(.file == $f)' "$manifest")
+            [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
+            if [ "$yes" -eq 0 ]; then
+                local ans
+                printf 'Remove backup %s? [y/N] ' "$f"
+                read -r ans || return 1
+                [[ "$ans" =~ ^[yYsS]$ ]] || { echo "   cancelled."; return 0; }
+            fi
+            if [ -f "$OCED_BACKUP_DIR/$f" ]; then
+                rm -f "$OCED_BACKUP_DIR/$f"
+            fi
+            manifest_write "$(jq --arg f "$f" '.backups |= map(select(.file != $f))' "$manifest")"
+            o_log "backups remove file=$f"
+            echo "Removed: $f"
             ;;
         prune)
             local keep="${2:-}"
@@ -164,8 +185,9 @@ oced_backups() {
                 fi
             done <<<"$to_delete"
             manifest_write "$(jq --argjson k "$keep" '.backups |= (sort_by(.date) | .[-$k:])' "$manifest")"
+            o_log "backups prune keep=$keep removed=$removed"
             echo "Prune: removed $removed file(s); keeping $keep."
             ;;
-        *) echo "Usage: opencode-db backups [list|verify <file>|prune <N>]"; return 1 ;;
+        *) echo "Usage: opencode-db backups [list|verify <file>|remove <file> [--yes]|prune <N>]"; return 1 ;;
     esac
 }
