@@ -19,3 +19,16 @@
 # (backup, prune, shrink) to OCED_ACTIVITY_LOG. Default 0 (no log file).
 # OCED_LOG=0
 # OCED_ACTIVITY_LOG="$HOME/.local/state/opencode-db/activity.log"
+
+# Named export presets (JSON source of truth for `export <name>` and the menu).
+# install.sh auto-creates the file from presets.json.example when missing.
+# Example:
+# {"presets": {"clean": {"product": "transcript", "json": true, "sanitize": true,
+#                          "no_reasoning": true, "filter": "Project Beta"},
+#              "everything": {"products": {"transcript": {"json": true, "tool_output": "full"},
+#                                          "memory": {"files": true}}}}}
+# Keys allowed: product (single) or products (bundle map product->flags) + sub,
+# tool_output, patch, role, cap, json, sanitize, files, no_reasoning,
+# mark_compactions, summary_diffs, tool_input_limit, tool_output_limit,
+# filter (LIKE) or sessions (exact ids). Empty/missing file = no presets.
+# OCED_PRESETS="$HOME/.config/opencode-db/presets.json"

@@ -15,6 +15,7 @@ OUT="$TMP/out"
 export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$TMP/backups"
+export OCED_PRESETS="$TMP/no-presets.json" # hermetic: ignore any real ~/.config presets
 export OCED_DISPATCHER="$MOD/opencode-db.sh"
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
@@ -29,8 +30,8 @@ FZF_HIST="$TMP/fzf.log"
 # reset -> restore real function definitions (undo test overrides).
 # menu_pause is neutralised: its real body would block on a TTY stdin.
 reset() { unset FZF_QUEUE FZF_FAIL; . "$MOD/menu.sh"; menu_pause() { return 0; }; : > "$FZF_HIST"; }
-count_meta() { find "$OUT" -path "*/$1/*" -name metadatos.json 2>/dev/null | wc -l; }
-newest_meta() { find "$OUT" -path "*/$1/*" -name metadatos.json -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
+count_meta() { find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | wc -l; }
+newest_meta() { find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
 CALLS="$TMP/calls.txt"
 call_log() { run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }; }
 # FZF queue lives in a FILE: fzf() runs inside $(...) pipelines (subshells), so
@@ -75,19 +76,7 @@ reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
 
-echo "== recipe tables per product =="
-reset
-R=$(oc_recipes_for transcript)
-printf '%s' "$R" | grep -q '__FULLMEM__' && ok "transcript table offers the transcript+memory bundle" || bad "transcript lacks __FULLMEM__"
-printf '%s' "$R" | grep -q -- "--role user" && bad "solo-prompts preset leaked back" || ok "transcript has NO solo-prompts/answers presets (--role is a flag, not a preset)"
-printf '%s' "$R" | grep -q 'transcript --json' && ok "transcript table offers the faithful JSON archive" || bad "transcript lacks --json"
-printf '%s' "$R" | grep -q 'transcript --no-reasoning' && ok "transcript table offers no-reasoning" || bad "transcript lacks --no-reasoning"
-printf '%s' "$R" | grep -q '__CUSTOM__' && ok "transcript table offers Custom…" || bad "transcript lacks __CUSTOM__"
-oc_recipes_for memory | grep -q 'memory --files' && ok "memory table offers +files" || bad "memory lacks --files"
-oc_recipes_for memory | grep -q 'transcript --patch' && bad "memory table leaked a transcript-only preset" || ok "memory table is filtered"
-oc_recipes_for compactions | grep -q -- "--role user" && bad "role preset leaked into compactions table" || ok "compactions table has no role presets"
-
-echo "== every product/recipe row carries a real TAB (visible in fzf --with-nth=2..) =="
+echo "== product picker: exactly 3 products, NO variants/custom/bundle =="
 reset
 oc_fzf_sel() { cat; }   # pass-through: expose the generated rows
 PROD=$(oc_pick_product)
@@ -97,35 +86,10 @@ rows_with_label() { local n=0 line; while IFS= read -r line; do
     [ -n "${line%%$'\t'*}" ] && [ -n "${line#*$'\t'}" ] && n=$((n + 1))
 done; echo "$n"; }
 [ "$(printf '%s\n' "$PROD" | rows_with_label)" = "3" ] && ok "product picker rows (3) have key+label" || bad "product rows: $PROD"
-for p in transcript compactions memory; do
-    n=$(oc_recipes_for "$p" | rows_with_label)
-    expected=14; [ "$p" = compactions ] && expected=5
-    [ "$p" = memory ] && expected=3
-    [ "$n" -eq "$expected" ] && ok "recipes for '$p': $n rows with real labels" || bad "recipes '$p': n=$n expected=$expected"
-done
-
-echo "== custom checklist ingredients =="
-reset
-oc_custom_set transcript
-[ "${OC_CK_VAL[5]}" = "separate" ] && ok "oc_custom_set transcript defaults (subagents separate)" || bad "custom transcript defaults"
-ARGS=$(oc_custom_args transcript)
-[ "$ARGS" = " --sub separate --role all" ] && ok "oc_custom_args transcript defaults" || bad "custom transcript args: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(off on on off off separate all on off off); ARGS=$(oc_custom_args transcript)
-[ "$ARGS" = " --tool-output omit --sub separate --role all" ] && ok "oc_custom_args transcript tools-off" || bad "custom transcript tools-off: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(on off on off on separate all on off off); ARGS=$(oc_custom_args transcript)
-[ "$ARGS" = " --summary-diffs --sub separate --role all" ] && ok "oc_custom_args transcript diffs-on" || bad "custom transcript diffs: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(on off on off off separate user on off off); ARGS=$(oc_custom_args transcript)
-[ "$ARGS" = " --sub separate --role user" ] && ok "oc_custom_args transcript role user" || bad "custom transcript role: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(on off on off off separate all off off off); ARGS=$(oc_custom_args transcript)
-[ "$ARGS" = " --sub separate --role all --no-reasoning" ] && ok "oc_custom_args transcript reasoning-off adds --no-reasoning" || bad "custom transcript reasoning: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(on off on off off separate all on on on); ARGS=$(oc_custom_args transcript)
-printf '%s' "$ARGS" | grep -q -- "--json" && printf '%s' "$ARGS" | grep -q -- "--sanitize" && ok "oc_custom_args transcript json+sanitize" || bad "custom transcript json/sanitize: '$ARGS'"
-oc_custom_set compactions
-[ "$(oc_custom_args compactions)" = " --sub separate --role all" ] && ok "oc_custom_args compactions defaults" || bad "compactions args"
-oc_custom_set compactions; OC_CK_VAL=(separate all on on); ARGS=$(oc_custom_args compactions)
-printf '%s' "$ARGS" | grep -q -- "--json" && printf '%s' "$ARGS" | grep -q -- "--sanitize" && ok "oc_custom_args compactions json+sanitize" || bad "compactions json/sanitize: '$ARGS'"
-oc_custom_set transcript; OC_CK_VAL=(off on off off off omit user on off off); ARGS=$(oc_custom_args transcript)
-printf '%s' "$ARGS" | grep -q -- "--tool-output omit" && ! printf '%s' "$ARGS" | grep -q -- "--tool-output full" && ok "oc_custom_args transcript: tools wins over outfull" || bad "custom transcript tools/outfull: '$ARGS'"
+printf '%s' "$PROD" | grep -qE '^(transcript|memory|compactions)' && ok "product rows are transcript/memory/compactions" || bad "product keys: $PROD"
+printf '%s' "$PROD" | grep -q '__FULLMEM__' && bad "bundle variant leaked into the product picker" || ok "product picker has NO transcript+memory bundle"
+printf '%s' "$PROD" | grep -q '__CUSTOM__' && bad "custom checklist leaked into the product picker" || ok "product picker has NO custom checklist"
+printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product picker" || ok "product picker has NO variant rows"
 
 echo "== oc_read_int (interactive integer input) =="
 reset
@@ -213,28 +177,77 @@ grep -qx "info ses_A0001" "$CALLS" && ok "sessions details dispatches info for t
 grep -q "sessions (details)" "$FZF_HIST" && ok "sessions picker is details-only" || bad "sessions title"
 printf '%s\n' "$(oc_sessions_rows)" | grep -q '__TOGGLE__' && bad "toggle leaked into sessions" || ok "sessions details has no mode toggle"
 
-echo "== export picker (independent entry: session or ALL -> wizard) =="
+echo "== export picker (independent entry: session or ALL -> product) =="
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-qset "ses_A0001" "transcript" "transcript"
+qset "ses_A0001" "transcript"
 oc_export_picker >/dev/null
 grep -qx "export transcript --filter ses_A0001" "$CALLS" && ok "export picker ran the flow with the session filter" || bad "export picker flow: $(cat "$CALLS")"
 grep -q "sessions (export)" "$FZF_HIST" && ok "export picker reached its own picker" || bad "export picker title"
 
 : > "$CALLS"
-qset "__ALL__" "compactions" "compactions"
+qset "__ALL__" "compactions"
 oc_export_picker >/dev/null
 grep -qx "export compactions" "$CALLS" && ok "export picker ALL runs the flow with no filter" || bad "export picker ALL: $(cat "$CALLS")"
 
 : > "$CALLS"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__ALL__' && ok "export picker lists ALL SESSIONS first" || bad "export rows ALL missing"
 
+echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
+export OCED_PRESETS="$TMP/presets.json"
+cat > "$OCED_PRESETS" <<'EOF'
+{"presets": {
+   "clean": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true, "filter": "Project Beta"},
+   "everything": {"products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
+   "archive": {"products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
+   "notes": {"product": "transcript"},
+   "rag": {"product": "memory"},
+   "digest": {"product": "compactions"},
+   "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true}
+}}
+EOF
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_clean' && ok "presets mode lists the named preset" || bad "preset rows missing"
+printf '%s\n' "$(oc_export_rows)" | grep -qv '__MANUAL__' && ok "presets mode does NOT list Manual… (plans cover it)" || bad "preset manual should be gone"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_everything.*\[transcript+memory\]' \
+    && ok "presets mode lists a bundle preset as [transcript+memory]" || bad "bundle preset row: $(printf '%s\n' "$(oc_export_rows)")"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*\[transcript\]' \
+    && ok "presets mode lists default plan notes [transcript]" || bad "notes row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_rag.*\[memory\]' \
+    && ok "presets mode lists default plan rag [memory]" || bad "rag row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_digest.*\[compactions\]' \
+    && ok "presets mode lists default plan digest [compactions]" || bad "digest row missing"
+printf '%s' "$(oc_preset_descr everything)" | grep -q 'products transcript+memory' \
+    && ok "oc_preset_descr names the bundle products" || bad "bundle descr: $(oc_preset_descr everything)"
+[ -n "$(oc_preset_purpose archive)" ] && [ -z "$(oc_preset_purpose unknownname || true)" ] \
+    && ok "oc_preset_purpose annotates shipped plans only" || bad "preset purpose"
+printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless' \
+    && ok "preset rows include purpose tag (archive shows lossless)" || bad "preset rows missing purpose: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
+printf '%s\n' "$(oc_preset_legend)" | grep -q 'lossless full backup' \
+    && ok "oc_preset_legend explains each shipped plan in the header" || bad "preset legend: $(printf '%s\n' "$(oc_preset_legend)")"
+# New helper tests
+[ "$(oc_annotate_flags "json=true,tool_output=full")" = " +faithful JSON (raw, unfiltered) · full tool outputs" ] \
+    && ok "oc_annotate_flags json+tool_output" || bad "annotate: [$(oc_annotate_flags "json=true,tool_output=full")]"
+[ "$(oc_annotate_flags "sanitize=true,no_reasoning=true")" = " sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…) · reasoning omitted" ] \
+    && ok "oc_annotate_flags sanitize+no_reasoning" || bad "annotate: [$(oc_annotate_flags "sanitize=true,no_reasoning=true")]"
+[ "$(oc_annotate_flags "cap=500")" = " cap 500 chars" ] && ok "oc_annotate_flags cap" || bad "annotate cap: [$(oc_annotate_flags "cap=500")]"
+# oc_export_plan produces lines for a preset (check archive)
+printf '%s\n' "$(oc_export_plan archive)" | grep -q '+faithful JSON (raw, unfiltered)' && ok "oc_export_plan archive notes raw JSON" || bad "plan archive: $(oc_export_plan archive)"
+printf '%s\n' "$(oc_export_plan archive)" | grep -q 'full tool outputs' && ok "oc_export_plan archive notes full outputs" || bad "plan archive: $(oc_export_plan archive)"
+# share plan NO LONGER has sanitize (removed from preset)
+printf '%s\n' "$(oc_export_plan share)" | grep -qv 'sanitize' && ok "oc_export_plan share has no sanitize" || bad "plan share should not have sanitize: $(oc_export_plan share)"
+# transcript default plan
+printf '%s\n' "$(oc_export_plan transcript)" | grep -q 'default options' && ok "oc_export_plan transcript default" || bad "plan transcript: $(oc_export_plan transcript)"
+export OCED_PRESETS="$TMP/no-presets.json"
+
 echo "== exports picker (view / toggle to remove / bulk) =="
 reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
-    echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadatos.json"
+    echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadata.json"
 done
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
@@ -266,18 +279,18 @@ oc_exports_picker >/dev/null
 [ ! -s "$CALLS" ] && ok "exports delete-all cancelled on 'n'" || bad "exports delete-all ran on 'n'"
 confirm_action() { return 0; }
 
-echo "== export flow: product -> variant -> dispatcher =="
+echo "== export flow: product -> runner with defaults =="
 reset
 : > "$CALLS"; call_log
 confirm_action() { :; return 0; }
-qset "transcript" "transcript --summary-diffs"
+qset "transcript"
 oc_export_flow "ses_A0001" >/dev/null
-grep -qx "export transcript --summary-diffs --filter ses_A0001" "$CALLS" && ok "flow runs the chosen variant with the session filter" || bad "flow variant: $(cat "$CALLS")"
+grep -qx "export transcript --filter ses_A0001" "$CALLS" && ok "flow runs the product with the session filter" || bad "flow product: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "transcript" "transcript --role user"
+qset "transcript"
 oc_export_flow "" >/dev/null
-grep -qx "export transcript --role user" "$CALLS" && ok "flow + ALL sessions: no filter, --role applied" || bad "flow --role: $(cat "$CALLS")"
+grep -qx "export transcript" "$CALLS" && ok "flow + ALL sessions: no filter" || bad "flow ALL: $(cat "$CALLS")"
 
 echo "== export flow: ESC cancels without creating a run =="
 reset
@@ -295,54 +308,31 @@ reset
 CONFIRME="$TMP/confirm.txt"
 confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
 before=$(count_meta transcript)
-qset "transcript" "transcript"
+qset "transcript"
 oc_export_flow "ses_A0001" >/dev/null
 after=$(count_meta transcript)
 [ -s "$CONFIRME" ] && grep -q "Start this export" "$CONFIRME" && ok "confirmation asked with the plan" || bad "no confirmation asked"
 [ "$before" -eq "$after" ] && ok "declined confirmation -> no export" || bad "declined but exported"
 
-echo "== export flow: transcript+memory bundle shares one stamp =="
-reset
-: > "$CALLS"; call_log
-confirm_action() { return 0; }
-qset "transcript" "__FULLMEM__"
-oc_export_flow "ses_A0001" >/dev/null
-FULL=$(grep -o 'export transcript --stamp [0-9_-]*' "$CALLS" | awk '{print $4}')
-MEM=$(grep -o 'export memory --stamp [0-9_-]*' "$CALLS" | awk '{print $4}')
-[ -n "$FULL" ] && [ "$FULL" = "$MEM" ] && grep -q "export memory --stamp $MEM --files" "$CALLS" && ok "bundle runs transcript+memory with a shared stamp" || bad "bundle stamps: transcript=$FULL mem=$MEM / $(cat "$CALLS")"
-
-echo "== export flow: custom checklist drives the ingredients =="
-reset
-: > "$CALLS"; call_log
-confirm_action() { return 0; }
-qset "transcript" "__CUSTOM__" "tools" "__RUN__"
-oc_export_flow "ses_A0001" >/dev/null
-grep -qx "export transcript --tool-output omit --sub separate --role all --filter ses_A0001" "$CALLS" && ok "custom toggling tools-off builds the flags" || bad "custom transcript: $(cat "$CALLS")"
-
-: > "$CALLS"
-qset "memory" "__CUSTOM__" "files" "__RUN__"
-oc_export_flow "ses_A0001" >/dev/null
-grep -qx "export memory --files --filter ses_A0001" "$CALLS" && ok "custom memory toggles --files" || bad "custom memory: $(cat "$CALLS")"
-
 echo "== export flow: real runs against the fake DB =="
 reset
 confirm_action() { return 0; }
 before=$(count_meta transcript)
-qset "transcript" "transcript"
+qset "transcript"
 oc_export_flow "ses_A0001" >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "flow exports the transcript" || bad "flow export transcript missing"
 ME=$(newest_meta transcript)
 jq -e '.filter == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
-qset "transcript" "transcript"
+qset "transcript"
 oc_export_flow "" >/dev/null
 MA=$(newest_meta transcript)
 jq -e '.filter == null' "$MA" >/dev/null && ok "ALL sessions -> no filter" || bad "ALL filter not null"
 jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
 
-qset "memory" "memory"
+qset "memory"
 oc_export_flow "" >/dev/null
-MEM=$(newest_meta memory); MEM="${MEM%/metadatos.json}"
+MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
 [ -f "$MEM/corpus.jsonl" ] && ok "memory flow wrote a corpus" || bad "memory flow corpus"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
 

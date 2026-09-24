@@ -69,6 +69,8 @@ export products (default: transcript):
 
 export flags:
   --filter PATTERN   SQL LIKE on session id/title, e.g. 'ses_f7%'
+  --sessions ID[,ID]   exact session id(s) to export (repeatable);
+                     overrides --filter / the preset selection
   --out DIR          output root (default $OCED_OUT)
   --sub separate|inline|omit   how to place subagent sessions (default separate:
                        folder per root session with subagents/ inside)
@@ -88,6 +90,16 @@ export flags:
   --cap N  --files   memory tuning: truncate each text value to N chars
                      (0 = unlimited, default) and/or include touched files
 
+Named presets (presets file, source of truth for the menu and the CLI):
+  export <name>      run a named preset from $OCED_PRESETS (JSON):
+                     {"presets":{"clean":{"product":"transcript","json":true,
+                     "sanitize":true,"no_reasoning":true,"filter":"Project Beta"}}}
+                     The preset pins the product, its config flags and optionally
+                     the selection ('filter' or exact 'sessions' ids, not both;
+                     none = ALL). Explicit CLI flags (--filter/--sessions/--cap...)
+                     override the preset. 'export transcript'/'memory'/'compactions'
+                     always mean the product (its aliases and flags are unchanged).
+
 Configuration (env > conf file > built-in default):
   OPENCODE_DB       SQLite database (default ~/.local/share/opencode/opencode.db;
                     WSL with native-Windows opencode: /mnt/c/Users/<user>/.../opencode.db)
@@ -96,6 +108,7 @@ Configuration (env > conf file > built-in default):
   OCED_COMPRESS     1 gzip backups (default) / 0 raw
   OCED_LOG         1 appends an activity log (backup/prune/shrink) to OCED_ACTIVITY_LOG
   OCED_CONF         config file (default ~/.config/opencode-db/opencode-db.conf)
+  OCED_PRESETS      export presets file (default ~/.config/opencode-db/presets.json)
 
 Global flag (must precede subcommand):
   --from-backup <file>   use a stored backup as the DB source (read-only).

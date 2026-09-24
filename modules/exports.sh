@@ -31,7 +31,7 @@ oced_exports_list() {
             [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
                 human_date="${stamp:0:10} ${stamp:11:2}:${stamp:14:2} UTC" ;;
         esac
-        mapfile -t metas < <(find "$run" -name metadatos.json -type f 2>/dev/null | sort)
+        mapfile -t metas < <(find "$run" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
         profiles="" roots=0 subs=0 msgs=0 comp=0 found=0
         for m in "${metas[@]}"; do
             [ -f "$m" ] || continue
@@ -110,15 +110,49 @@ oced_exports_view() {
     local target="$OCED_OUT/$stamp"
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db exports list"; return 1; }
 
-    local meta_file
-    meta_file=$(find "$target" -name metadatos.json -type f 2>/dev/null | head -1)
-    [ -f "$meta_file" ] || { echo "No metadatos.json found in $target"; return 1; }
+    # Summary covers every product in the run (the old head -1 hid all but the
+    # first alphabetically, e.g. the memory/RAG corpus of a multi-product run).
+    local -a metas
+    local meta prod r s m c first_meta="" profiles=""
+    local tot_roots=0 tot_subs=0 tot_msgs=0 tot_comp=0
+    mapfile -t metas < <(find "$target" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
+    [ "${#metas[@]}" -gt 0 ] || { echo "No metadata.json found in $target"; return 1; }
 
     echo "== Export run: $stamp =="
-    jq -r '"Date: " + .date + "\nProfiles: " + (.profile // "?") + "\nRoot sessions: " + (.sessions.roots|tostring) + "\nSubagents: " + (.sessions.subagents|tostring) + "\nMessages: " + (.messages|tostring) + "\nCompactions: " + (.compactions|tostring) + "\nDB: " + .db + "\nDB sha256: " + .db_sha256' "$meta_file"
+    for meta in "${metas[@]}"; do
+        [ -f "$meta" ] || continue
+        [ -n "$first_meta" ] || first_meta="$meta"
+        prod=$(jq -r '.profile // "?"' "$meta")
+        profiles="${profiles:+$profiles+}$prod"
+        r=$(jq -r '.sessions.roots // 0' "$meta")
+        s=$(jq -r '.sessions.subagents // 0' "$meta")
+        m=$(jq -r '.messages // 0' "$meta")
+        c=$(jq -r '.compactions // 0' "$meta")
+        [ "$r" -gt "$tot_roots" ] && tot_roots="$r"
+        [ "$s" -gt "$tot_subs" ] && tot_subs="$s"
+        tot_msgs=$((tot_msgs + m))
+        tot_comp=$((tot_comp + c))
+        printf '  %-14s %s roots (%s subagent) · %s msgs · %s comp\n' \
+            "$prod" "$r" "$s" "$m" "$c"
+        if [ -f "$(dirname "$meta")/corpus.jsonl" ]; then
+            local cl nlines
+            cl="$(dirname "$meta")/corpus.jsonl"
+            nlines=$(wc -l < "$cl" | tr -d ' ')
+            printf '  %-14s %s\n' "" "corpus: $nlines entries · $(o_human_size "$(stat -c %s "$cl")")"
+        fi
+    done
+    echo ""
+    local size
+    size=$(du -sb "$target" 2>/dev/null | cut -f1); size=${size:-0}
+    echo "  totals: $profiles · $tot_roots roots ($tot_subs subagent) · $tot_msgs msgs · $tot_comp comp · $(o_human_size "$size")"
+    if [ -n "$first_meta" ]; then
+        echo "  date:   $(jq -r '.date // "-"' "$first_meta")"
+        echo "  db:     $(jq -r '.db // "-"' "$first_meta")"
+        echo "  sha256: $(jq -r '.db_sha256 // "-"' "$first_meta")"
+    fi
 
     echo ""
-    echo "== Sessions =="
+    echo "== Indexes =="
     local index_file
     for index_file in "$target"/*/index.md; do
         [ -f "$index_file" ] || continue
@@ -131,7 +165,7 @@ oced_exports_view() {
     if [ "$show_files" -eq 1 ]; then
         echo ""
         echo "== Files =="
-        find "$target" -type f -name '*.md' -o -name '*.json' -o -name '*.jsonl' | while IFS= read -r f; do
+        find "$target" -type f \( -name '*.md' -o -name '*.json' -o -name '*.jsonl' \) | while IFS= read -r f; do
             local rel="${f#$target/}"
             local sz
             sz=$(stat -c %s "$f" 2>/dev/null || echo 0)

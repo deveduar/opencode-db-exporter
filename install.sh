@@ -11,6 +11,7 @@ PREFIX="$HOME/.local/share/opencode-db-exporter"
 BIN_DIR="${HOME}/.local/bin"
 CONF_DIR="$HOME/.config/opencode-db"
 CONF_DEST="$CONF_DIR/opencode-db.conf"
+PRESETS_DEST="$CONF_DIR/presets.json"
 
 check_deps() {
     local missing=""
@@ -53,6 +54,9 @@ done
 find "$PREFIX/modules" -type f -name '*.sh' -exec chmod +x {} +
 cp -f "$SOURCE_ROOT/uninstall.sh" "$PREFIX/uninstall.sh"
 chmod +x "$PREFIX/uninstall.sh"
+# Contract files referenced by the smoke suite (tests/../presets.*.json).
+cp -f "$SOURCE_ROOT/presets.schema.json" "$PREFIX/presets.schema.json"
+cp -f "$SOURCE_ROOT/presets.json.example" "$PREFIX/presets.json.example"
 if [ -f "$SOURCE_ROOT/LICENSE" ]; then
     cp -f "$SOURCE_ROOT/LICENSE" "$PREFIX/LICENSE"
 fi
@@ -64,6 +68,14 @@ else
     cp "$SOURCE_ROOT/opencode-db.conf.example" "$CONF_DEST"
     chmod 600 "$CONF_DEST"
     echo "   Config created from example: $CONF_DEST (permissions 600)"
+fi
+
+if [ -f "$PRESETS_DEST" ]; then
+    echo "   Existing presets: $PRESETS_DEST (not modified)"
+else
+    cp "$SOURCE_ROOT/presets.json.example" "$PRESETS_DEST"
+    chmod 600 "$PRESETS_DEST"
+    echo "   Presets created from example: $PRESETS_DEST (permissions 600)"
 fi
 
 echo "[OK] opencode-db-exporter installed in $PREFIX"

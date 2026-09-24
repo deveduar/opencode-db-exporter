@@ -347,19 +347,126 @@ oc_sessions_picker() {
 }
 
 #-----------------------------------------------------------------------
-# Export picker (session or ALL -> export wizard)
+# Export picker: named presets first, then the manual flow.
+# A presets file (OCED_PRESETS, JSON) is the source of truth: each named
+# preset = product + config + its own selection (filter/sessions). Manual… =
+# session-or-ALL -> product (runs with its default options). No presets file ->
+# the picker directly (identical behavior).
 #-----------------------------------------------------------------------
+oc_preset_rows() {
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    local out
+    out=$(jq -r '.presets | to_entries[] |
+        ((.value.product // ((.value.products // {}) | keys_unsorted | join("+"))) // "?") as $p |
+        (if (.value.products // null) != null then
+            (.value.products | keys_unsorted | join("+"))
+         else
+            .value.product // ""
+         end) as $products |
+        (if (.value.products // null) != null then
+            (.value.products.transcript.tool_output // "default" | ascii_downcase)
+         else
+            (.value.tool_output // "default" | ascii_downcase)
+         end) as $to |
+        (if (.value | has("filter")) then "filter:" + (.value.filter|tostring)
+         elif (.value | has("sessions")) then "sessions:" + ((.value.sessions|length)|tostring)
+         else "—" end) as $sel |
+        if $p == "transcript+memory" and $to == "full" then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · lossless (full outputs + JSON)"
+        elif $p == "transcript+memory" and $to == "truncated" then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · daily (truncated outputs + JSON)"
+        elif $p == "transcript" and (.value.sanitize // false) == true then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · share (sanitized, no reasoning)"
+        elif $p == "transcript" and (.value.no_reasoning // false) == true and (.value.json // false) == true then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · share (no reasoning, JSON)"
+        elif $p == "transcript" then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · read (transcript defaults)"
+        elif $p == "memory" then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · RAG (memory defaults)"
+        elif $p == "compactions" then
+            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · digest (compactions only)"
+        else
+            "__PRESET_" + .key + "\t" + .key + "  [" + $p + "]  " + $sel
+        end' \
+        "$OCED_PRESETS" 2>/dev/null) || return 1
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out"
+}
+
+oc_preset_descr() { # $1=preset-name -> one-line selection summary (plan line)
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    jq -r --arg n "$1" '.presets[$n] |
+        (((.product // ((.products // {}) | keys_unsorted | join("+"))) // "?") as $p |
+         (if ((.product // null) != null) then "product" else "products" end) as $pw |
+         (if (has("filter")) then "filter:" + (.filter|tostring)
+          elif (has("sessions")) then "sessions: " + (.sessions|join(", "))
+          else "ALL sessions" end) as $sel |
+         $sel + " · " + $pw + " " + $p + " · config " + ((. | del(.product, .products, .filter, .sessions) | keys | join(",")) // "-"))' \
+        "$OCED_PRESETS" 2>/dev/null || return 1
+}
+
 oc_export_rows() {
+    if oc_preset_rows; then
+        # No Manual row — plans cover everything; Manual only when no presets file
+        true
+    else
+        printf '__ALL__\tALL SESSIONS (no filter)\n'
+        oc_sessions_rows
+    fi
+}
+
+oc_export_manual_rows() {
     printf '__ALL__\tALL SESSIONS (no filter)\n'
     oc_sessions_rows
 }
 
-oc_export_picker() {
+oc_export_presets_picker() {
+    local sel key header name seldesc
+    while true; do
+        header=$'Export — pick a plan (preset): products + config from the presets file'$'\n'$'(then choose a session or ALL SESSIONS; ESC: back)'
+        sel=$(oc_export_rows | oc_fzf_sel "export (presets)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __NONE__)   continue ;;
+            __PRESET_*)
+                name="${key#__PRESET_}"
+                seldesc=$(oc_preset_descr "$name") || seldesc=""
+                oc_preset_run "$name" "$seldesc" || continue
+                menu_pause "Export" || return 0
+                ;;
+        esac
+    done
+}
+
+# oc_preset_run <preset> <descr> -> pick a session/ALL for a preset, confirm, run.
+# ALL runs the preset as configured; a session overrides its embedded selection
+# via --filter (CLI wins over the preset; a bundle shares the override).
+oc_preset_run() {
+    local name="$1" descr="$2" sel key purpose
+    purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
+    sel=$(oc_export_manual_rows | oc_fzf_sel "sessions (preset)" \
+        $'Preset '"$name"$' — '"$purpose"$''$'\n'$'(pick a session, or ALL SESSIONS; ALL = as configured, a session = override; ESC: back)') || return 1
+    key=$(oc_sel_key "$sel")
+    case "$key" in
+        __NONE__) return 1 ;;
+        __ALL__)
+            oc_export_confirm "preset: $name" "(preset as configured)" "preset '$name' (${descr:-see the presets file})" || return 0
+            run_oced_tool export "$name"
+            ;;
+        *)
+            oc_export_confirm "preset: $name" "filter: $key (override)" "preset '$name' (${descr:-see the presets file}) · override: $key" || return 0
+            run_oced_tool export "$name" --filter "$key"
+            ;;
+    esac
+    return 0
+}
+
+oc_export_manual_picker() {
     local sel key
     while true; do
         local header
-        header=$'Sessions to export — pick one session, or ALL SESSIONS'$'\n'$'(then choose a profile and its variant; ESC: back)'
-        sel=$(oc_export_rows | oc_fzf_sel "sessions (export)" "$header") || return $?
+        header=$'Manual export — pick one session, or ALL SESSIONS'$'\n'$'(then ONE product, running with DEFAULT options; saved plans live in the presets file; CLI flags tune it; ESC: back)'
+        sel=$(oc_export_manual_rows | oc_fzf_sel "sessions (export)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
             __ALL__)    oc_export_flow ""  || continue ;;
@@ -367,6 +474,14 @@ oc_export_picker() {
             *)          oc_export_flow "$key" || continue ;;
         esac
     done
+}
+
+oc_export_picker() {
+    if [ -f "${OCED_PRESETS:-}" ]; then
+        oc_export_presets_picker
+    else
+        oc_export_manual_picker
+    fi
 }
 
 #-----------------------------------------------------------------------
@@ -403,13 +518,13 @@ oc_stamp_human() {
     esac
 }
 
-# oc_exports_run_row <stamp> -> one TSV row aggregating a run's metadatos.
+# oc_exports_run_row <stamp> -> one TSV row aggregating a run's metadata.
 oc_exports_run_row() {
     local stamp="$1"
     local run="$OCED_OUT/$stamp"
     local meta profiles="" roots=0 subs=0 msgs=0 found=0 m p r s
     local -a metas
-    mapfile -t metas < <(find "$run" -name metadatos.json -type f 2>/dev/null | sort)
+    mapfile -t metas < <(find "$run" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
     for m in "${metas[@]}"; do
         [ -f "$m" ] || continue
         found=1
@@ -480,58 +595,183 @@ oc_exports_picker() {
 }
 
 #-----------------------------------------------------------------------
-# Export flow: session (done by the picker) -> product -> variant/custom
+# Export flow: session (done by the picker) -> product -> run (defaults)
 #-----------------------------------------------------------------------
 # oc_pick_product -> selects one export product (key<TAB>label).
 # product = the document to produce (transcript | memory | compactions).
+# Each product runs with its default options in the menu; tuning lives in the
+# presets file (OCED_PRESETS) or the CLI flags.
+# oc_pick_product -> selects one export product (key<TAB>label).
+# product = the document to produce (transcript | memory | compactions).
+# Each product runs with its default options in the menu; tuning lives in the
+# presets file (OCED_PRESETS) or the CLI flags.
+# Rows stay SHORT; the "use it when / size / redundancy" legend lives in the header.
 oc_pick_product() {
     printf '%s\n' \
-        $'transcript\ttranscript: the conversation in markdown (text + reasoning + tools + patches) + optional faithful JSON' \
-        $'memory\tmemory: RAG corpus (corpus.jsonl, one entry per root session)' \
-        $'compactions\tcompactions: only the compacted-context digests' \
-        | oc_fzf_sel "export product" "Product = the document you want to produce. Next step: choose how it is configured (variant)."
+        $'transcript\tREAD / SHARE / AUDIT — the full conversation as Markdown (per session)' \
+        $'memory\tFEED ANOTHER AI — machine-readable corpus (corpus.jsonl, one line per session)' \
+        $'compactions\tQUICK KNOWLEDGE REVIEW — only the compaction summaries' \
+        | oc_fzf_sel "export product" $'Choose ONE product (runs with DEFAULT options; ESC: back):'$'\n'\
+$'   transcript   HEAVY, human-readable: your asks, the answers, reasoning, every tool call + output'$'\n'\
+$'                and the code patches, compaction digests inline. Add --json for a faithful machine archive.'$'\n'\
+$'   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL'$'\n'\
+$'                compaction digests per session. For feeding another AI (RAG); streamed line by line.'$'\n'\
+$'   compactions  TINY extract: only the compaction summaries (the knowledge arc of a session). Already'$'\n'\
+$'                inside transcript AND memory — standalone is just a fast skim.'$'\n'\
+$'Tune flags via the presets file (plans) or the CLI.' 
 }
 
-# oc_recipes_for <product> -> TSV rows (args<TAB>label) for that product.
-# variant = how the product is configured; bundle = several products in one run.
-oc_recipes_for() {
+# oc_preset_purpose <name> -> one-line purpose for the shipped plans (unknown -> 1).
+oc_preset_purpose() {
     case "$1" in
-        transcript) printf '%s\n' \
-            $'transcript\tdefault' \
-            $'transcript --tool-output full\ttool output: full' \
-            $'transcript --tool-output omit\tomit tool output' \
-            $'transcript --patch omit\tomit patches' \
-            $'transcript --no-reasoning\tno reasoning' \
-            $'transcript --summary-diffs\t+ summary diffs' \
-            $'transcript --mark-compactions\t+ compaction markers' \
-            $'transcript --mark-compactions --summary-diffs\t+ markers + diffs' \
-            $'transcript --sub inline\tsubagents: inline' \
-            $'transcript --sub omit\tsubagents: omit' \
-            $'transcript --json\t+ faithful JSON archive' \
-            $'transcript --json --sanitize\t+ JSON archive, secrets redacted' \
-            $'__FULLMEM__\tbundle: transcript + memory corpus (one run)' \
-            $'__CUSTOM__\tcustom… (choose my own options)' ;;
-        compactions) printf '%s\n' \
-            $'compactions\tdefault' \
-            $'compactions --sub inline\tsubagents: inline' \
-            $'compactions --sub omit\tsubagents: omit' \
-            $'compactions --json\t+ faithful JSON archive' \
-            $'__CUSTOM__\tcustom… (choose my own options)' ;;
-        memory) printf '%s\n' \
-            $'memory\tdefault' \
-            $'memory --files\t+ touched files' \
-            $'__CUSTOM__\tcustom… (cap / files)' ;;
-        *) return 1 ;;
+        archive) printf 'lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)' ;;
+        quick)   printf 'light daily review: same backup, truncated tool outputs (fast, compact)' ;;
+        share)   printf 'publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)' ;;
+        notes)   printf 'plain conversation read: transcript with default options' ;;
+        rag)     printf 'corpus for another AI: memory with default options' ;;
+        digest)  printf 'knowledge arc: only the compaction summaries' ;;
+        *)       return 1 ;;
     esac
 }
 
+# oc_preset_names -> preset names present in OCED_PRESETS (one per line).
+oc_preset_names() {
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    jq -r '.presets | keys[]' "$OCED_PRESETS" 2>/dev/null || return 1
+}
+
+# oc_preset_legend -> header lines explaining each shipped plan that exists in the
+# file (keeps the picker rows short: purpose never overflows a row).
+oc_preset_legend() {
+    local names name p
+    names=$(oc_preset_names 2>/dev/null) || return 0
+    [ -n "$names" ] || return 0
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if p=$(oc_preset_purpose "$name"); then
+            printf '   %-6s %s\n' "$name" "$p"
+        fi
+    done <<< "$names"
+    return 0
+}
+
+# oc_product_intro <product> -> one-line description for the plan confirm.
+oc_product_intro() {
+    case "$1" in
+        transcript)  printf 'Markdown conversation per session — everything you see + reasoning + tool calls' ;;
+        memory)      printf 'RAG corpus corpus.jsonl — one line per root session, machine facts (tokens, todos, tools, digests)' ;;
+        compactions) printf 'Markdown digests only — the compacted knowledge arc (extract of transcript/memory)' ;;
+        *)           return 1 ;;
+    esac
+}
+
+# oc_preset_products <preset> -> one product per line (transcript|memory|compactions).
+oc_preset_products() {
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    jq -r --arg n "$1" '
+        if .presets[$n].products then .presets[$n].products | keys_unsorted[]
+        elif .presets[$n].product then .presets[$n].product
+        else empty end
+    ' "$OCED_PRESETS" 2>/dev/null || return 1
+}
+
+# oc_preset_product_flags <preset> <product> -> comma-separated key=val of that product's flags.
+oc_preset_product_flags() {
+    local pre="$1" p="$2"
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    jq -r --arg n "$pre" --arg p "$p" '
+        .presets[$n] as $pre |
+        (if $pre.products then $pre.products[$p] // {} else $pre end)
+        | to_entries | map(.key + "=" + (.value|tostring)) | join(",")
+    ' "$OCED_PRESETS" 2>/dev/null || return 1
+}
+
+# oc_preset_has_flag <preset> <flag> -> 0 if any product has flag=true (or single preset flag).
+oc_preset_has_flag() {
+    local pre="$1" flag="$2"
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    jq -e --arg n "$pre" --arg f "$flag" '
+        .presets[$n] as $pre |
+        (if $pre.products then
+            ($pre.products | to_entries | map(.value[$f] == true) | any)
+        else
+            ($pre[$f] == true)
+        end)
+    ' "$OCED_PRESETS" 2>/dev/null >/dev/null
+}
+
+# oc_annotate_flags <csv> -> human bits: "+ faithful JSON (raw)", "full tool outputs", etc.
+oc_annotate_flags() {
+    local csv="$1" out="" kv key val
+    [ -n "$csv" ] || return 0
+    IFS=',' read -r -a pairs <<< "$csv"
+    for kv in "${pairs[@]}"; do
+        key="${kv%%=*}"; val="${kv#*=}"
+        case "$key:$val" in
+            json:true)                    out="$out · +faithful JSON (raw, unfiltered)" ;;
+            tool_output:full)             out="$out · full tool outputs" ;;
+            tool_output:truncated)        out="$out · truncated tool outputs" ;;
+            tool_output:omit)             out="$out · no tool outputs" ;;
+            no_reasoning:true)            out="$out · reasoning omitted" ;;
+            sanitize:true)                out="$out · sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…)" ;;
+            files:true)                   out="$out · touched files" ;;
+            cap:*)                        [ "$val" != 0 ] && out="$out · cap $val chars" ;;
+            sub:inline)                   out="$out · subagents inline" ;;
+            sub:omit)                     out="$out · subagents omitted" ;;
+            summary_diffs:true)           out="$out · per-message diff summaries" ;;
+            mark_compactions:true)        out="$out · compaction markers" ;;
+            role:assistant|role:user)     out="$out · role '$val'" ;;
+            patch:omit)                   out="$out · patches omitted" ;;
+        esac
+    done
+    printf '%s' "${out# ·}"
+}
+
+# oc_export_plan <profile> -> multi-line "Will produce:" block for the confirm.
+# profile = preset name OR product keyword (transcript|memory|compactions).
+# Output has NO leading indentation; caller adds uniform indentation.
+oc_export_plan() {
+    local profile="$1" prod intro bits products flags
+    products=$(oc_preset_products "$profile" 2>/dev/null)
+    if [ -n "$products" ]; then
+        while IFS= read -r prod; do
+            [ -n "$prod" ] || continue
+            intro=$(oc_product_intro "$prod") || intro="$prod"
+            flags=$(oc_preset_product_flags "$profile" "$prod" 2>/dev/null)
+            bits=$(oc_annotate_flags "$flags")
+            printf '%s:\n' "$prod"
+            printf '  - %s\n' "$intro"
+            if [ -n "$bits" ]; then
+                printf '%s\n' "$bits" | sed 's/ · /\n  - /g'
+            fi
+        done <<< "$products"
+    elif case "$profile" in transcript|memory|compactions) true ;; *) false ;; esac; then
+        intro=$(oc_product_intro "$profile") || intro="$profile"
+        printf '%s:\n' "$profile"
+        printf '  - %s (default options)\n' "$intro"
+    fi
+    if oc_preset_has_flag "$profile" json 2>/dev/null; then
+        printf 'Notes:\n'
+        printf '  - faithful JSON is raw/unfiltered (all messages, reasoning & full tool outputs)\n'
+        printf '  - markdown display filters (tool_output, role, no_reasoning, tool_input_limit) do not apply to the JSON\n'
+    fi
+    if oc_preset_has_flag "$profile" sanitize 2>/dev/null; then
+        printf '\n! sanitize redacts safe prefixes only (sk-, ghp_, AKIA, JWT, PEM) — review output.\n'
+    fi
+    return 0
+}
+
 # oc_export_confirm <profile-label> <filter-or-empty> <spec> -> print the plan + ask.
+# profile-label can be "preset: <name>" or a product keyword (transcript|memory|compactions).
 oc_export_confirm() {
     local profile="$1" selid="$2" spec="$3"
-    local db_est=0
+    local db_est=0 plan_name="$profile"
     [ -f "$OPENCODE_DB-wal" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-wal"))) || true
     [ -f "$OPENCODE_DB-shm" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-shm"))) || true
     db_est=$((db_est + $(stat -c %s "$OPENCODE_DB")))
+    case "$profile" in
+        preset:\ *) plan_name="${profile#preset: }" ;;
+    esac
     echo ""
     echo "-> Export plan"
     printf '   %-9s %s\n' "Source:" "$OPENCODE_DB"
@@ -539,6 +779,10 @@ oc_export_confirm() {
     printf '   %-9s %s\n' "Profile:" "$profile"
     printf '   %-9s %s\n' "Spec:" "$spec"
     printf '   %-9s %s\n' "Output:" "$OCED_OUT/<timestamp>"
+    # Dynamic "Will produce:" block with uniform 2-space indent
+    printf '   Will produce:\n'
+    oc_export_plan "$plan_name" | sed 's/^/  /'
+    echo ""
     if [ "$db_est" -ge 1073741824 ]; then
         confirm_action "Start this export? The DB is ~$(o_human_size "$db_est") — may take a while." || { echo "   cancelled."; return 1; }
     else
@@ -547,7 +791,9 @@ oc_export_confirm() {
     return 0
 }
 
-# oc_export_flow [session-id|"") -> product-first export wizard. Empty = ALL sessions.
+# oc_export_flow [session-id|"") -> session (done by the picker) -> product -> run.
+# Empty = ALL sessions. The product runs with its default options; advanced
+# configuration lives in the presets file or on the CLI.
 oc_export_flow() {
     local selid="${1:-}"
     local -a idfilter=()
@@ -557,161 +803,10 @@ oc_export_flow() {
     prod=$(oc_pick_product) || return 1
     prodkey=$(oc_sel_key "$prod")
 
-    local rec reckey
-    rec=$(oc_recipes_for "$prodkey" | oc_fzf_sel "variant ($prodkey)" \
-        "Choose the '$prodkey' variant — product = the document to produce · variant = how it is configured · bundle = several products in one run · custom… = my own options") || return 1
-    reckey=$(oc_sel_key "$rec")
-
-    case "$reckey" in
-        __FULLMEM__)
-            oc_export_confirm "transcript + memory" "$selid" "transcript + RAG corpus (one run)" || return 0
-            local stamp
-            stamp=$(date -u +%Y%m%d-%H%M%S)
-            run_oced_tool export transcript --stamp "$stamp" "${idfilter[@]}"
-            run_oced_tool export memory --stamp "$stamp" --files "${idfilter[@]}"
-            menu_pause "Export" || return 0
-            return 0
-            ;;
-        __CUSTOM__)
-            local cmdline args
-            if [ "$prodkey" = memory ]; then
-                args=$(oc_memory_custom) || return 1
-                cmdline="memory ${args:-}"
-            else
-                args=$(oc_custom_run "$prodkey") || return 1
-                cmdline="$prodkey ${args:-}"
-            fi
-            cmdline=${cmdline% }
-            oc_export_confirm "$prodkey" "$selid" "custom: $cmdline" || return 0
-            # shellcheck disable=SC2086  # cmdline must split ("--sub inline --role user")
-            run_oced_tool export $cmdline "${idfilter[@]}"
-            menu_pause "Export" || return 0
-            return 0
-            ;;
-        *)
-            oc_export_confirm "$prodkey" "$selid" "$reckey" || return 0
-            local -a parts
-            read -r -a parts <<<"$reckey"
-            local profile_only="${parts[0]}"
-            local -a extra=("${parts[@]:1}")
-            run_oced_tool export "$profile_only" "${extra[@]}" "${idfilter[@]}"
-            menu_pause "Export" || return 0
-            return 0
-            ;;
-    esac
-}
-
-#-----------------------------------------------------------------------
-# Custom (checkbox checklist, "sistema asus" style: toggled one row per Enter)
-#-----------------------------------------------------------------------
-# oc_custom_set <product> -> initializes the global ingredient arrays.
-#   OC_CK_KEY/OC_CK_LABEL/OC_CK_TYPE(bool|cycle)/OC_CK_VAL
-oc_custom_set() {
-    local p="$1"
-    OC_CK_KEY=(); OC_CK_LABEL=(); OC_CK_TYPE=(); OC_CK_VAL=()
-    case "$p" in
-        transcript)
-            OC_CK_KEY=(tools outfull patches markers diffs sub role reasoning json sanitize)
-            OC_CK_LABEL=("tool calls + inputs" "tool output (full)" "patches" "compaction markers" "summary diffs" "subagents" "role" "reasoning" "faithful JSON archive" "sanitize (redact secrets)")
-            OC_CK_TYPE=(bool bool bool bool bool cycle cycle bool bool bool)
-            OC_CK_VAL=(on off on off off separate all on off off) ;;
-        compactions)
-            OC_CK_KEY=(sub role json sanitize)
-            OC_CK_LABEL=("subagents" "role" "faithful JSON archive" "sanitize (redact secrets)")
-            OC_CK_TYPE=(cycle cycle bool bool)
-            OC_CK_VAL=(separate all off off) ;;
-    esac
-}
-
-# oc_custom_args <product> -> builds the command-line ingredients from the arrays.
-oc_custom_args() {
-    local p="$1" args=""
-    case "$p" in
-        transcript)
-            if [ "${OC_CK_VAL[0]}" = off ]; then
-                args+=" --tool-output omit"
-            elif [ "${OC_CK_VAL[1]}" = on ]; then
-                args+=" --tool-output full"
-            fi
-            [ "${OC_CK_VAL[2]}" = off ] && args+=" --patch omit"
-            [ "${OC_CK_VAL[3]}" = on ] && args+=" --mark-compactions"
-            [ "${OC_CK_VAL[4]}" = on ] && args+=" --summary-diffs"
-            args+=" --sub ${OC_CK_VAL[5]} --role ${OC_CK_VAL[6]}"
-            [ "${OC_CK_VAL[7]}" = off ] && args+=" --no-reasoning"
-            [ "${OC_CK_VAL[8]}" = on ] && args+=" --json"
-            [ "${OC_CK_VAL[9]}" = on ] && args+=" --sanitize" ;;
-        compactions)
-            args+=" --sub ${OC_CK_VAL[0]} --role ${OC_CK_VAL[1]}"
-            [ "${OC_CK_VAL[2]}" = on ] && args+=" --json"
-            [ "${OC_CK_VAL[3]}" = on ] && args+=" --sanitize" ;;
-    esac
-    printf '%s\n' "$args"
-}
-
-# oc_custom_run <profile> -> interactive checklist; prints the args on stdout.
-oc_custom_run() {
-    local profile="$1" i rows sel key
-    oc_custom_set "$profile"
-    while true; do
-        rows=""
-        for i in "${!OC_CK_KEY[@]}"; do
-            case "${OC_CK_TYPE[$i]}" in
-                bool)
-                    rows+=$(printf '%s\t%s\n' "${OC_CK_KEY[$i]}" "- [${OC_CK_VAL[$i]}] ${OC_CK_LABEL[$i]}") ;;
-                cycle)
-                    rows+=$(printf '%s\t%s\n' "${OC_CK_KEY[$i]}" "- ${OC_CK_LABEL[$i]}: ${OC_CK_VAL[$i]}") ;;
-            esac
-            rows+=$'\n'
-        done
-        rows+=$(printf '%s\t%s\n' "__RUN__" "[run this custom export]"); rows+=$'\n'
-        rows+=$(printf '%s\t%s\n' "__ABORT__" "[cancel]"); rows+=$'\n'
-        sel=$(printf '%b' "$rows" | oc_fzf_sel "custom ($profile)" "Checklist: Enter toggles a row · '[run]' executes") || return 1
-        key=$(oc_sel_key "$sel")
-        case "$key" in
-            __RUN__)  break ;;
-            __ABORT__) echo "   cancelled."; return 1 ;;
-            *)
-                for i in "${!OC_CK_KEY[@]}"; do
-                    [ "${OC_CK_KEY[$i]}" = "$key" ] || continue
-                    if [ "${OC_CK_TYPE[$i]}" = bool ]; then
-                        [ "${OC_CK_VAL[$i]}" = on ] && OC_CK_VAL[$i]=off || OC_CK_VAL[$i]=on
-                    else
-                        case "${OC_CK_VAL[$i]}" in
-                            separate) OC_CK_VAL[$i]=inline ;;
-                            inline)   OC_CK_VAL[$i]=omit ;;
-                            omit)     OC_CK_VAL[$i]=separate ;;
-                            all)      OC_CK_VAL[$i]=user ;;
-                            user)     OC_CK_VAL[$i]=assistant ;;
-                            assistant) OC_CK_VAL[$i]=all ;;
-                        esac
-                    fi
-                done
-                ;;
-        esac
-    done
-    printf '%s\n' "$(oc_custom_args "$profile")"
-}
-
-# oc_memory_custom -> checklist for the memory profile (files / cap); prints args.
-oc_memory_custom() {
-    local files=off cap="0" rows sel key n
-    while true; do
-        rows=$(printf '%s\t%s\n' "files" "- [${files}] touched files per session"; printf '%s\t%s\n' "cap" "- cap N chars per text (now: $cap)"; printf '%s\t%s\n' "__RUN__" "[run this memory export]"; printf '%s\t%s\n' "__ABORT__" "[cancel]")
-        sel=$(printf '%b\n' "$rows" | oc_fzf_sel "custom (memory)" "Checklist: Enter toggles · '[run]' executes") || return 1
-        key=$(oc_sel_key "$sel")
-        case "$key" in
-            __RUN__) break ;;
-            __ABORT__) echo "   cancelled."; return 1 ;;
-            files) [ "$files" = on ] && files=off || files=on ;;
-            cap)
-                n=$(oc_read_int "Cap per text in chars (0 = unlimited)") || continue
-                cap=$(printf '%s' "$n" | tr -d '\n') ;;
-        esac
-    done
-    local args=""
-    [ "$files" = on ] && args+=" --files"
-    [ "$cap" != "0" ] && args+=" --cap $cap"
-    printf '%s\n' "$args"
+    oc_export_confirm "$prodkey" "$selid" "$prodkey (default options)" || return 0
+    run_oced_tool export "$prodkey" "${idfilter[@]}"
+    menu_pause "Export" || return 0
+    return 0
 }
 
 #-----------------------------------------------------------------------

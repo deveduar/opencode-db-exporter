@@ -1,0 +1,30 @@
+{
+  "presets": {
+    "archive": {
+      "products": {
+        "transcript": {"json": true, "tool_output": "full"},
+        "memory": {"files": true}
+      }
+    },
+    "quick": {
+      "products": {
+        "transcript": {"json": true, "tool_output": "truncated"},
+        "memory": {"files": true}
+      }
+    },
+    "share": {
+      "product": "transcript",
+      "json": true,
+      "no_reasoning": true
+    },
+    "notes": {
+      "product": "transcript"
+    },
+    "rag": {
+      "product": "memory"
+    },
+    "digest": {
+      "product": "compactions"
+    }
+  }
+}

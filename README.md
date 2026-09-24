@@ -11,7 +11,7 @@ branches or HEAD can hide older sessions even though the data is still in the gl
 SQLite file. `opencode-db` reads that file directly in **strict read-only mode** — no
 CLI filters, no writes — so every prompt history, agent path and metric stays
 exportable. The full design rationale (data model, export pipeline, sanitization, menu
-and `shrink --swap` safeguards) is in **[docs/arquitectura.md](docs/arquitectura.md)**.
+and `shrink --swap` safeguards) is in **[docs/architecture.md](docs/architecture.md)**.
 
 ## Requirements
 
@@ -73,21 +73,19 @@ rows. The `backups`, `sessions` (details) and `export` pickers are **single-mode
   checks.
 - **sessions** picker (details only) — one row per session; selecting one shows the full
   info + compaction digests.
-- **export** picker — `ALL SESSIONS` or a single session, then the export wizard
-  (product → variant → plan).
+- **export** picker — `ALL SESSIONS` or a single session, then the product
+  (`transcript`/`memory`/`compactions`).
 - **Manage exports** picker (mode `view` / `remove`) — rows: toggle,
   `[delete ALL export runs]`, `[delete all except the newest]`, one row per run
   (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
 
-Export wizard: session (**or ALL**) → **product** (`transcript`/`memory`/`compactions`)
-→ **variant** for that product (product = the document to produce, variant = how it is
-configured, bundle = several products in one run), or `Custom…` (checkbox checklist:
-toggle ingredients one per Enter — `- [x]` / `- [ ]`, no TAB) → plan confirmation.
-`transcript` offers a `transcript + memory corpus` **bundle variant** (one shared stamp
-↔ two runs) and JSON/sanitize/no-reasoning variants; there are **no** *solo prompts* /
-*solo answers* presets — `--role` is a flag available in the custom checklist, not a
-preset. `shrink` lives inside the backups picker: recipes built from the live DB
-(default, dry-run, custom keep-N / last-N-days / since date).
+Export flow: session (**or ALL**) → **product** (`transcript`/`memory`/`compactions`)
+→ plan confirmation → run. Each product runs with its **default options**; there are
+**no** variant tables or custom checklists in the menu — tuning and multi-product runs
+in one stamp (bundle presets) live in the presets file (`OCED_PRESETS`) or on the CLI
+(`--no-reasoning`, `--json`, `--sanitize`, `--tool-output full`, …). `shrink` lives
+inside the backups picker: recipes built from the live DB (default, dry-run, custom
+keep-N / last-N-days / since date).
 
 ## Export
 
@@ -102,6 +100,7 @@ Products:
 Flags:
 
 - `--filter PATTERN` — SQL `LIKE` on session id/title (e.g. `'ses_f7%'`); useful to export one session or one project.
+- `--sessions ID[,ID…]` — export exact session id(s) (repeatable) instead of a pattern; e.g. `--sessions ses_abc,ses_xyz`.
 - `--sub separate|inline|omit` — how to place subagents (default `separate`: folder per root session with `subagents/` inside).
 - `--tool-output full|truncated|omit` — tool output verbosity (default `truncated`).
 - `--patch full|omit` — include patch parts (default `full`).
@@ -113,11 +112,11 @@ Flags:
 - `--sanitize` — redact secret-looking values (API keys `sk-`/`ghp_`/`github_pat_`/`xox…`/`AIza…`/`AKIA…`, Bearer tokens, JWTs, private PEM keys, `key=value` pairs) recursively, in markdown, JSON and the memory corpus.
 - `--cap N` / `--files` — `memory` tuning: truncate every text value to N chars (`0` = unlimited, default) and/or list the touched files per session.
 
-> `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). The `menu` exposes the same combinations as ready-made **variants** per product, plus a `Custom…` checklist.
+> `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). In the `menu` every product runs with its default options (tune via the presets file or the CLI).
 
 **Token backfill** — sessions with `0`/NULL token/cost columns are reconstructed from the
 per-step `step-finish` parts at export time (flagged `tokens_backfilled`). The mechanism
-is described in [docs/arquitectura.md](docs/arquitectura.md).
+is described in [docs/architecture.md](docs/architecture.md).
 
 `memory` is a RAG-ready corpus, **not** a readable transcript: one `corpus.jsonl` entry per
 root session, subagents summarized inline, `first_user` (the goal), `last_assistant` (the
@@ -131,7 +130,97 @@ opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 
 
 No text is ever truncated by default; `--cap N` caps every text value (first_user, last_assistant, digests) to N chars — a guard only you choose to raise if feeding the corpus to a strict model.
 
-Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per session, an `index.md`, and a machine-readable `metadatos.json`.
+Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per session, an `index.md`, and a machine-readable `metadata.json`.
+
+## Named export presets
+
+Running the export by raw flags is fine for one-offs, but the recurring combinations
+are better pinned in a **presets file** (JSON, path in `OCED_PRESETS`, default
+`~/.config/opencode-db/presets.json`, same env>conf precedence as the rest; `install.sh`
+auto-creates it from `presets.json.example` when missing). The file is the **source of
+truth** for both the CLI and the menu: a preset names a product (or a *bundle* of
+products run under one stamp), its config flags and optionally the selection (`filter`
+or exact `sessions`). The contract (exact keys/types/choices) is machine-checkable in
+[`presets.schema.json`](presets.schema.json) and fully documented in
+[`docs/schemas.md`](docs/schemas.md) (which also covers `metadata.json`, the memory
+`corpus.jsonl`, the faithful JSON archive, the backup `manifest.json`, `shrink.json`
+and the `exports list` line).
+
+```json
+{
+  "presets": {
+    "archive": {
+      "products": {
+        "transcript": { "json": true, "tool_output": "full" },
+        "memory": { "files": true }
+      }
+    },
+    "quick": {
+      "products": {
+        "transcript": { "json": true, "tool_output": "truncated" },
+        "memory": { "files": true }
+      }
+    },
+    "share": {
+      "product": "transcript",
+      "json": true,
+      "sanitize": true,
+      "no_reasoning": true
+    },
+    "notes": { "product": "transcript" },
+    "rag":   { "product": "memory" },
+    "digest": { "product": "compactions" }
+  }
+}
+```
+
+```bash
+opencode-db export share                 # run the named preset (product + config + its own selection)
+opencode-db export share --filter '%'    # a concrete CLI flag overrides the preset
+opencode-db export rag --cap 3000        # same, per-run
+opencode-db export transcript --json     # product keywords always mean the product (raw flags unchanged)
+opencode-db export archive               # bundle: transcript + memory under ONE stamp
+opencode-db export archive --sessions ses_abc   # one CLI flag overrides the whole selection
+```
+
+- `export <name>` resolves to a preset; `export transcript|memory|compactions|full` always
+  mean the product. An unknown name fails listing the known presets.
+- Allowed preset keys: `product` + `sub`, `tool_output`, `tool_input_limit`,
+  `tool_output_limit`, `patch`, `role`, `no_reasoning`, `mark_compactions`,
+  `summary_diffs`, `json`, `sanitize`, `cap`, `files` (bools/choices as in the flags) and
+  the selection `filter` (LIKE string) **or** `sessions` (list of ids, not both).
+- A **bundle preset** uses `products` instead of `product`: a map of
+  `{product: {flags}}` (products may only be `transcript|memory|compactions` and each
+  keeps its own flags, e.g. `cap`/`files` only matter for `memory`). The selection stays
+  at the top level and is shared by every product; the whole bundle runs under **one
+  stamp** (`exports/<stamp>/transcript`, `exports/<stamp>/memory`, plus an
+  `index.md` at the stamp root) and each subfolder is identical to running that product
+  alone. `product` and `products` are mutually exclusive.
+- A `filter`/`sessions`/`--sessions` passed on the command line overrides the preset's
+  selection; a config flag passed on the command line overrides the preset too (both for
+  single and bundle presets).
+- No presets file (or none matching) → no presets: export behaves exactly as before.
+- The menu lists each preset as a first-class action (read from the same file), then asks
+  **which session or ALL SESSIONS** to export (pending state: a plan is config + selection,
+  and the two are separated at run time — a plan runs **ad-hoc** just like raw flags do).
+  Choosing **ALL** runs the preset as configured (keeping its embedded selection); picking
+  **one session** becomes a `--filter` override shared by every product of a bundle (CLI
+  wins, see above). **No `Manual…` row** when presets exist (the shipped default plans
+  `notes`/`rag`/`digest` cover the three products with defaults). Without a file, the
+  classic session → product flow with defaults remains.
+- `compactions` is a valid product (CLI or a plan) but is **not** part of the shipped example
+  plans: its digests are already inline in `transcript` and in the memory corpus
+  (`compaction_digests`), so shipping it in a bundle would triple the same text.
+- `--sanitize` redacts known secret patterns (sk-, ghp_, Bearer, JWT, PEM, key=value…) —
+  **best-effort; review the output before sharing**.
+
+```bash
+# weekly lossless export of everything, e.g. in crontab:
+0 2 * * 1 opencode-db export archive
+```
+
+Each run's `metadata.json` records `"preset": "<name>"` (and `sessions_selected`) for
+provenance (a bundle records the preset name in every product's metadata).
 
 ## Managing export runs
 
@@ -148,7 +237,7 @@ opencode-db exports prune 5           # keep only the 5 most recent runs
 `compactions <id> show` prints a session's digests; the `compactions` export product
 writes one markdown file per session with them. How a compaction digest is stored in the
 DB (markers vs. the following `mode=compaction` message) is explained in
-[docs/arquitectura.md](docs/arquitectura.md).
+[docs/architecture.md](docs/architecture.md).
 
 ## shrink — a lighter DB copy to swap over opencode
 
@@ -179,7 +268,7 @@ rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
 > drops the WAL tail and can corrupt state. Prefer `opencode-db shrink --swap`, which
 > aborts if opencode is still running, snapshots a `.pre-shrink` safety copy (sqlite
 > `.backup`, WAL-safe), swaps atomically and rolls back if the new DB does not open
-> read-only (see [docs/arquitectura.md](docs/arquitectura.md) §6).
+> read-only (see [docs/architecture.md](docs/architecture.md) §6).
 
 Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. Prefer the guided version: `opencode-db guide` walks the same steps with explanations.
 
@@ -215,9 +304,11 @@ It never removes system packages: dependencies installed by `opencode-db deps` s
 The detailed architecture — read-only discipline (WAL, `.backup`, `--from-backup`),
 the opencode data model, the export pipeline (products, sanitization **in memory on
 native types before serializing**, token backfill, streaming corpus), the menu design and
-the `shrink --swap` safeguards — lives in **[docs/arquitectura.md](docs/arquitectura.md)**.
+the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/architecture.md)**.
 The [`docs/export-analysis.md`](docs/export-analysis.md) log records how the export
-redesign decisions were reached. This README covers usage only.
+redesign decisions were reached. **[`docs/schemas.md`](docs/schemas.md)** is the
+machine-facing contract reference (presets, `metadata.json`, the memory corpus, the
+faithful archive, backup/shrink manifests). This README covers usage only.
 
 A few facts that are good to know anyway:
 
@@ -256,8 +347,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 119 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 78 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 134 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 83 OK / 0 FAIL
 ```
 
 ## Layout
@@ -269,14 +360,16 @@ modules/
   view.sh          status / list / info / compactions (+ digests)
   backup.sh        consistent snapshots + sha256 + manifest.json
   export.sh        bash -> python bridge
-  export.py        renderer (products transcript/memory/compactions, subagents, --json/--sanitize, index.md, metadata)
+  export.py        entry shim for the exportlib package
+  exportlib/       Python renderer package (products transcript/memory/compactions,
+                   subagents, presets, --json/--sanitize, index.md, metadata)
   exports.sh       list/remove/prune of past export runs
   shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
   deps.sh          idempotent dependency check/install
   guide.sh         step-by-step console wizard (safe workflow)
-  menu.sh          interactive fzf menu (pickers + export wizard)
+  menu.sh          interactive fzf menu (pickers + export flow)
 docs/
-  arquitectura.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
+  architecture.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
   export-analysis.md  decision log of the export redesign
 install.sh         copies modules+tests, symlinks the CLI
 uninstall.sh       removes the install (keeps data unless --all)

@@ -17,7 +17,7 @@ load_conf() {
     # cannot clobber them (env wins over conf).
     local v
     local -A conf_env_set=() conf_env_val=()
-    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP; do
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS; do
         if [ "${!v+x}" = x ]; then
             conf_env_set[$v]=1
             conf_env_val[$v]="${!v}"
@@ -37,7 +37,7 @@ load_conf
 : "${OCED_COMPRESS:=1}"
 
 # Tool version (shown by 'opencode-db version' and the schema probe).
-OCED_VERSION="1.0.0"
+OCED_VERSION="1.2.0"
 
 # Expected opencode DB schema (compatibility probe). Space-separated tables and
 # "table:col,col,..." entries; the tool warns if any are missing.
@@ -55,6 +55,9 @@ todo:session_id,content,status
 # Backup source override: if set, use a stored backup file as the DB source.
 # Can be a filename (resolved under OCED_BACKUP_DIR) or an absolute path.
 : "${OCED_FROM_BACKUP:=}"
+# Export presets file (named recipes, source of truth for the menu). Absent file
+# = no presets: export keeps working with raw flags.
+: "${OCED_PRESETS:=$HOME/.config/opencode-db/presets.json}"
 
 # o_log <message> -> append one line to the activity log (only when OCED_LOG=1).
 o_log() {

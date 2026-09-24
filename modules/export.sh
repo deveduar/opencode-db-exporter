@@ -6,6 +6,7 @@ oced_export_one() {
     OPENCODE_DB="$(o_effective_db)" \
     OCED_OUT="$OCED_OUT" \
     OCED_BACKUP_DIR="$OCED_BACKUP_DIR" \
+    OCED_PRESETS="$OCED_PRESETS" \
         python3 "$SCRIPT_DIR/export.py" "$@"
 }
 
