@@ -220,7 +220,8 @@ printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "com
 LEGACY="legacy-$(date -u +%s)"
 mkdir -p "$OUT/$LEGACY/transcript"
 echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
-run exports list | grep -q "$LEGACY" && ok "exports list aggregates legacy metadatos.json runs" || bad "legacy run aggregation"
+EXL=$(run exports list)
+printf '%s' "$EXL" | grep -q "$LEGACY" && ok "exports list aggregates legacy metadatos.json runs" || bad "legacy run aggregation"
 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null
@@ -454,6 +455,15 @@ SCHEMA="$TESTS_DIR/../presets.schema.json"
 EXAMPLE="$TESTS_DIR/../presets.json.example"
 python3 "$TESTS_DIR/validate_schema.py" "$SCHEMA" "$EXAMPLE" >/dev/null 2>&1 \
     && ok "presets.json.example satisfies presets.schema.json" || bad "example vs schema"
+# Anti-drift: presets.schema.json must equal what scripts/generate_schema.py produces
+python3 -c "
+import json, sys, importlib.util
+spec = importlib.util.spec_from_file_location('gen', '$TESTS_DIR/../scripts/generate_schema.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+expected = json.dumps(m.generate_schema(), indent=2, ensure_ascii=False)
+actual = json.dumps(json.load(open('$SCHEMA')), indent=2, ensure_ascii=False)
+sys.exit(0 if expected == actual else 1)
+" >/dev/null 2>&1 && ok "presets.schema.json matches scripts/generate_schema.py (no drift)" || bad "schema drift vs generate_schema.py"
 cat > "$TMP/schema-bad.json" <<'EOF'
 {"presets": {"double": {"product": "transcript", "products": {"memory": {}}}}}
 EOF

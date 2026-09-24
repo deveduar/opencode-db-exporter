@@ -119,9 +119,10 @@ serialized. In markdown, sanitization is applied to each string at the render po
 serialized text — it is markdown code content that nobody parses again, so there is
 no risk.
 
-Covered patterns (regex): `sk-`/`sk-ant-`, `ghp_`, `github_pat_`, `xox[baprs]-`,
-`AIza…`, `AKIA…`, JWT (`eyJ…`), multiline private PEM keys (`re.S`), variable names
-`*_API_KEY`, and sensitive `key=value` pairs (`password|token|api[_-]?key|…`).
+Covered patterns (high-confidence prefixes only, regex): `sk-`/`sk-ant-`, `ghp_`,
+`gho_`, `github_pat_`, `xox[baprs]-`, `AIza…`, `AKIA…`, JWT (`eyJ…`), `Bearer …`,
+and multiline private PEM keys (`re.S`). Deliberately **excluded** to avoid false
+positives: generic `key=value` pairs and bare env-var names (`*_API_KEY`).
 
 Assumed and documented limits: the regex is a *baseline*, not a semantic filter — a
 contextual secret (a password in prose without `=`/`:`) can slip through; it is not a
@@ -148,14 +149,16 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 Picker-driven with real fzf: TSV rows `key<TAB>display` (`--with-nth=2..`), **no
 TAB multi-select** — mode switches and bulk operations are their own rows. The export
 picker is **preset-first**: if the presets file exists, it lists each preset as a direct
-action (read with `jq`, core dep; bundle presets render as `[transcript+memory]`) +
-a `Manual…` row; without the file it is the classic
+action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle presets render as
+`[transcript+memory]`) — **no `Manual…` row** (the shipped default plans cover the
+three products with defaults); without the file it is the classic
 picker (ALL + sessions). Picking a preset asks next for **the selection** (`oc_preset_run`,
 reusing the session/ALL rows): **ALL** keeps the preset's embedded selection (runs as
 configured), **one session** runs `export <name> --filter <ses>` — selection is run-time
 state, not part of the plan identity, so a plan behaves ad-hoc just like raw flags (CLI-wins
 already implemented). The manual flow (`oc_export_flow`) is session (**or ALL**) →
-`oc_pick_product` (`transcript|memory|compactions`, 3 rows) → `oc_export_confirm` plan →
+`oc_pick_product` (`transcript|memory|compactions`, 3 rows taken straight from
+`exportlib/plan.py products`, legend via `products --legend`) → `oc_export_confirm` plan →
 run `export <product>` with its **default options** (+ `--filter <session>` when a session
 was picked). Menu labels explain *purpose and relative size*: product rows carry a
 "use it when…" tag; `oc_preset_purpose` annotates the shipped plans

@@ -64,7 +64,7 @@ Products run, by default, with their plain defaults:
 | faithful `--json` | off |
 | sessions | **all** (or `--filter` / `--sessions` to narrow) |
 
-The menu's `Manual…` uses exactly these defaults. To repeat a configured combination
+The menu's manual flow (no presets file) uses exactly these defaults. To repeat a configured combination
 again and again (and to run **several products under one stamp**) define a **plan** in
 `~/.config/opencode-db/presets.json` (created from `presets.json.example` at install;
 schema documented in `docs/schemas.md` and machine-checkable in
@@ -91,8 +91,9 @@ Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same session
 opencode-db menu  →  Export
 ```
 
-1. If the presets file exists you see your **plans** (each labeled with its purpose)
-   plus `Manual…`; without it, the session picker opens directly.
+1. If the presets file exists you see your **plans** (each labeled with its purpose);
+   there is **no `Manual…` row** — the shipped default plans cover the three products
+   with defaults. Without it, the session picker opens directly.
 2. Pick a **plan** → you are asked **which session or ALL SESSIONS**:
    - `ALL SESSIONS` = run the plan exactly as configured (its embedded selection
      applies);
@@ -104,7 +105,7 @@ opencode-db menu  →  Export
    `opencode-db exports list|view`.
 
 Without a presets file, the classic session → product flow with defaults remains
-(`Manual…` is the no-presets fallback). Tuning and multi-product runs belong to the
+(the menu's manual fallback). Tuning and multi-product runs belong to the
 presets file (plans) or to the CLI flags. ESC always climbs back / cancels.
 
 ## 4. Decision matrix
@@ -133,6 +134,6 @@ presets file (plans) or to the CLI flags. ESC always climbs back / cancels.
   path that writes the live DB is the opt-in `shrink --swap`.
 - Every machine artifact carries a `db_sha256` so you can correlate an export with the
   exact snapshot that produced it.
-- **`--sanitize` is best-effort**: it redacts known secret patterns (sk-, ghp_, Bearer,
-  JWT, PEM, key=value…) but is not a guarantee; always review the output before
-  sharing.
+- **`--sanitize` is best-effort**: it redacts high-confidence secret prefixes
+  (sk-, ghp_, Bearer, JWT, PEM…) but is not a guarantee; always review the output
+  before sharing.

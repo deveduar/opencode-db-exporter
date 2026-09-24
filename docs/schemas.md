@@ -20,8 +20,10 @@ Legend: `R?` = optional key.
 
 Source of truth for `opencode-db export <name>` and the export menu (preset-first
 when the file exists). Authoritative machine schema: `presets.schema.json`
-(draft-07). Runtime validation in `exportlib/presets.py` must stay in sync with
-that schema.
+(draft-07). **Both the schema and this table are generated from
+`modules/exportlib/flags.py`** (flags = the single source of truth; see
+`scripts/generate_schema.py`). Runtime validation in `exportlib/presets.py`
+imports the same key lists, so the three stay in sync by construction.
 
 ```jsonc
 {
@@ -51,22 +53,26 @@ that schema.
 }
 ```
 
-| Key | Type | Allowed | Applies |
-|---|---|---|---|
+> Table generated with `python3 scripts/generate_schema.py --docs` — do not edit by hand.
+
 | `product` | string | `transcript` \| `memory` \| `compactions` | single only (`full` is a CLI alias, **not** a preset product) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
 | Product flags (top level for single, per product for bundle): | | | |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
 | `sub` | string | `separate` \| `inline` \| `omit` | transcript |
 | `tool_output` | string | `full` \| `truncated` \| `omit` | transcript |
-| `tool_input_limit` / `tool_output_limit` | int ≥ 0 | — | transcript |
+| `tool_input_limit` | int | ≥ 0 | transcript |
+| `tool_output_limit` | int | ≥ 0 | transcript |
 | `patch` | string | `full` \| `omit` | transcript |
-| `role` | string | `all` \| `user` \| `assistant` | transcript/compactions |
-| `no_reasoning` / `mark_compactions` / `summary_diffs` | bool | — | transcript/compactions |
+| `no_reasoning` | bool | — | transcript, compactions |
+| `mark_compactions` | bool | — | transcript, compactions |
+| `summary_diffs` | bool | — | transcript, compactions |
+| `role` | string | `all` \| `user` \| `assistant` | transcript, compactions |
 | `json` | bool | — | transcript/compactions (faithful archive) |
 | `sanitize` | bool | — | any |
+| `cap` | int | 0 = unlimited (≥ 0) | memory |
 | `files` | bool | — | memory (touched files) |
-| `cap` | int ≥ 0 (0 = unlimited) | — | memory |
+| `out` | string | — | any — CLI-only (never a preset key) |
 
 Unknown keys fail (`additionalProperties: false`). Flags that a product ignores are
 harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole

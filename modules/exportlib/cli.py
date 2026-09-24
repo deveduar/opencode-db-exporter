@@ -24,6 +24,7 @@ from exportlib.render import Renderer
 from exportlib.transcript import append_transcript_inline, write_transcript
 from exportlib.util import die, safe_filename, sha256_file
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
+from exportlib.flags import FLAGS
 
 
 def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
@@ -88,32 +89,38 @@ def run_bundle(args) -> None:
         _write_bundle_index(idx_dir, args, stamp, products, db_path)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(prog="opencode-db export", description="Export opencode sessions (read-only).")
+def build_argparser() -> argparse.ArgumentParser:
+    """Build argparse.ArgumentParser from FLAGS registry (single source of truth)."""
+    ap = argparse.ArgumentParser(
+        prog="opencode-db export",
+        description="Export opencode sessions (read-only).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("profile", nargs="?", default="transcript",
                     help="product or named preset: transcript | memory | compactions | full | <preset from the presets file>")
-    ap.add_argument("--filter", help="SQL LIKE on session id/title, e.g. 'ses_f7%'")
-    ap.add_argument("--sessions", action="append", metavar="SESSION_ID",
-                    help="exact session id(s) to export (repeatable, comma-separated); overrides --filter / the preset selection")
-    ap.add_argument("--out", help="output root dir")
-    ap.add_argument("--sub", default="separate", choices=["separate", "inline", "omit"])
-    ap.add_argument("--tool-output", default="truncated", choices=["full", "truncated", "omit"])
-    ap.add_argument("--tool-input-limit", type=int, default=800)
-    ap.add_argument("--tool-output-limit", type=int, default=500)
-    ap.add_argument("--patch", default="full", choices=["full", "omit"])
-    ap.add_argument("--no-reasoning", action="store_true", help="transcript: omit the reasoning parts")
-    ap.add_argument("--mark-compactions", action="store_true")
-    ap.add_argument("--summary-diffs", action="store_true")
-    ap.add_argument("--role", default="all", choices=["all", "user", "assistant"],
-                    help="transcript/compactions: only render messages of one role")
-    ap.add_argument("--json", action="store_true",
-                    help="transcript/compactions: also write a faithful JSON archive per session")
-    ap.add_argument("--sanitize", action="store_true",
-                    help="redact secret-looking values (API keys, bearer tokens, private keys, key=...)")
-    ap.add_argument("--cap", type=int, default=0, help="memory: truncate each text value to N chars (0 = unlimited, default)")
-    ap.add_argument("--files", action="store_true", help="memory: include touched files per session")
+
+    # Selection + output root come from FLAGS (single source of truth): --filter
+    # and --sessions are mutually exclusive; --out is CLI-only (never a preset key).
+    sel_group = ap.add_mutually_exclusive_group()
+    for flag in FLAGS:
+        if flag.name == "filter":
+            sel_group.add_argument(f"--{flag.cli_name}", help=flag.cli_help)
+        elif flag.name == "sessions":
+            sel_group.add_argument(f"--{flag.cli_name}", action="append", metavar="SESSION_ID",
+                                   help=flag.cli_help)
+        elif flag.name == "out":
+            ap.add_argument(f"--{flag.cli_name}", help=flag.cli_help)
+        else:
+            ap.add_argument(f"--{flag.cli_name}", **flag.argparse_args())
+
+    # Hidden/internal args
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
+    return ap
+
+
+def main() -> None:
+    ap = build_argparser()
     args = ap.parse_args()
     resolve_profile(args, ap)
 

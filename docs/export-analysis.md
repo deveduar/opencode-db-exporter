@@ -374,10 +374,33 @@ confirm step explicit about what will be produced.
   display filters (`tool_output`, `role`, `no_reasoning`, `tool_input_limit`) do NOT
   apply to the JSON archive, which is always raw/unfiltered (except `sanitize`).
 - **Sanitize caveat** — when `sanitize` is active, the plan prints a bold warning:
-  "sanitize redacts known secret patterns (sk-, ghp_, Bearer, JWT, PEM, key=value…)
-  — best-effort, NOT a guarantee; verify output before sharing." The README and guide
+  "sanitize redacts safe prefixes only (sk-, ghp_, AKIA, JWT, PEM) — review output."
+  — best-effort, NOT a guarantee; verify output before sharing. Later reduced to
+  high-confidence prefixes only (dropped generic `key=value` and `*_API_KEY` name
+  patterns) so `share` no longer ships with `sanitize` baked in. The README and guide
   were updated accordingly; the term "public-safe" was softened to "publish transcript
   (best-effort redaction)".
 - **Tests** — menu_flow grew with assertions for the new helpers
   (`oc_annotate_flags`, `oc_export_plan`) and the absence of `Manual` in presets mode
   (75 OK).
+- **Phase 2 (plan API)** — the plan logic moved out of `menu.sh` jq into
+  `exportlib/plan.py`: `resolve()` is the single resolver (product keyword or preset
+  name → full JSON plan) and the CLI bridge (`rows`/`names`/`descr`/`purpose`/`legend`/
+  `resolve`/`plan`) feeds the menu helpers (`oc_plan_py` pins `OCED_PRESETS`). Product
+  intros, shipped-plan purposes (`PLAN_PURPOSE`), row tags and the "Will produce:" block
+  are byte-for-byte compatible with the old jq output; edit them in `plan.py`, not in
+  `menu.sh` (menu.sh only shells out).
+- **Phase 3 (dedup, follow-up)** — cash in on the python bridge: the hardcoded
+  `export products:/export flags:` block moved from `opencode-db.sh help()` into
+  `flags.py --help-exports` (`PRODUCT_HELP`/`FLAG_HELP`, byte-identical output);
+  `oc_pick_product` rows + legend now come from `plan.py products`/`products --legend`
+  (was menu.sh literals); `cli.py` builds `--filter`/`--sessions`/`--out` straight from
+  `FLAGS` (single source, no more hand-declared argparse row); `generate_schema.py`
+  reuses `get_flags_for_product` + `PRODUCT_KEYWORDS` instead of inlining product lists;
+  the product registry moved to `flags.py` (`PRODUCTS`/`PRODUCT_KEYWORDS`/
+  `PRODUCT_INTRO`). Dead python helpers/imports pruned (`get_global_flags`,
+  `get_flag_by_name`, `get_product_flag_names`, `get_choice_choices`, `get_int_min`,
+  `get_*_flag_names`, `flag_to_json_schema`, `flag_to_argparse_kwargs`). Docs aligned:
+  the pre-existing `Manual…` contradiction in `architecture.md`/`export-guide.md` (a row
+  that no longer exists) is fixed and README flags list now points at
+  `opencode-db export --help` + `docs/schemas.md` §1.

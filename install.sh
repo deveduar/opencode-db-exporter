@@ -47,7 +47,7 @@ sync_dir() {
     fi
 }
 
-for path in modules tests; do
+for path in modules tests scripts; do
     sync_dir "$path"
 done
 

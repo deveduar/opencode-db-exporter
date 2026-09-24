@@ -4,7 +4,7 @@
 #   {"presets": {"clean": {"product": "transcript", "json": true, "sanitize": true,
 #                          "no_reasoning": true, "filter": "Project Beta"},
 #                "everything": {"products": {"transcript": {"json": true, "tool_output": "full"},
-#                                            "memory": {"files": true}}}}
+#                                            "memory": {"files": true}}}}}
 # A preset pins the product + config flags and optionally the selection
 # ('filter' LIKE pattern, or exact 'sessions' ids — not both). A single preset
 # uses 'product' (transcript | memory | compactions); a BUNDLE preset uses
@@ -18,22 +18,24 @@ from pathlib import Path
 
 from exportlib.config import default_presets
 from exportlib.util import die
+from exportlib.flags import (
+    FLAGS,
+    PRODUCTS,
+    PRODUCT_KEYWORDS,
+    BUNDLE_PRODUCT_KEYS,
+    SELECTION_KEYS,
+    SINGLE_PRESET_KEYS,
+    BUNDLE_PRESET_KEYS,
+)
 
-_PRODUCTS = ["transcript", "memory", "compactions", "full"]
-_PRESET_KEYS_CHOICES = {
-    "sub": ["separate", "inline", "omit"],
-    "tool_output": ["full", "truncated", "omit"],
-    "tool_input_limit": None,   # int
-    "tool_output_limit": None,  # int
-    "patch": ["full", "omit"],
-    "role": ["all", "user", "assistant"],
-}
-_PRESET_KEYS_BOOL = ["no_reasoning", "mark_compactions", "summary_diffs", "json", "sanitize", "files"]
-_PRESET_KEYS_SELECTION = ["filter", "sessions"]
-_PRESET_KEYS = (["product"] + list(_PRESET_KEYS_CHOICES) + _PRESET_KEYS_BOOL
-                + _PRESET_KEYS_SELECTION + ["cap"])
-_PRESET_KEYS_BUNDLE = _PRESET_KEYS + ["products"]
-_PRODUCT_FLAG_KEYS = list(_PRESET_KEYS_CHOICES) + _PRESET_KEYS_BOOL + ["cap"]
+# Re-export for backwards compat
+_PRODUCTS = PRODUCTS
+_PRODUCT_FLAG_KEYS = {k: v for k, v in BUNDLE_PRODUCT_KEYS.items()}
+_PRESET_KEYS_CHOICES = {f.name: f.choices for f in FLAGS if f.flag_type == "choice"}
+_PRESET_KEYS_BOOL = [f.name for f in FLAGS if f.flag_type == "bool"]
+_PRESET_KEYS_SELECTION = SELECTION_KEYS
+_PRESET_KEYS = SINGLE_PRESET_KEYS
+_PRESET_KEYS_BUNDLE = BUNDLE_PRESET_KEYS
 
 
 def load_presets() -> dict:
@@ -127,13 +129,14 @@ def apply_preset(args, name: str, pdata: dict) -> None:
 def apply_bundle(args, name: str, pdata: dict) -> None:
     """Bundle preset: 'products' = {product: flags}. Selection stays top-level and
     shared by every product; per-product config is applied when each product runs."""
+    # Check for conflicting product/products first
+    if "product" in pdata:
+        die(f"preset '{name}': use either 'product' or 'products', not both")
     for k in pdata:
         if k not in _PRESET_KEYS_BUNDLE:
             die(
                 f"preset '{name}': unknown key '{k}' (allowed: {' | '.join(_PRESET_KEYS_BUNDLE)})"
             )
-    if "product" in pdata:
-        die(f"preset '{name}': use either 'product' or 'products', not both")
     _apply_selection(args, name, pdata)
     products = pdata["products"]
     if not isinstance(products, dict) or not products:
@@ -145,8 +148,9 @@ def apply_bundle(args, name: str, pdata: dict) -> None:
         if not isinstance(cfg, dict):
             die(f"preset '{name}': products.{prod} must be an object of flags (got {type(cfg).__name__})")
         for k in cfg:
-            if k not in _PRODUCT_FLAG_KEYS:
-                die(f"preset '{name}': unknown key '{k}' in products.{prod} (allowed: {' | '.join(_PRODUCT_FLAG_KEYS)})")
+            allowed = _PRODUCT_FLAG_KEYS.get(prod, [])
+            if k not in allowed:
+                die(f"preset '{name}': unknown key '{k}' in products.{prod} (allowed: {' | '.join(allowed)})")
             _validate_value(name, k, cfg[k])
         cleaned[prod] = dict(cfg)
     args.bundle = cleaned

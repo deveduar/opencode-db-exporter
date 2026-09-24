@@ -91,6 +91,13 @@ printf '%s' "$PROD" | grep -q '__FULLMEM__' && bad "bundle variant leaked into t
 printf '%s' "$PROD" | grep -q '__CUSTOM__' && bad "custom checklist leaked into the product picker" || ok "product picker has NO custom checklist"
 printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product picker" || ok "product picker has NO variant rows"
 
+echo "== help exports block stays in sync with FLAGS (flags.py --help-exports) =="
+HELPEXPORTS=$(python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports) || bad "flags.py --help-exports exited non-zero"
+printf '%s' "$HELPEXPORTS" | grep -q "^export products (default: transcript):" && ok "help block: products header" || bad "help block missing products header"
+for cli in filter sessions out sub tool-output patch mark-compactions no-reasoning summary-diffs role json sanitize cap; do
+    printf '%s' "$HELPEXPORTS" | grep -q -- "--$cli" && ok "help block covers --$cli" || bad "help block missing --$cli"
+done
+
 echo "== oc_read_int (interactive integer input) =="
 reset
 V=$(printf '5\n' | oc_read_int "Count" 2>/dev/null); [ "$V" = "5" ] && ok "oc_read_int reads a number" || bad "oc_read_int number: '$V'"

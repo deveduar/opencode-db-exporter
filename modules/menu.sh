@@ -352,57 +352,22 @@ oc_sessions_picker() {
 # preset = product + config + its own selection (filter/sessions). Manual… =
 # session-or-ALL -> product (runs with its default options). No presets file ->
 # the picker directly (identical behavior).
+# All preset plan logic lives in exportlib/plan.py (resolve() + CLI bridge);
+# these shells shims pin OCED_PRESETS for the python process (common.sh only
+# sets it as a shell variable when using the built-in default).
 #-----------------------------------------------------------------------
+oc_plan_py() {
+    OCED_PRESETS="$OCED_PRESETS" python3 "$SCRIPT_DIR/exportlib/plan.py" "$@" 2>/dev/null
+}
+
 oc_preset_rows() {
     [ -f "${OCED_PRESETS:-}" ] || return 1
-    local out
-    out=$(jq -r '.presets | to_entries[] |
-        ((.value.product // ((.value.products // {}) | keys_unsorted | join("+"))) // "?") as $p |
-        (if (.value.products // null) != null then
-            (.value.products | keys_unsorted | join("+"))
-         else
-            .value.product // ""
-         end) as $products |
-        (if (.value.products // null) != null then
-            (.value.products.transcript.tool_output // "default" | ascii_downcase)
-         else
-            (.value.tool_output // "default" | ascii_downcase)
-         end) as $to |
-        (if (.value | has("filter")) then "filter:" + (.value.filter|tostring)
-         elif (.value | has("sessions")) then "sessions:" + ((.value.sessions|length)|tostring)
-         else "—" end) as $sel |
-        if $p == "transcript+memory" and $to == "full" then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · lossless (full outputs + JSON)"
-        elif $p == "transcript+memory" and $to == "truncated" then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · daily (truncated outputs + JSON)"
-        elif $p == "transcript" and (.value.sanitize // false) == true then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · share (sanitized, no reasoning)"
-        elif $p == "transcript" and (.value.no_reasoning // false) == true and (.value.json // false) == true then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · share (no reasoning, JSON)"
-        elif $p == "transcript" then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · read (transcript defaults)"
-        elif $p == "memory" then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · RAG (memory defaults)"
-        elif $p == "compactions" then
-            "__PRESET_" + .key + "\t" + .key + "  [" + $products + "]  " + $sel + "  · digest (compactions only)"
-        else
-            "__PRESET_" + .key + "\t" + .key + "  [" + $p + "]  " + $sel
-        end' \
-        "$OCED_PRESETS" 2>/dev/null) || return 1
-    [ -n "$out" ] || return 1
-    printf '%s\n' "$out"
+    oc_plan_py rows
 }
 
 oc_preset_descr() { # $1=preset-name -> one-line selection summary (plan line)
     [ -f "${OCED_PRESETS:-}" ] || return 1
-    jq -r --arg n "$1" '.presets[$n] |
-        (((.product // ((.products // {}) | keys_unsorted | join("+"))) // "?") as $p |
-         (if ((.product // null) != null) then "product" else "products" end) as $pw |
-         (if (has("filter")) then "filter:" + (.filter|tostring)
-          elif (has("sessions")) then "sessions: " + (.sessions|join(", "))
-          else "ALL sessions" end) as $sel |
-         $sel + " · " + $pw + " " + $p + " · config " + ((. | del(.product, .products, .filter, .sessions) | keys | join(",")) // "-"))' \
-        "$OCED_PRESETS" 2>/dev/null || return 1
+    oc_plan_py descr "$1" || return 1
 }
 
 oc_export_rows() {
@@ -606,159 +571,48 @@ oc_exports_picker() {
 # Each product runs with its default options in the menu; tuning lives in the
 # presets file (OCED_PRESETS) or the CLI flags.
 # Rows stay SHORT; the "use it when / size / redundancy" legend lives in the header.
+# The rows and the legend are served by exportlib/plan.py (`products` subcommand).
 oc_pick_product() {
-    printf '%s\n' \
-        $'transcript\tREAD / SHARE / AUDIT — the full conversation as Markdown (per session)' \
-        $'memory\tFEED ANOTHER AI — machine-readable corpus (corpus.jsonl, one line per session)' \
-        $'compactions\tQUICK KNOWLEDGE REVIEW — only the compaction summaries' \
-        | oc_fzf_sel "export product" $'Choose ONE product (runs with DEFAULT options; ESC: back):'$'\n'\
-$'   transcript   HEAVY, human-readable: your asks, the answers, reasoning, every tool call + output'$'\n'\
-$'                and the code patches, compaction digests inline. Add --json for a faithful machine archive.'$'\n'\
-$'   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL'$'\n'\
-$'                compaction digests per session. For feeding another AI (RAG); streamed line by line.'$'\n'\
-$'   compactions  TINY extract: only the compaction summaries (the knowledge arc of a session). Already'$'\n'\
-$'                inside transcript AND memory — standalone is just a fast skim.'$'\n'\
-$'Tune flags via the presets file (plans) or the CLI.' 
+    local rows legend
+    rows=$(oc_plan_py products) || return 1
+    legend=$(oc_plan_py products --legend)
+    printf '%s\n' "$rows" | oc_fzf_sel "export product" "$legend"
 }
 
 # oc_preset_purpose <name> -> one-line purpose for the shipped plans (unknown -> 1).
+# The purpose map lives in exportlib/plan.py (PLAN_PURPOSE) — the single source.
 oc_preset_purpose() {
-    case "$1" in
-        archive) printf 'lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)' ;;
-        quick)   printf 'light daily review: same backup, truncated tool outputs (fast, compact)' ;;
-        share)   printf 'publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)' ;;
-        notes)   printf 'plain conversation read: transcript with default options' ;;
-        rag)     printf 'corpus for another AI: memory with default options' ;;
-        digest)  printf 'knowledge arc: only the compaction summaries' ;;
-        *)       return 1 ;;
-    esac
+    oc_plan_py purpose "$1"
 }
 
 # oc_preset_names -> preset names present in OCED_PRESETS (one per line).
 oc_preset_names() {
     [ -f "${OCED_PRESETS:-}" ] || return 1
-    jq -r '.presets | keys[]' "$OCED_PRESETS" 2>/dev/null || return 1
+    oc_plan_py names
 }
 
 # oc_preset_legend -> header lines explaining each shipped plan that exists in the
 # file (keeps the picker rows short: purpose never overflows a row).
 oc_preset_legend() {
-    local names name p
-    names=$(oc_preset_names 2>/dev/null) || return 0
-    [ -n "$names" ] || return 0
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        if p=$(oc_preset_purpose "$name"); then
-            printf '   %-6s %s\n' "$name" "$p"
-        fi
-    done <<< "$names"
-    return 0
-}
-
-# oc_product_intro <product> -> one-line description for the plan confirm.
-oc_product_intro() {
-    case "$1" in
-        transcript)  printf 'Markdown conversation per session — everything you see + reasoning + tool calls' ;;
-        memory)      printf 'RAG corpus corpus.jsonl — one line per root session, machine facts (tokens, todos, tools, digests)' ;;
-        compactions) printf 'Markdown digests only — the compacted knowledge arc (extract of transcript/memory)' ;;
-        *)           return 1 ;;
-    esac
-}
-
-# oc_preset_products <preset> -> one product per line (transcript|memory|compactions).
-oc_preset_products() {
-    [ -f "${OCED_PRESETS:-}" ] || return 1
-    jq -r --arg n "$1" '
-        if .presets[$n].products then .presets[$n].products | keys_unsorted[]
-        elif .presets[$n].product then .presets[$n].product
-        else empty end
-    ' "$OCED_PRESETS" 2>/dev/null || return 1
-}
-
-# oc_preset_product_flags <preset> <product> -> comma-separated key=val of that product's flags.
-oc_preset_product_flags() {
-    local pre="$1" p="$2"
-    [ -f "${OCED_PRESETS:-}" ] || return 1
-    jq -r --arg n "$pre" --arg p "$p" '
-        .presets[$n] as $pre |
-        (if $pre.products then $pre.products[$p] // {} else $pre end)
-        | to_entries | map(.key + "=" + (.value|tostring)) | join(",")
-    ' "$OCED_PRESETS" 2>/dev/null || return 1
-}
-
-# oc_preset_has_flag <preset> <flag> -> 0 if any product has flag=true (or single preset flag).
-oc_preset_has_flag() {
-    local pre="$1" flag="$2"
-    [ -f "${OCED_PRESETS:-}" ] || return 1
-    jq -e --arg n "$pre" --arg f "$flag" '
-        .presets[$n] as $pre |
-        (if $pre.products then
-            ($pre.products | to_entries | map(.value[$f] == true) | any)
-        else
-            ($pre[$f] == true)
-        end)
-    ' "$OCED_PRESETS" 2>/dev/null >/dev/null
+    [ -f "${OCED_PRESETS:-}" ] || return 0
+    oc_plan_py legend
 }
 
 # oc_annotate_flags <csv> -> human bits: "+ faithful JSON (raw)", "full tool outputs", etc.
+# Hints are defined in exportlib/flags.py (ANNOTATE_HINTS) — the single source of truth.
 oc_annotate_flags() {
-    local csv="$1" out="" kv key val
+    local csv="$1"
     [ -n "$csv" ] || return 0
-    IFS=',' read -r -a pairs <<< "$csv"
-    for kv in "${pairs[@]}"; do
-        key="${kv%%=*}"; val="${kv#*=}"
-        case "$key:$val" in
-            json:true)                    out="$out · +faithful JSON (raw, unfiltered)" ;;
-            tool_output:full)             out="$out · full tool outputs" ;;
-            tool_output:truncated)        out="$out · truncated tool outputs" ;;
-            tool_output:omit)             out="$out · no tool outputs" ;;
-            no_reasoning:true)            out="$out · reasoning omitted" ;;
-            sanitize:true)                out="$out · sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…)" ;;
-            files:true)                   out="$out · touched files" ;;
-            cap:*)                        [ "$val" != 0 ] && out="$out · cap $val chars" ;;
-            sub:inline)                   out="$out · subagents inline" ;;
-            sub:omit)                     out="$out · subagents omitted" ;;
-            summary_diffs:true)           out="$out · per-message diff summaries" ;;
-            mark_compactions:true)        out="$out · compaction markers" ;;
-            role:assistant|role:user)     out="$out · role '$val'" ;;
-            patch:omit)                   out="$out · patches omitted" ;;
-        esac
-    done
-    printf '%s' "${out# ·}"
+    python3 "$SCRIPT_DIR/exportlib/flags.py" --annotate "$csv" 2>/dev/null
 }
 
 # oc_export_plan <profile> -> multi-line "Will produce:" block for the confirm.
 # profile = preset name OR product keyword (transcript|memory|compactions).
 # Output has NO leading indentation; caller adds uniform indentation.
+# Fully computed in exportlib/plan.py (resolve()) — the single source of truth
+# for product intros, per-product flags/bits, Notes and the sanitize warning.
 oc_export_plan() {
-    local profile="$1" prod intro bits products flags
-    products=$(oc_preset_products "$profile" 2>/dev/null)
-    if [ -n "$products" ]; then
-        while IFS= read -r prod; do
-            [ -n "$prod" ] || continue
-            intro=$(oc_product_intro "$prod") || intro="$prod"
-            flags=$(oc_preset_product_flags "$profile" "$prod" 2>/dev/null)
-            bits=$(oc_annotate_flags "$flags")
-            printf '%s:\n' "$prod"
-            printf '  - %s\n' "$intro"
-            if [ -n "$bits" ]; then
-                printf '%s\n' "$bits" | sed 's/ · /\n  - /g'
-            fi
-        done <<< "$products"
-    elif case "$profile" in transcript|memory|compactions) true ;; *) false ;; esac; then
-        intro=$(oc_product_intro "$profile") || intro="$profile"
-        printf '%s:\n' "$profile"
-        printf '  - %s (default options)\n' "$intro"
-    fi
-    if oc_preset_has_flag "$profile" json 2>/dev/null; then
-        printf 'Notes:\n'
-        printf '  - faithful JSON is raw/unfiltered (all messages, reasoning & full tool outputs)\n'
-        printf '  - markdown display filters (tool_output, role, no_reasoning, tool_input_limit) do not apply to the JSON\n'
-    fi
-    if oc_preset_has_flag "$profile" sanitize 2>/dev/null; then
-        printf '\n! sanitize redacts safe prefixes only (sk-, ghp_, AKIA, JWT, PEM) — review output.\n'
-    fi
-    return 0
+    oc_plan_py plan "$1"
 }
 
 # oc_export_confirm <profile-label> <filter-or-empty> <spec> -> print the plan + ask.

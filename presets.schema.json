@@ -5,101 +5,285 @@
   "description": "Contract for the OCED_PRESETS file, the source of truth for `opencode-db export <name>` and the export menu. A preset is either a single product (key `product`) or a bundle of products under one stamp (key `products`). Full schema notes and the other contracts live in docs/schemas.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["presets"],
+  "required": [
+    "presets"
+  ],
   "properties": {
     "presets": {
       "type": "object",
       "description": "Name -> preset. Names conflict with product keywords (transcript|memory|compactions|full) are allowed as data, but `export <name>` always resolves a keyword first.",
-      "additionalProperties": { "$ref": "#/definitions/preset" }
+      "additionalProperties": {
+        "$ref": "#/definitions/preset"
+      }
     }
   },
   "definitions": {
-    "nonNegInt": { "type": "integer", "minimum": 0 },
-    "bool":     { "type": "boolean" },
-    "filter":   { "type": "string", "minLength": 1, "description": "SQL LIKE pattern on session id/title (session selection)." },
+    "nonNegInt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bool": {
+      "type": "boolean"
+    },
+    "filter": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SQL LIKE pattern on session id/title (session selection)."
+    },
     "sessions": {
       "type": "array",
       "minItems": 1,
       "description": "Exact session ids (session selection; exclusive with a preset 'filter').",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "flagSub":          { "type": "string", "enum": ["separate", "inline", "omit"] },
-    "flagToolOutput":   { "type": "string", "enum": ["full", "truncated", "omit"] },
-    "flagPatch":        { "type": "string", "enum": ["full", "omit"] },
-    "flagRole":         { "type": "string", "enum": ["all", "user", "assistant"] },
-    "flagJson":         { "$ref": "#/definitions/bool", "description": "transcript/compactions: write a faithful JSON archive per session." },
-    "flagSanitize":     { "$ref": "#/definitions/bool", "description": "redact secret-looking values in memory before serializing." },
-    "flagNoReasoning":  { "$ref": "#/definitions/bool", "description": "transcript: omit the reasoning parts." },
-    "flagMarkCompactions": { "$ref": "#/definitions/bool" },
-    "flagSummaryDiffs": { "$ref": "#/definitions/bool" },
-    "flagFiles":        { "$ref": "#/definitions/bool", "description": "memory: include touched files per session." },
-    "flagCap":          { "$ref": "#/definitions/nonNegInt", "description": "memory: truncate each text value to N chars (0 = unlimited)." },
-    "flagToolInputLimit":  { "$ref": "#/definitions/nonNegInt" },
-    "flagToolOutputLimit": { "$ref": "#/definitions/nonNegInt" },
-
+    "flagFilter": {
+      "type": "string",
+      "description": "SQL LIKE pattern on session id/title (e.g., ses_f7%%)"
+    },
+    "flagSessions": {
+      "type": "string",
+      "description": "Exact session ids to export (repeatable)"
+    },
+    "flagOut": {
+      "type": "string",
+      "description": "Output root directory"
+    },
+    "flagSub": {
+      "type": "string",
+      "enum": [
+        "separate",
+        "inline",
+        "omit"
+      ],
+      "description": "How to render subagent sessions"
+    },
+    "flagTool_output": {
+      "type": "string",
+      "enum": [
+        "full",
+        "truncated",
+        "omit"
+      ],
+      "description": "Tool output verbosity in transcript"
+    },
+    "flagTool_input_limit": {
+      "type": "integer",
+      "description": "Max chars of tool input to show (0 = unlimited)",
+      "minimum": 0
+    },
+    "flagTool_output_limit": {
+      "type": "integer",
+      "description": "Max chars of tool output to show (0 = unlimited)",
+      "minimum": 0
+    },
+    "flagPatch": {
+      "type": "string",
+      "enum": [
+        "full",
+        "omit"
+      ],
+      "description": "Whether to include patch/diff output"
+    },
+    "flagNo_reasoning": {
+      "type": "boolean",
+      "description": "Omit reasoning parts from output"
+    },
+    "flagMark_compactions": {
+      "type": "boolean",
+      "description": "Mark compaction boundaries in output"
+    },
+    "flagSummary_diffs": {
+      "type": "boolean",
+      "description": "Include per-message change summaries"
+    },
+    "flagRole": {
+      "type": "string",
+      "enum": [
+        "all",
+        "user",
+        "assistant"
+      ],
+      "description": "Filter messages by role"
+    },
+    "flagJson": {
+      "type": "boolean",
+      "description": "Write faithful JSON archive per session"
+    },
+    "flagSanitize": {
+      "type": "boolean",
+      "description": "Redact safe secret prefixes (sk-, ghp_, AKIA, JWT, PEM) — best effort"
+    },
+    "flagCap": {
+      "type": "integer",
+      "description": "Truncate each text value to N chars (0 = unlimited)",
+      "minimum": 0
+    },
+    "flagFiles": {
+      "type": "boolean",
+      "description": "Include touched files per session"
+    },
     "flagProps": {
       "description": "Config flags accepted (single: at the preset's top level; bundle: per product). Product-flags that do not affect a product (e.g. cap/files on transcript, json on memory) are ignored.",
       "type": "object",
       "properties": {
-        "sub":                 { "$ref": "#/definitions/flagSub" },
-        "tool_output":         { "$ref": "#/definitions/flagToolOutput" },
-        "tool_input_limit":    { "$ref": "#/definitions/flagToolInputLimit" },
-        "tool_output_limit":   { "$ref": "#/definitions/flagToolOutputLimit" },
-        "patch":               { "$ref": "#/definitions/flagPatch" },
-        "role":                { "$ref": "#/definitions/flagRole" },
-        "no_reasoning":        { "$ref": "#/definitions/flagNoReasoning" },
-        "mark_compactions":    { "$ref": "#/definitions/flagMarkCompactions" },
-        "summary_diffs":       { "$ref": "#/definitions/flagSummaryDiffs" },
-        "json":                { "$ref": "#/definitions/flagJson" },
-        "sanitize":            { "$ref": "#/definitions/flagSanitize" },
-        "files":               { "$ref": "#/definitions/flagFiles" },
-        "cap":                 { "$ref": "#/definitions/flagCap" }
+        "filter": {
+          "$ref": "#/definitions/flagFilter"
+        },
+        "sessions": {
+          "$ref": "#/definitions/flagSessions"
+        },
+        "out": {
+          "$ref": "#/definitions/flagOut"
+        },
+        "sub": {
+          "$ref": "#/definitions/flagSub"
+        },
+        "tool_output": {
+          "$ref": "#/definitions/flagTool_output"
+        },
+        "tool_input_limit": {
+          "$ref": "#/definitions/flagTool_input_limit"
+        },
+        "tool_output_limit": {
+          "$ref": "#/definitions/flagTool_output_limit"
+        },
+        "patch": {
+          "$ref": "#/definitions/flagPatch"
+        },
+        "no_reasoning": {
+          "$ref": "#/definitions/flagNo_reasoning"
+        },
+        "mark_compactions": {
+          "$ref": "#/definitions/flagMark_compactions"
+        },
+        "summary_diffs": {
+          "$ref": "#/definitions/flagSummary_diffs"
+        },
+        "role": {
+          "$ref": "#/definitions/flagRole"
+        },
+        "json": {
+          "$ref": "#/definitions/flagJson"
+        },
+        "sanitize": {
+          "$ref": "#/definitions/flagSanitize"
+        },
+        "cap": {
+          "$ref": "#/definitions/flagCap"
+        },
+        "files": {
+          "$ref": "#/definitions/flagFiles"
+        }
       }
     },
-
     "selectionProps": {
       "description": "Shared session selection (filter LIKE or exact sessions, never both; a CLI --filter/--sessions voids it).",
       "type": "object",
       "properties": {
-        "filter":   { "$ref": "#/definitions/filter" },
-        "sessions": { "$ref": "#/definitions/sessions" }
+        "filter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SQL LIKE pattern on session id/title"
+        },
+        "sessions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Exact session ids"
+        }
       },
-      "not": { "required": ["filter", "sessions"] }
+      "not": {
+        "required": [
+          "filter",
+          "sessions"
+        ]
+      }
     },
-
     "preset": {
       "oneOf": [
         {
           "title": "single-product preset",
           "type": "object",
           "additionalProperties": false,
-          "required": ["product"],
+          "required": [
+            "product"
+          ],
           "properties": {
-            "product": { "type": "string", "enum": ["transcript", "memory", "compactions"],
-                         "description": "full is a CLI alias, not a preset product." },
-            "sub":                 { "$ref": "#/definitions/flagSub" },
-            "tool_output":         { "$ref": "#/definitions/flagToolOutput" },
-            "tool_input_limit":    { "$ref": "#/definitions/flagToolInputLimit" },
-            "tool_output_limit":   { "$ref": "#/definitions/flagToolOutputLimit" },
-            "patch":               { "$ref": "#/definitions/flagPatch" },
-            "role":                { "$ref": "#/definitions/flagRole" },
-            "no_reasoning":        { "$ref": "#/definitions/flagNoReasoning" },
-            "mark_compactions":    { "$ref": "#/definitions/flagMarkCompactions" },
-            "summary_diffs":       { "$ref": "#/definitions/flagSummaryDiffs" },
-            "json":                { "$ref": "#/definitions/flagJson" },
-            "sanitize":            { "$ref": "#/definitions/flagSanitize" },
-            "files":               { "$ref": "#/definitions/flagFiles" },
-            "cap":                 { "$ref": "#/definitions/flagCap" },
-            "filter":              { "$ref": "#/definitions/filter" },
-            "sessions":            { "$ref": "#/definitions/sessions" }
+            "product": {
+              "type": "string",
+              "enum": [
+                "transcript",
+                "memory",
+                "compactions"
+              ],
+              "description": "full is a CLI alias, not a preset product."
+            },
+            "sub": {
+              "$ref": "#/definitions/flagSub"
+            },
+            "tool_output": {
+              "$ref": "#/definitions/flagTool_output"
+            },
+            "tool_input_limit": {
+              "$ref": "#/definitions/flagTool_input_limit"
+            },
+            "tool_output_limit": {
+              "$ref": "#/definitions/flagTool_output_limit"
+            },
+            "patch": {
+              "$ref": "#/definitions/flagPatch"
+            },
+            "no_reasoning": {
+              "$ref": "#/definitions/flagNo_reasoning"
+            },
+            "mark_compactions": {
+              "$ref": "#/definitions/flagMark_compactions"
+            },
+            "summary_diffs": {
+              "$ref": "#/definitions/flagSummary_diffs"
+            },
+            "role": {
+              "$ref": "#/definitions/flagRole"
+            },
+            "json": {
+              "$ref": "#/definitions/flagJson"
+            },
+            "sanitize": {
+              "$ref": "#/definitions/flagSanitize"
+            },
+            "cap": {
+              "$ref": "#/definitions/flagCap"
+            },
+            "files": {
+              "$ref": "#/definitions/flagFiles"
+            },
+            "filter": {
+              "$ref": "#/definitions/filter"
+            },
+            "sessions": {
+              "$ref": "#/definitions/sessions"
+            }
           },
-          "not": { "required": ["filter", "sessions"] }
+          "not": {
+            "required": [
+              "filter",
+              "sessions"
+            ]
+          }
         },
         {
           "title": "bundle preset",
           "type": "object",
           "additionalProperties": false,
-          "required": ["products"],
+          "required": [
+            "products"
+          ],
           "properties": {
             "products": {
               "type": "object",
@@ -111,29 +295,61 @@
                   "description": "Per-product flags; the selection (top level) is shared by every product.",
                   "additionalProperties": false,
                   "properties": {
-                    "sub":                 { "$ref": "#/definitions/flagSub" },
-                    "tool_output":         { "$ref": "#/definitions/flagToolOutput" },
-                    "tool_input_limit":    { "$ref": "#/definitions/flagToolInputLimit" },
-                    "tool_output_limit":   { "$ref": "#/definitions/flagToolOutputLimit" },
-                    "patch":               { "$ref": "#/definitions/flagPatch" },
-                    "role":                { "$ref": "#/definitions/flagRole" },
-                    "no_reasoning":        { "$ref": "#/definitions/flagNoReasoning" },
-                    "mark_compactions":    { "$ref": "#/definitions/flagMarkCompactions" },
-                    "summary_diffs":       { "$ref": "#/definitions/flagSummaryDiffs" },
-                    "json":                { "$ref": "#/definitions/flagJson" },
-                    "sanitize":            { "$ref": "#/definitions/flagSanitize" },
-                    "files":               { "$ref": "#/definitions/flagFiles" },
-                    "cap":                 { "$ref": "#/definitions/flagCap" }
+                    "sub": {
+                      "$ref": "#/definitions/flagSub"
+                    },
+                    "tool_output": {
+                      "$ref": "#/definitions/flagTool_output"
+                    },
+                    "tool_input_limit": {
+                      "$ref": "#/definitions/flagTool_input_limit"
+                    },
+                    "tool_output_limit": {
+                      "$ref": "#/definitions/flagTool_output_limit"
+                    },
+                    "patch": {
+                      "$ref": "#/definitions/flagPatch"
+                    },
+                    "no_reasoning": {
+                      "$ref": "#/definitions/flagNo_reasoning"
+                    },
+                    "mark_compactions": {
+                      "$ref": "#/definitions/flagMark_compactions"
+                    },
+                    "summary_diffs": {
+                      "$ref": "#/definitions/flagSummary_diffs"
+                    },
+                    "role": {
+                      "$ref": "#/definitions/flagRole"
+                    },
+                    "json": {
+                      "$ref": "#/definitions/flagJson"
+                    },
+                    "sanitize": {
+                      "$ref": "#/definitions/flagSanitize"
+                    },
+                    "cap": {
+                      "$ref": "#/definitions/flagCap"
+                    },
+                    "files": {
+                      "$ref": "#/definitions/flagFiles"
+                    }
                   }
                 }
               }
             },
-            "filter":              { "$ref": "#/definitions/filter" },
-            "sessions":            { "$ref": "#/definitions/sessions" }
+            "filter": {
+              "$ref": "#/definitions/filter"
+            },
+            "sessions": {
+              "$ref": "#/definitions/sessions"
+            }
           },
           "not": {
-            "title": "selection may use filter or sessions, not both",
-            "required": ["filter", "sessions"]
+            "required": [
+              "filter",
+              "sessions"
+            ]
           }
         }
       ]

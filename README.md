@@ -89,28 +89,21 @@ keep-N / last-N-days / since date).
 
 ## Export
 
-Products:
+Products: `transcript` (the conversation, markdown) · `memory` (RAG corpus,
+`corpus.jsonl`) · `compactions` (the compacted-context digests). `full` is accepted as
+an alias of `transcript`.
 
-| Product       | Content                                             |
-|---------------|-----------------------------------------------------|
-| `transcript`  | the conversation in markdown: text + reasoning + tool calls (truncated by default) + patches. `full` is accepted as an alias |
-| `compactions` | only the compacted-context digests (`mode=compaction` messages) |
-| `memory`      | RAG/memory corpus: one JSON per **root** session (metadata + first/last user/assistant text + **all** compaction digests) in `corpus.jsonl` |
+```bash
+opencode-db export memory                  # full text, no truncation (default)
+opencode-db export memory --files          # also list the touched files per session
+opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 = unlimited)
+```
 
-Flags:
-
-- `--filter PATTERN` — SQL `LIKE` on session id/title (e.g. `'ses_f7%'`); useful to export one session or one project.
-- `--sessions ID[,ID…]` — export exact session id(s) (repeatable) instead of a pattern; e.g. `--sessions ses_abc,ses_xyz`.
-- `--sub separate|inline|omit` — how to place subagents (default `separate`: folder per root session with `subagents/` inside).
-- `--tool-output full|truncated|omit` — tool output verbosity (default `truncated`).
-- `--patch full|omit` — include patch parts (default `full`).
-- `--mark-compactions` — annotate where context compaction happened (transcripts only).
-- `--no-reasoning` — omit the reasoning parts (transcripts only).
-- `--summary-diffs` — include opencode's `summary.diffs` (files + additions/deletions) per message.
-- `--role all|user|assistant` — render only one role's messages (default `all`; `user` = prompts only, `assistant` = answers only). Applied by `transcript`/`compactions`; `memory` ignores it.
-- `--json` — also write a **faithful JSON archive** per session (native `{info, messages:[{info, parts}]}` shape), next to each markdown file.
-- `--sanitize` — redact secret-looking values (API keys `sk-`/`ghp_`/`github_pat_`/`xox…`/`AIza…`/`AKIA…`, Bearer tokens, JWTs, private PEM keys, `key=value` pairs) recursively, in markdown, JSON and the memory corpus.
-- `--cap N` / `--files` — `memory` tuning: truncate every text value to N chars (`0` = unlimited, default) and/or list the touched files per session.
+The full flag list (name/choices/default per product) is generated from the single
+source of truth — `modules/exportlib/flags.py` — shown by `opencode-db export --help`
+(`opencode-db help` prints the product/flags summary) and tabulated in
+[docs/schemas.md](docs/schemas.md) §1. The purpose/size of every product and the
+decision matrix live in [docs/export-guide.md](docs/export-guide.md).
 
 > `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). In the `menu` every product runs with its default options (tune via the presets file or the CLI).
 
@@ -121,12 +114,6 @@ is described in [docs/architecture.md](docs/architecture.md).
 `memory` is a RAG-ready corpus, **not** a readable transcript: one `corpus.jsonl` entry per
 root session, subagents summarized inline, `first_user` (the goal), `last_assistant` (the
 outcome) and all `compaction_digests[]`. Keys are documented in each run's `index.md`.
-
-```bash
-opencode-db export memory                  # full text, no truncation (default)
-opencode-db export memory --files          # also list the touched files per session
-opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 = unlimited)
-```
 
 No text is ever truncated by default; `--cap N` caps every text value (first_user, last_assistant, digests) to N chars — a guard only you choose to raise if feeding the corpus to a strict model.
 
@@ -211,7 +198,7 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
 - `compactions` is a valid product (CLI or a plan) but is **not** part of the shipped example
   plans: its digests are already inline in `transcript` and in the memory corpus
   (`compaction_digests`), so shipping it in a bundle would triple the same text.
-- `--sanitize` redacts known secret patterns (sk-, ghp_, Bearer, JWT, PEM, key=value…) —
+- `--sanitize` redacts high-confidence secret prefixes (sk-, ghp_, Bearer, JWT, PEM…) —
   **best-effort; review the output before sharing**.
 
 ```bash

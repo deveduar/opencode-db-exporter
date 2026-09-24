@@ -57,38 +57,16 @@ exports list         list past export runs (date/profile/counts/size);
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
   help                 this help
 
+EOF
+    # Export products + flags come from the python SSoT (flags.py --help-exports)
+    if ! python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports 2>/dev/null; then
+        cat <<'EOF'
 export products (default: transcript):
-  transcript   the conversation in markdown: text + reasoning + tool calls +
-               patches + step markers (tool output is truncated by default:
-               use --tool-output full for the complete output). Optional
-               --json writes a faithful archive per session (native shape.)
-  memory       RAG/memory corpus: corpus.jsonl with one JSON per root session
-               (metadata + first user text + last assistant text + all
-               compaction digests) - ready for embeddings, not a transcript
-  compactions  only the compacted-context digests (mode=compaction messages)
+  transcript | memory | compactions   (see 'opencode-db export --help' for the flags)
 
-export flags:
-  --filter PATTERN   SQL LIKE on session id/title, e.g. 'ses_f7%'
-  --sessions ID[,ID]   exact session id(s) to export (repeatable);
-                     overrides --filter / the preset selection
-  --out DIR          output root (default $OCED_OUT)
-  --sub separate|inline|omit   how to place subagent sessions (default separate:
-                       folder per root session with subagents/ inside)
-  --tool-output full|truncated|omit   tool output verbosity (default truncated;
-                       applies to transcripts/compactions)
-  --patch full|omit   include patch parts (default full; transcripts only)
-  --mark-compactions   include compaction marker paragraphs (transcripts only)
-  --no-reasoning       omit the reasoning parts (transcripts only)
-  --summary-diffs    render user-message summary.diffs (files+additions/deletions)
-  --role all|user|assistant   transcripts/compactions: render only one role's
-                       messages (--role user = prompts only, --role assistant =
-                       answers only; memory ignores it)
-  --json             also write a faithful JSON archive per session (transcripts
-                     and compactions)
-  --sanitize         redact secret-looking values (API keys, bearer tokens,
-                     private keys, key=... pairs) in the exported output
-  --cap N  --files   memory tuning: truncate each text value to N chars
-                     (0 = unlimited, default) and/or include touched files
+EOF
+    fi
+    cat <<'EOF'
 
 Named presets (presets file, source of truth for the menu and the CLI):
   export <name>      run a named preset from $OCED_PRESETS (JSON):
