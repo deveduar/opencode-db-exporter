@@ -47,7 +47,11 @@ rm -f -- "$SHIM"
 if [ "$all" -eq 1 ]; then
     rm -rf -- "$PREFIX" "$CONF_DIR"
 else
-    rm -rf -- "$PREFIX/modules" "$PREFIX/tests" "$PREFIX/uninstall.sh" "$PREFIX/LICENSE"
+    # Whitelist-keep: remove every installed artifact under $PREFIX EXCEPT the
+    # user data (backups/ + exports/). Future-proof: new dirs (scripts/,
+    # generated/, docs-adjacent artifacts) are covered without hardcoding each
+    # path.
+    find "$PREFIX" -mindepth 1 -maxdepth 1 ! -name backups ! -name exports -exec rm -rf -- {} +
     rmdir -- "$PREFIX" 2>/dev/null || true
 fi
 

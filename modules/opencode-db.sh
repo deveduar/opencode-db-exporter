@@ -52,6 +52,10 @@ exports list         list past export runs (date/profile/counts/size);
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
   exports view <stamp> [--files]   show details of an export run (index, sessions, files)
+  shrinks list [--tsv]   list the produced shrink copies (criteria/counts/size)
+  shrinks view <stamp>   show the shrink.json of a run
+  shrinks remove <stamp> [--yes]   delete a shrink run (the pruned + VACUUMed copy)
+  shrinks prune <N> [--yes]   keep only the N most recent shrink runs
   guide [--list]       step-by-step console wizard (inspect -> backup -> export memory
                        -> shrink -> swap manually); --list prints the plan only
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
@@ -106,7 +110,7 @@ fi
 # Resolve the DB source once (memoized) for the commands that read it, and clean
 # up the decompressed temp backup on exit. Meta/write-only commands skip this.
 case "${1:-help}" in
-    deps|help|-h|menu|guide|backups) ;;
+    deps|help|-h|menu|guide|backups|shrinks) ;;
     *) o_resolve_db ;;
 esac
 trap 'o_cleanup_tmp' EXIT
@@ -121,6 +125,7 @@ case "${1:-help}" in
     backup)        shift; oced_backup "$@" ;;
     backups)       shift; oced_backups "$@" ;;
     shrink)          shift; oced_shrink "$@" ;;
+    shrinks)       shift; oced_shrinks "$@" ;;
     export)        shift; oced_export "$@" ;;
     exports)       shift; oced_exports "$@" ;;
     guide)         shift; . "$SCRIPT_DIR/guide.sh"; oced_guide "$@" ;;

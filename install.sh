@@ -47,15 +47,14 @@ sync_dir() {
     fi
 }
 
-for path in modules tests scripts; do
+for path in modules tests scripts generated; do
     sync_dir "$path"
 done
 
 find "$PREFIX/modules" -type f -name '*.sh' -exec chmod +x {} +
 cp -f "$SOURCE_ROOT/uninstall.sh" "$PREFIX/uninstall.sh"
 chmod +x "$PREFIX/uninstall.sh"
-# Contract files referenced by the smoke suite (tests/../presets.*.json).
-cp -f "$SOURCE_ROOT/presets.schema.json" "$PREFIX/presets.schema.json"
+# Contract files referenced by the smoke suite (tests/../generated/presets.schema.json, tests/../presets.json.example).
 cp -f "$SOURCE_ROOT/presets.json.example" "$PREFIX/presets.json.example"
 if [ -f "$SOURCE_ROOT/LICENSE" ]; then
     cp -f "$SOURCE_ROOT/LICENSE" "$PREFIX/LICENSE"

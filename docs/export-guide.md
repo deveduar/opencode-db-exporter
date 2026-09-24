@@ -68,7 +68,7 @@ The menu's manual flow (no presets file) uses exactly these defaults. To repeat 
 again and again (and to run **several products under one stamp**) define a **plan** in
 `~/.config/opencode-db/presets.json` (created from `presets.json.example` at install;
 schema documented in `docs/schemas.md` and machine-checkable in
-`presets.schema.json`).
+`generated/presets.schema.json`).
 
 The **shipped plans** are named after their purpose:
 

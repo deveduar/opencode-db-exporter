@@ -355,3 +355,165 @@ oced_shrink() {
     echo "     rm -f \"$OPENCODE_DB-wal\" \"$OPENCODE_DB-shm\""
     echo "   The live DB was never modified; inspect the copy before swapping."
 }
+
+#-----------------------------------------------------------------------
+# shrinks — manager of the produced shrink copies (like exports for runs).
+# Runs live under $OCED_BACKUP_DIR/shrink/<o_ts-stamp>/ (shrink.json + the
+# copy). list/view/remove/prune never touch the live DB.
+#-----------------------------------------------------------------------
+
+shrinks_dir() { printf '%s/shrink' "$OCED_BACKUP_DIR"; }
+
+# shrinks_runs_find -> run dirs under <backup>/shrink, newest first.
+shrinks_runs_find() {
+    [ -d "$(shrinks_dir)" ] || return 0
+    find "$(shrinks_dir)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r
+}
+
+# shrinks_stamp_human <stamp 20260921-083000> -> "2026-09-21 08:30:00 UTC".
+shrinks_stamp_human() {
+    local s="$1"
+    case "$s" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9])
+            printf '%s-%s-%s %s:%s:%s UTC' "${s:0:4}" "${s:4:2}" "${s:6:2}" "${s:9:2}" "${s:11:2}" "${s:13:2}" ;;
+        *) printf '%s' "$s" ;;
+    esac
+}
+
+# shrinks_run_row <run-dir> -> TSV 'stamp<TAB>display' (single source for the
+# menu picker, like exports view/list share one aggregation).
+shrinks_run_row() {
+    local run="$1" stamp j
+    local jcriteria jsess jkept jdel jbefore jafter jstrip
+    local size freed pct db_state
+    stamp="${run##*/}"
+    j="$run/shrink.json"
+    if [ -f "$j" ]; then
+        jcriteria=$(jq -r '.criteria // "(no criteria)"' "$j")
+        jsess=$(jq -r '.sessions.total // 0' "$j")
+        jkept=$(jq -r '.sessions.kept // 0' "$j")
+        jdel=$(jq -r '.sessions.deleted // 0' "$j")
+        jbefore=$(jq -r '.size.before // 0' "$j")
+        jafter=$(jq -r '.size.after // 0' "$j")
+        jstrip=$(jq -r '.stripped_reasoning // 0' "$j")
+    else
+        jcriteria="(no shrink.json)"
+        jsess="?"; jkept="?"; jdel="?"; jbefore=0; jafter=0; jstrip=0
+    fi
+    if [ -f "$run/opencode.shrunk.db" ]; then
+        size=$(stat -c %s "$run/opencode.shrunk.db" 2>/dev/null || echo 0)
+        db_state="$(o_human_size "$size")"
+    else
+        size=0
+        db_state="(swapped/no copy)"
+    fi
+    freed="--"
+    pct=""
+    if [ "$jbefore" -gt 0 ] && [ "$jafter" -gt 0 ]; then
+        freed="$(o_human_size "$((jbefore - jafter))")"
+        [ "$jbefore" -gt "$jafter" ] && pct="$(( (jbefore - jafter) * 100 / jbefore ))%"
+    fi
+    printf '%s\t%s\n' "$stamp" \
+        "$(printf '%s  %s  %s sess / %s del  %s -> %s (%s)%s  %s' \
+            "$(shrinks_stamp_human "$stamp")" "$jcriteria" \
+            "$jkept" "$jdel" "$(o_human_size "$jbefore")" "$(o_human_size "$jafter")" \
+            "$freed" "$pct" "$db_state")"
+}
+
+oced_shrinks() {
+    local cmd="${1:-list}"
+    case "$cmd" in
+        list)  shift; oced_shrinks_list "$@" ;;
+        view)  shift; oced_shrinks_view "$@" ;;
+        remove) shift; oced_shrinks_remove "$@" ;;
+        prune) shift; oced_shrinks_prune "$@" ;;
+        *) echo "Usage: opencode-db shrinks [list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>]"; return 1 ;;
+    esac
+}
+
+oced_shrinks_list() {
+    local tsv=0
+    [ "${1:-}" = "--tsv" ] && tsv=1
+    local -a runs rows=()
+    local run stamp
+    mapfile -t runs < <(shrinks_runs_find)
+    if [ "$tsv" -eq 0 ]; then
+        echo "== Shrink copies (${#runs[@]}) =="
+    fi
+    if [ "${#runs[@]}" -eq 0 ]; then
+        [ "$tsv" -eq 1 ] && return 0
+        echo "   (no shrink runs yet; run: opencode-db shrink)"
+        return 0
+    fi
+    for run in "${runs[@]}"; do
+        stamp="${run##*/}"
+        if [ "$tsv" -eq 1 ]; then
+            shrinks_run_row "$run"
+        else
+            local row
+            row=$(printf '%s' "$(shrinks_run_row "$run")" | cut -f2-)
+            rows+=("  $((${#rows[@]} + 1)).  $row")
+        fi
+    done
+    if [ "$tsv" -eq 0 ]; then
+        for row in "${rows[@]}"; do echo "$row"; done
+        echo ""
+        echo "  view <stamp>  ·  remove <stamp>  ·  prune <N>"
+    fi
+}
+
+oced_shrinks_view() {
+    local stamp="${1:-}" target j
+    [ -n "$stamp" ] || { echo "Usage: opencode-db shrinks view <stamp>"; return 1; }
+    target="$(shrinks_dir)/$stamp"
+    [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db shrinks list"; return 1; }
+    j="$target/shrink.json"
+    [ -f "$j" ] || { echo "No shrink.json in $target"; return 1; }
+    echo "== Shrink run: $stamp =="
+    jq . "$j"
+    echo ""
+    echo "  files:"
+    find "$target" -maxdepth 1 -type f -printf '    %f  %k KiB\n' 2>/dev/null
+}
+
+oced_shrinks_remove() {
+    local stamp="${1:-}" yes=0 target
+    [ -n "$stamp" ] || { echo "Usage: opencode-db shrinks remove <stamp> [--yes]"; return 1; }
+    [ "${2:-}" = "--yes" ] && yes=1
+    target="$(shrinks_dir)/$stamp"
+    [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db shrinks list"; return 1; }
+    if [ "$yes" -eq 0 ]; then
+        local ans
+        printf 'Remove shrink run %s? This deletes the pruned copy. [y/N] ' "$stamp"
+        read -r ans || return 1
+        [[ "$ans" =~ ^[yYsS]$ ]] || { echo "   cancelled."; return 0; }
+    fi
+    rm -rf -- "$target"
+    o_log "shrinks remove stamp=$stamp"
+    echo "Removed: $target"
+}
+
+oced_shrinks_prune() {
+    local keep="${1:-}" yes=0
+    [ "${2:-}" = "--yes" ] && yes=1
+    case "$keep" in
+        ''|*[!0-9]*) echo "Usage: opencode-db shrinks prune <N>  (N = how many to keep)"; return 1 ;;
+    esac
+    [ "$keep" -ge 1 ] || { echo "N must be >= 1"; return 1; }
+    local -a runs
+    local total n i target
+    mapfile -t runs < <(shrinks_runs_find)
+    total=${#runs[@]}
+    if [ "$total" -le "$keep" ]; then
+        echo "Nothing to prune (have $total, keeping $keep)."
+        return 0
+    fi
+    n=0
+    for ((i = keep; i < total; i++)); do
+        target="${runs[$i]}"
+        rm -rf -- "$target"
+        n=$((n + 1))
+    done
+    o_log "shrinks prune keep=$keep removed=$n"
+    echo "Prune: removed $n run(s); keeping $keep."
+}

@@ -5,7 +5,7 @@
 #   - JSON Schema for presets.schema.json
 #   - presets.py validation
 #   - menu.sh annotation/legend
-#   - docs/schemas.md table
+#   - generated/flags-table.md table
 #
 # To add a new flag: add it here, then run the generator script (or update
 # dependents manually until generator exists).

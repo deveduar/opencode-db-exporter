@@ -4,13 +4,18 @@
 # Level navigation: ESC goes up one level; on the main level ESC exits.
 # Root entries and pickers:
 #   status    status report (DB · backups · deps · version/schema)
-#   backups   level 2 = a real fzf picker over the backups (mode toggle verify/delete)
-#   sessions  level 2 = a real fzf picker over the sessions (mode toggle details/export)
-#   exports   level 2 = a real fzf picker over the export runs (mode toggle view/remove)
+#   backups   level 2 = fzf picker over the backups (create / delete, bulk rows)
+#   shrinks   level 2 = fzf picker to CREATE pruned copies and manage the runs
+#             (view shrink.json / toggle to remove), like exports
+#   sessions  level 2 = a real fzf picker over the sessions (details)
+#   exports   level 2 = a real fzf picker over the export runs (view/remove)
+#   export    named-plans picker (preset-first; presets file required)
 # The pickers use TSV rows (key<TAB>display); fzf shows only the display column
 # and the full selected line keeps the hidden key for parse-back.
 # No TAB multi-select anywhere: the "switch mode" is itself a menu row, and bulk
 # deletes are their own rows ([delete all] / [delete olds]).
+# The root header (ACTION_STATUS) is recomputed on every loop via
+# --refresh-cb oc_root_status, so it never shows stale state after an action.
 
 # Colon gates (without them it can only run as a dispatcher module).
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -263,7 +268,6 @@ oc_toggle_row() {
 oc_backups_rows() {
     local m="$OCED_BACKUP_DIR/manifest.json"
     printf '__CREATE__\t[create backup (consistent snapshot)]\n'
-    printf '__SHRINK__\t[shrink (lighter copy from the LIVE DB)...]\n'
     printf '__DELETE_ALL__\t[delete ALL backups]\n'
     printf '__KEEP_NEWEST__\t[delete olds (keep only the newest)]\n'
     [ -f "$m" ] || { printf '__NONE__\t(no backups recorded yet)\n'; return 0; }
@@ -306,7 +310,6 @@ oc_backups_picker() {
         key=$(oc_sel_key "$sel")
         case "$key" in
             __CREATE__)     run_oced_tool backup; continue ;;
-            __SHRINK__)     oc_pick_shrink; continue ;;
             __DELETE_ALL__) oc_backups_bulk all; continue ;;
             __KEEP_NEWEST__) oc_backups_bulk newest; continue ;;
             __NONE__)       continue ;;
@@ -347,13 +350,14 @@ oc_sessions_picker() {
 }
 
 #-----------------------------------------------------------------------
-# Export picker: named presets first, then the manual flow.
-# A presets file (OCED_PRESETS, JSON) is the source of truth: each named
-# preset = product + config + its own selection (filter/sessions). Manual… =
-# session-or-ALL -> product (runs with its default options). No presets file ->
-# the picker directly (identical behavior).
+# Export picker: named presets (the ONLY menu path). A presets file
+# (OCED_PRESETS, JSON) is the source of truth: each named preset = product(s)
+# + config + its own selection (filter/sessions). Without a presets file the
+# export entry prints guidance (the CLI still accepts raw product keywords and
+# flags). There is NO manual session/or-ALL + product flow in the menu anymore
+# — the shipped plans (notes/rag/digest + user presets) cover it.
 # All preset plan logic lives in exportlib/plan.py (resolve() + CLI bridge);
-# these shells shims pin OCED_PRESETS for the python process (common.sh only
+# these shell shims pin OCED_PRESETS for the python process (common.sh only
 # sets it as a shell variable when using the built-in default).
 #-----------------------------------------------------------------------
 oc_plan_py() {
@@ -371,16 +375,11 @@ oc_preset_descr() { # $1=preset-name -> one-line selection summary (plan line)
 }
 
 oc_export_rows() {
-    if oc_preset_rows; then
-        # No Manual row — plans cover everything; Manual only when no presets file
-        true
-    else
-        printf '__ALL__\tALL SESSIONS (no filter)\n'
-        oc_sessions_rows
-    fi
+    oc_preset_rows
 }
 
-oc_export_manual_rows() {
+# oc_selection_rows -> session/ALL selection rows for a chosen preset.
+oc_selection_rows() {
     printf '__ALL__\tALL SESSIONS (no filter)\n'
     oc_sessions_rows
 }
@@ -409,7 +408,7 @@ oc_export_presets_picker() {
 oc_preset_run() {
     local name="$1" descr="$2" sel key purpose
     purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
-    sel=$(oc_export_manual_rows | oc_fzf_sel "sessions (preset)" \
+    sel=$(oc_selection_rows | oc_fzf_sel "sessions (preset)" \
         $'Preset '"$name"$' — '"$purpose"$''$'\n'$'(pick a session, or ALL SESSIONS; ALL = as configured, a session = override; ESC: back)') || return 1
     key=$(oc_sel_key "$sel")
     case "$key" in
@@ -426,27 +425,19 @@ oc_preset_run() {
     return 0
 }
 
-oc_export_manual_picker() {
-    local sel key
-    while true; do
-        local header
-        header=$'Manual export — pick one session, or ALL SESSIONS'$'\n'$'(then ONE product, running with DEFAULT options; saved plans live in the presets file; CLI flags tune it; ESC: back)'
-        sel=$(oc_export_manual_rows | oc_fzf_sel "sessions (export)" "$header") || return $?
-        key=$(oc_sel_key "$sel")
-        case "$key" in
-            __ALL__)    oc_export_flow ""  || continue ;;
-            __NONE__)   continue ;;
-            *)          oc_export_flow "$key" || continue ;;
-        esac
-    done
-}
-
 oc_export_picker() {
     if [ -f "${OCED_PRESETS:-}" ]; then
         oc_export_presets_picker
-    else
-        oc_export_manual_picker
+        return 0
     fi
+    # No presets file: the menu wizard is preset-only. The CLI still accepts
+    # raw product keywords and flags.
+    echo "Export from the menu needs a presets file (named plans = the source of truth)."
+    echo "   missing: $OCED_PRESETS"
+    echo "   create it from the shipped example:"
+    echo "     cp \"$SCRIPT_DIR/../presets.json.example\" \"$OCED_PRESETS\""
+    echo "   meanwhile: opencode-db export transcript|memory|compactions [flags]"
+    return 0
 }
 
 #-----------------------------------------------------------------------
@@ -560,24 +551,11 @@ oc_exports_picker() {
 }
 
 #-----------------------------------------------------------------------
-# Export flow: session (done by the picker) -> product -> run (defaults)
+# Export confirm: print the plan (presets only — there is no product-only flow)
 #-----------------------------------------------------------------------
-# oc_pick_product -> selects one export product (key<TAB>label).
-# product = the document to produce (transcript | memory | compactions).
-# Each product runs with its default options in the menu; tuning lives in the
-# presets file (OCED_PRESETS) or the CLI flags.
-# oc_pick_product -> selects one export product (key<TAB>label).
-# product = the document to produce (transcript | memory | compactions).
-# Each product runs with its default options in the menu; tuning lives in the
-# presets file (OCED_PRESETS) or the CLI flags.
-# Rows stay SHORT; the "use it when / size / redundancy" legend lives in the header.
-# The rows and the legend are served by exportlib/plan.py (`products` subcommand).
-oc_pick_product() {
-    local rows legend
-    rows=$(oc_plan_py products) || return 1
-    legend=$(oc_plan_py products --legend)
-    printf '%s\n' "$rows" | oc_fzf_sel "export product" "$legend"
-}
+# oc_pick_product is gone (no manual flow): the menu exports through named
+# presets; product rows are still served by exportlib/plan.py `products` for
+# the CLI/tests (product-keyword exports work on the CLI without presets).
 
 # oc_preset_purpose <name> -> one-line purpose for the shipped plans (unknown -> 1).
 # The purpose map lives in exportlib/plan.py (PLAN_PURPOSE) — the single source.
@@ -645,28 +623,10 @@ oc_export_confirm() {
     return 0
 }
 
-# oc_export_flow [session-id|"") -> session (done by the picker) -> product -> run.
-# Empty = ALL sessions. The product runs with its default options; advanced
-# configuration lives in the presets file or on the CLI.
-oc_export_flow() {
-    local selid="${1:-}"
-    local -a idfilter=()
-    [ -n "$selid" ] && idfilter=(--filter "$selid")
-
-    local prod prodkey
-    prod=$(oc_pick_product) || return 1
-    prodkey=$(oc_sel_key "$prod")
-
-    oc_export_confirm "$prodkey" "$selid" "$prodkey (default options)" || return 0
-    run_oced_tool export "$prodkey" "${idfilter[@]}"
-    menu_pause "Export" || return 0
-    return 0
-}
-
 #-----------------------------------------------------------------------
 # shrink in the menu: named recipes (like the export recipes), custom N/days/date
 # and dry-run. shrink only WRITES a copy (never modifies the live DB); the
-# swap is manual.
+# swap is manual. Manages the produced copies (list/view/remove) like exports.
 #-----------------------------------------------------------------------
 pick_shrink_profile() {
     local sel
@@ -726,7 +686,81 @@ oc_pick_shrink() {
     fi
     # shellcheck disable=SC2086  # runargs must split ("--keep 30")
     run_oced_tool shrink $runargs
-    menu_pause "Backups" || return 0
+    menu_pause "Shrinks" || return 0
+}
+
+# --------------------------------------------------------------------
+# Shrinks picker: CREATE a pruned copy AND manage the produced runs
+# (view shrink.json / toggle to remove), like exports. Rows come from the
+# shrink.sh helpers (shrinks_runs_find/shrinks_run_row — the same source as
+# `shrinks list --tsv`), so there is no duplicated aggregation in the menu.
+# --------------------------------------------------------------------
+oc_shrinks_rows() {
+    local mode="$1" run
+    printf '__CREATE__\t[create shrink copy (pruned + VACUUMed from the LIVE DB)...]\n'
+    oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
+    if [ "$mode" = "remove" ]; then
+        printf '__DELETE_ALL__\t[delete ALL shrink copies]\n'
+        printf '__KEEP_NEWEST__\t[delete all except the newest]\n'
+    fi
+    local -a runs=()
+    mapfile -t runs < <(shrinks_runs_find)
+    [ "${#runs[@]}" -gt 0 ] || { printf '__NONE__\t(no shrink copies yet)\n'; return 0; }
+    for run in "${runs[@]}"; do
+        shrinks_run_row "$run"
+    done
+}
+
+# Bulk deletions from the shrinks picker (all / keep newest only).
+oc_shrinks_bulk() {
+    local what="$1"
+    local -a runs=()
+    mapfile -t runs < <(shrinks_runs_find)
+    local total=${#runs[@]}
+    [ "$total" -gt 0 ] || { echo "   (no shrink copies yet)"; return 1; }
+    local -a targets=()
+    if [ "$what" = "all" ]; then
+        confirm_action "DELETE ALL $total shrink copies? This cannot be undone." || { echo "   cancelled."; return 0; }
+        targets=("${runs[@]}")
+    else
+        [ "$total" -le 1 ] && { echo "   Already only 1 shrink copy."; return 0; }
+        confirm_action "DELETE $((total - 1)) older shrink copies, keeping only the newest?" || { echo "   cancelled."; return 0; }
+        targets=("${runs[@]:1}")
+    fi
+    local s
+    for s in "${targets[@]}"; do
+        run_oced_tool shrinks remove "${s##*/}" --yes
+    done
+}
+
+oc_shrinks_picker() {
+    local mode="view" sel key
+    while true; do
+        local header
+        header="Shrink copies — mode: $mode"$'\n'"$(
+            if [ "$mode" = view ]; then printf 'view: show the shrink.json of a run — create new copies via the first row';
+            else printf 'remove: delete a run (with confirmation)'; fi
+        )"
+        sel=$(oc_shrinks_rows "$mode" | oc_fzf_sel "shrinks ($mode)" "$header") || return $?
+        key=$(oc_sel_key "$sel")
+        case "$key" in
+            __CREATE__)     oc_pick_shrink; continue ;;
+            __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
+            __DELETE_ALL__) oc_shrinks_bulk all; continue ;;
+            __KEEP_NEWEST__) oc_shrinks_bulk newest; continue ;;
+            __NONE__)       continue ;;
+            *)
+                if [ "$mode" = view ]; then
+                    run_oced_tool shrinks view "$key"
+                    menu_pause "Shrinks" || return 0
+                    return 0
+                fi
+                confirm_action "Remove shrink run $key? It deletes the generated copy." || continue
+                run_oced_tool shrinks remove "$key" --yes
+                continue
+                ;;
+        esac
+    done
 }
 
 #-----------------------------------------------------------------------
@@ -734,9 +768,10 @@ oc_pick_shrink() {
 #-----------------------------------------------------------------------
 oc_root=(
     "status|Status report (DB · backups · deps · version/schema)|fn:oc_show_status"
-    "backups|Database and backups (picker)|fn:oc_backups_picker"
+    "backups|Backups (snapshots picker)|fn:oc_backups_picker"
+    "shrinks|Shrink copies (create + manage picker)|fn:oc_shrinks_picker"
     "sessions|Sessions (details picker)|fn:oc_sessions_picker"
-    "export|Export sessions (wizard picker)|fn:oc_export_picker"
+    "export|Export sessions (named plans picker)|fn:oc_export_picker"
     "exports|Manage exports (view / remove picker)|fn:oc_exports_picker"
     "guide|Guided workflow (inspect -> backup -> export memory -> shrink)|tool:guide|pause"
     "help|Show help|tool:help|pause"
@@ -789,5 +824,7 @@ oc_show_status() {
 run_oc_menu() {
     menu_require_fzf
     oc_root_status
-    run_menu --cat "opencode-db" --prompt "actions" --entries oc_root
+    # --refresh-cb recomputes ACTION_STATUS at the top of every root loop so the
+    # header never shows stale info after an action (backup, shrink, export…).
+    run_menu --cat "opencode-db" --prompt "actions" --entries oc_root --refresh-cb oc_root_status
 }

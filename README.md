@@ -54,6 +54,8 @@ opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [--keep N|--older-than DAYS] [--dry-run] [--swap]
                                       # pruned + VACUUMed COPY (never touches the live DB
                                       # unless --swap replaces it safely)
+opencode-db shrinks [list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>]
+                                      # manage the produced shrink copies
 opencode-db guide [--list]            # step-by-step console wizard (safe workflow)
 opencode-db deps [--check]            # idempotent dependency check/install (apt|pacman|dnf)
 opencode-db help
@@ -63,29 +65,36 @@ opencode-db help
 
 The interactive menu is **picker-driven**: the main pickers are real fzf lists, not nested
 menus. There is **no TAB multi-select** — mode switching and bulk operations are their own
-rows. The `backups`, `sessions` (details) and `export` pickers are **single-mode**.
+rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
+**single-mode**; the export picker is **preset-only** (it needs a presets file).
 
 - **status** — the full report (DB, backups alignment, version/schema, dependencies) + pause.
-- **backups** picker (single mode) — rows: `[create backup]`, `[shrink…]` (from the LIVE
-  DB, own snapshot), `[delete ALL backups]`, `[delete olds (keep newest)]` and one row
-  per backup (date/size/sessions/msgs/sha). Selecting a row removes it with confirmation.
-  Verify stays in the CLI (`backups verify <file>`), for after-copy or before `--from-backup`
-  checks.
+  The header counts (DB/sessions/WAL/backups/exports) are recomputed on every root loop, so
+  they are never stale after an action.
+- **backups** picker (single mode) — rows: `[create backup]`, `[delete ALL backups]`,
+  `[delete olds (keep newest)]` and one row per backup (date/size/sessions/msgs/sha).
+  Selecting a row removes it with confirmation. Shrink creation lives in its own **shrinks**
+  picker. Verify stays in the CLI (`backups verify <file>`), for after-copy or before
+  `--from-backup` checks.
 - **sessions** picker (details only) — one row per session; selecting one shows the full
   info + compaction digests.
-- **export** picker — `ALL SESSIONS` or a single session, then the product
-  (`transcript`/`memory`/`compactions`).
+- **shrinks** picker (create + manage) — rows: `[create shrink copy…]` (recipes from the LIVE
+  DB, own snapshot), a `view`/`remove` toggle (remove mode adds `[delete ALL]` /
+  `[delete old (keep newest)]` and one row per produced copy).
+- **export** picker (preset-only) — one row per named plan in the presets file (bundle plans
+  render `[transcript+memory]`), then a session or `ALL SESSIONS`. Without a presets file it
+  prints the setup guidance (`cp presets.json.example …`) and the raw CLI as fallback — there
+  is no manual session→product picker anymore.
 - **Manage exports** picker (mode `view` / `remove`) — rows: toggle,
   `[delete ALL export runs]`, `[delete all except the newest]`, one row per run
   (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
 
-Export flow: session (**or ALL**) → **product** (`transcript`/`memory`/`compactions`)
-→ plan confirmation → run. Each product runs with its **default options**; there are
-**no** variant tables or custom checklists in the menu — tuning and multi-product runs
-in one stamp (bundle presets) live in the presets file (`OCED_PRESETS`) or on the CLI
-(`--no-reasoning`, `--json`, `--sanitize`, `--tool-output full`, …). `shrink` lives
-inside the backups picker: recipes built from the live DB (default, dry-run, custom
-keep-N / last-N-days / since date).
+Export flow: plan → session (**or ALL**) → confirmation (`Will produce:` block per product,
+with the effective flags) → run. A picked session becomes `export <name> --filter <ses>`
+(CLI wins over any embedded preset selection; a bundle shares the override); `ALL` runs the
+plan as configured. **No** variant tables or custom checklists in the menu — tuning and
+multi-product runs in one stamp (bundle presets) live in the presets file (`OCED_PRESETS`)
+or on the CLI (`--no-reasoning`, `--json`, `--sanitize`, `--tool-output full`, …).
 
 ## Export
 
@@ -102,7 +111,7 @@ opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 
 The full flag list (name/choices/default per product) is generated from the single
 source of truth — `modules/exportlib/flags.py` — shown by `opencode-db export --help`
 (`opencode-db help` prints the product/flags summary) and tabulated in
-[docs/schemas.md](docs/schemas.md) §1. The purpose/size of every product and the
+[`generated/flags-table.md`](generated/flags-table.md). The purpose/size of every product and the
 decision matrix live in [docs/export-guide.md](docs/export-guide.md).
 
 > `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). In the `menu` every product runs with its default options (tune via the presets file or the CLI).
@@ -128,7 +137,7 @@ auto-creates it from `presets.json.example` when missing). The file is the **sou
 truth** for both the CLI and the menu: a preset names a product (or a *bundle* of
 products run under one stamp), its config flags and optionally the selection (`filter`
 or exact `sessions`). The contract (exact keys/types/choices) is machine-checkable in
-[`presets.schema.json`](presets.schema.json) and fully documented in
+[`generated/presets.schema.json`](generated/presets.schema.json) and fully documented in
 [`docs/schemas.md`](docs/schemas.md) (which also covers `metadata.json`, the memory
 `corpus.jsonl`, the faithful JSON archive, the backup `manifest.json`, `shrink.json`
 and the `exports list` line).
@@ -187,14 +196,15 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
   selection; a config flag passed on the command line overrides the preset too (both for
   single and bundle presets).
 - No presets file (or none matching) → no presets: export behaves exactly as before.
-- The menu lists each preset as a first-class action (read from the same file), then asks
-  **which session or ALL SESSIONS** to export (pending state: a plan is config + selection,
-  and the two are separated at run time — a plan runs **ad-hoc** just like raw flags do).
-  Choosing **ALL** runs the preset as configured (keeping its embedded selection); picking
+The **menu** has no product-only flow: each preset is a first-class action (read from the same
+  file), and it asks **which session or ALL SESSIONS** to export (pending state: a plan is config
+  + selection, and the two are separated at run time — a plan runs **ad-hoc** just like raw flags
+  do). Choosing **ALL** runs the preset as configured (keeping its embedded selection); picking
   **one session** becomes a `--filter` override shared by every product of a bundle (CLI
-  wins, see above). **No `Manual…` row** when presets exist (the shipped default plans
-  `notes`/`rag`/`digest` cover the three products with defaults). Without a file, the
-  classic session → product flow with defaults remains.
+  wins, see above). **No `Manual…` row** (the shipped default plans `notes`/`rag`/`digest` cover
+  the three products with defaults); without a presets file the export picker prints setup
+  guidance (`cp presets.json.example …`) and the raw CLI as fallback — the manual session →
+  product flow is gone from the menu.
 - `compactions` is a valid product (CLI or a plan) but is **not** part of the shipped example
   plans: its digests are already inline in `transcript` and in the memory corpus
   (`compaction_digests`), so shipping it in a bundle would triple the same text.
@@ -258,6 +268,16 @@ rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
 > read-only (see [docs/architecture.md](docs/architecture.md) §6).
 
 Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. Prefer the guided version: `opencode-db guide` walks the same steps with explanations.
+
+Produced copies accumulate under `backups/shrink/`; manage them like export runs:
+
+```bash
+opencode-db shrinks list              # date / criteria / kept-deleted / sizes per copy
+opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
+opencode-db shrinks view <stamp>      # show a copy's shrink.json
+opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
+opencode-db shrinks prune 3           # keep only the 3 most recent copies
+```
 
 `--strip-reasoning` additionally removes the `reasoning` parts on the copy (the weighty chain-of-thought, rarely useful once a session is over). Community tooling reports ~77% extra savings — the combined copy (`delete sessions → strip reasoning → VACUUM`) is the smallest file we can hand you. Reasoning is a *part* stored per message; the exported transcript reads it from the original DB (toggle `--no-reasoning`), so stripping never touches what you can re-export. Stripped reasoning is only **recoverable while you keep the original DB or a backup**: keep `opencode-db backup` and the `.pre-shrink` safety copy if you ever need it.
 
@@ -334,8 +354,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 134 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 83 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 175 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 102 OK / 0 FAIL
 ```
 
 ## Layout
@@ -352,9 +372,10 @@ modules/
                    subagents, presets, --json/--sanitize, index.md, metadata)
   exports.sh       list/remove/prune of past export runs
   shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
+                   + the shrinks manager (list/view/remove/prune of produced copies)
   deps.sh          idempotent dependency check/install
   guide.sh         step-by-step console wizard (safe workflow)
-  menu.sh          interactive fzf menu (pickers + export flow)
+  menu.sh          interactive fzf menu (pickers, preset-only export flow, shrinks picker)
 docs/
   architecture.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
   export-analysis.md  decision log of the export redesign

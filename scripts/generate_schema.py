@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate presets.schema.json + the docs/schemas.md §1 flags table from FLAGS.
+"""Generate the versioned artifacts under generated/ from FLAGS.
 
 Single source of truth: modules/exportlib/flags.py. Whenever FLAGS changes, run
 this script and commit both generated artifacts:
-    python3 scripts/generate_schema.py            # rewrites presets.schema.json
-    python3 scripts/generate_schema.py --docs     # prints the markdown flags table
+    python3 scripts/generate_schema.py            # rewrites generated/presets.schema.json
+    python3 scripts/generate_schema.py --docs     # rewrites generated/flags-table.md (also prints it)
 """
 import argparse
 import json
@@ -12,6 +12,11 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "modules"))
 from exportlib.flags import FLAGS, PRODUCT_KEYWORDS, BUNDLE_PRODUCT_KEYS, SELECTION_KEYS, get_flags_for_product
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATED = os.path.join(ROOT, "generated")
+SCHEMA_PATH = os.path.join(GENERATED, "presets.schema.json")
+FLAGS_TABLE_PATH = os.path.join(GENERATED, "flags-table.md")
 
 
 def generate_schema() -> dict:
@@ -162,7 +167,7 @@ def _flag_applies(f) -> str:
 
 
 def flags_table() -> str:
-    """Render the docs/schemas.md §1 per-key table from FLAGS."""
+    """Render the docs/schemas.md §1 per-key table from FLAGS (also written to generated/flags-table.md)."""
     rows = [
         "| `product` | string | `transcript` \\| `memory` \\| `compactions` | "
         "single only (`full` is a CLI alias, **not** a preset product) |",
@@ -195,12 +200,17 @@ def flags_table() -> str:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--docs", action="store_true",
-                    help="print the docs/schemas.md §1 flags table and exit")
+                    help="rewrite generated/flags-table.md and print it (backwards-compatible)")
     args = ap.parse_args()
+    os.makedirs(GENERATED, exist_ok=True)
     if args.docs:
-        print(flags_table())
+        table = flags_table() + "\n"
+        with open(FLAGS_TABLE_PATH, "w", encoding="utf-8") as f:
+            f.write(table)
+        print(f"Generated {os.path.relpath(FLAGS_TABLE_PATH, ROOT)}")
+        print(table, end="")
         sys.exit(0)
     schema = generate_schema()
-    with open("presets.schema.json", "w", encoding="utf-8") as f:
+    with open(SCHEMA_PATH, "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2, ensure_ascii=False)
-    print("Generated presets.schema.json")
+    print(f"Generated {os.path.relpath(SCHEMA_PATH, ROOT)}")

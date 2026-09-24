@@ -22,6 +22,7 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 . "$MOD/common.sh"
 . "$MOD/export.sh"
 . "$MOD/exports.sh"
+. "$MOD/shrink.sh"
 
 pass=0; fail=0
 ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
@@ -76,20 +77,19 @@ reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
 
-echo "== product picker: exactly 3 products, NO variants/custom/bundle =="
+echo "== product rows come from plan.py (no product-only menu flow anymore) =="
 reset
 oc_fzf_sel() { cat; }   # pass-through: expose the generated rows
-PROD=$(oc_pick_product)
+PROD=$(oc_plan_py products)
 unset -f oc_fzf_sel
 rows_with_label() { local n=0 line; while IFS= read -r line; do
     [[ "$line" == *$'\t'* ]] || continue
     [ -n "${line%%$'\t'*}" ] && [ -n "${line#*$'\t'}" ] && n=$((n + 1))
 done; echo "$n"; }
-[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "3" ] && ok "product picker rows (3) have key+label" || bad "product rows: $PROD"
+[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "3" ] && ok "plan.py products rows (3) have key+label" || bad "product rows: $PROD"
 printf '%s' "$PROD" | grep -qE '^(transcript|memory|compactions)' && ok "product rows are transcript/memory/compactions" || bad "product keys: $PROD"
-printf '%s' "$PROD" | grep -q '__FULLMEM__' && bad "bundle variant leaked into the product picker" || ok "product picker has NO transcript+memory bundle"
-printf '%s' "$PROD" | grep -q '__CUSTOM__' && bad "custom checklist leaked into the product picker" || ok "product picker has NO custom checklist"
-printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product picker" || ok "product picker has NO variant rows"
+printf '%s' "$PROD" | grep -q '^full\b' && bad "full leaked as a picker row (CLI alias only)" || ok "full is NOT a picker row"
+printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product rows" || ok "product rows have NO variant rows"
 
 echo "== help exports block stays in sync with FLAGS (flags.py --help-exports) =="
 HELPEXPORTS=$(python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports) || bad "flags.py --help-exports exited non-zero"
@@ -109,6 +109,17 @@ echo "== root status header =="
 reset
 oc_root_status
 printf '%s' "$ACTION_STATUS" | grep -q "Sessions:" && printf '%s' "$ACTION_STATUS" | grep -q "DB:" && ok "root status header set" || bad "root status: '$ACTION_STATUS'"
+
+echo "== root status header refreshes after a state change (--refresh-cb) =="
+reset
+oc_root_status
+B=$(printf '%s' "$ACTION_STATUS" | grep -oE 'Exports: [0-9]+')
+mkdir -p "$OUT/refresh-run"
+echo '{"profile":"x"}' > "$OUT/refresh-run/metadata.json"
+oc_root_status
+A=$(printf '%s' "$ACTION_STATUS" | grep -oE 'Exports: [0-9]+')
+rm -rf "$OUT/refresh-run"
+[ -n "$A" ] && [ "$A" != "$B" ] && ok "oc_root_status recomputes Exports on refresh ($B -> $A)" || bad "root status refresh: before='$B' after='$A'"
 
 echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
 reset
@@ -140,11 +151,11 @@ qset "fake-2.db"
 oc_backups_picker >/dev/null
 grep -qx "backups remove fake-2.db --yes" "$CALLS" && ok "selecting a backup row deletes it (confirmed)" || bad "backups delete: $(cat "$CALLS")"
 
-echo "== backups rows: create first, shrink second, no mode toggle =="
+echo "== backups rows: create first, bulk rows, no mode toggle, no shrink =="
 reset
 ROWS=$(oc_backups_rows)
 printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "create backup is the first row" || bad "create not first"
-printf '%s\n' "$ROWS" | sed -n '2p' | grep -q '^__SHRINK__' && ok "shrink is the second row" || bad "shrink not second"
+printf '%s\n' "$ROWS" | grep -q '__SHRINK__' && bad "shrink row leaked into backups" || ok "backups rows have NO shrink row (dedicated shrinks entry)"
 printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && bad "mode toggle leaked into backups" || ok "backups picker has a single mode (no toggle)"
 
 : > "$CALLS"; call_log
@@ -152,11 +163,6 @@ confirm_action() { return 0; }
 qset "__CREATE__"
 oc_backups_picker >/dev/null
 grep -qx "backup" "$CALLS" && ok "backups picker offers create backup" || bad "backups create: $(cat "$CALLS")"
-
-: > "$CALLS"
-qset "__SHRINK__" "lean: keep 10 most recent + strip reasoning|shrink|lean"
-oc_backups_picker >/dev/null
-grep -qx "shrink lean" "$CALLS" && ok "shrink runs from the backups picker (own LIVE-DB snapshot)" || bad "backups shrink: $(cat "$CALLS")"
 
 : > "$CALLS"
 qset "__DELETE_ALL__"
@@ -184,22 +190,18 @@ grep -qx "info ses_A0001" "$CALLS" && ok "sessions details dispatches info for t
 grep -q "sessions (details)" "$FZF_HIST" && ok "sessions picker is details-only" || bad "sessions title"
 printf '%s\n' "$(oc_sessions_rows)" | grep -q '__TOGGLE__' && bad "toggle leaked into sessions" || ok "sessions details has no mode toggle"
 
-echo "== export picker (independent entry: session or ALL -> product) =="
+echo "== export picker needs presets (no-pass manual fallback: guidance instead) =="
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-qset "ses_A0001" "transcript"
-oc_export_picker >/dev/null
-grep -qx "export transcript --filter ses_A0001" "$CALLS" && ok "export picker ran the flow with the session filter" || bad "export picker flow: $(cat "$CALLS")"
-grep -q "sessions (export)" "$FZF_HIST" && ok "export picker reached its own picker" || bad "export picker title"
-
-: > "$CALLS"
-qset "__ALL__" "compactions"
-oc_export_picker >/dev/null
-grep -qx "export compactions" "$CALLS" && ok "export picker ALL runs the flow with no filter" || bad "export picker ALL: $(cat "$CALLS")"
-
-: > "$CALLS"
-printf '%s\n' "$(oc_export_rows)" | grep -q '^__ALL__' && ok "export picker lists ALL SESSIONS first" || bad "export rows ALL missing"
+export OCED_PRESETS="$TMP/no-presets.json"
+rm -f "$OCED_PRESETS"
+GUIDE=$(oc_export_picker)
+[ ! -s "$CALLS" ] && ok "no-presets export picker dispatches nothing" || bad "no-presets export picker ran a command: $(cat "$CALLS")"
+printf '%s' "$GUIDE" | grep -q 'presets.json.example' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
+printf '%s' "$GUIDE" | grep -q 'export transcript|memory|compactions' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
+[ -z "$(oc_export_rows)" ] && ok "export rows empty without presets (no manual fallback)" || bad "export rows: $(oc_export_rows)"
+printf '%s\n' "$(oc_selection_rows)" | sed -n '1p' | grep -q '^__ALL__' && ok "selection rows list ALL SESSIONS first" || bad "selection rows ALL missing"
 
 echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
 export OCED_PRESETS="$TMP/presets.json"
@@ -286,62 +288,67 @@ oc_exports_picker >/dev/null
 [ ! -s "$CALLS" ] && ok "exports delete-all cancelled on 'n'" || bad "exports delete-all ran on 'n'"
 confirm_action() { return 0; }
 
-echo "== export flow: product -> runner with defaults =="
+echo "== export flow: preset + session/ALL selection -> runner =="
 reset
+export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 confirm_action() { :; return 0; }
-qset "transcript"
-oc_export_flow "ses_A0001" >/dev/null
-grep -qx "export transcript --filter ses_A0001" "$CALLS" && ok "flow runs the product with the session filter" || bad "flow product: $(cat "$CALLS")"
+qset "ses_A0001"
+oc_preset_run "notes" "product transcript" >/dev/null
+grep -qx "export notes --filter ses_A0001" "$CALLS" && ok "preset run overrides the selection with the session filter" || bad "preset session: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "transcript"
-oc_export_flow "" >/dev/null
-grep -qx "export transcript" "$CALLS" && ok "flow + ALL sessions: no filter" || bad "flow ALL: $(cat "$CALLS")"
+qset "__ALL__"
+oc_preset_run "notes" "product transcript" >/dev/null
+grep -qx "export notes" "$CALLS" && ok "preset ALL runs as configured (no override)" || bad "preset ALL: $(cat "$CALLS")"
 
 echo "== export flow: ESC cancels without creating a run =="
 reset
+export OCED_PRESETS="$TMP/presets.json"
 before=$(count_meta transcript)
-FZF_FAIL="export product"
-oc_export_flow "ses_A0001" >/dev/null 2>&1
+FZF_FAIL="sessions (preset)"
+oc_preset_run "notes" "x" >/dev/null 2>&1
 rc=$?
 after=$(count_meta transcript)
-[ "$rc" -ne 0 ] && ok "ESC cancels the product picker ($rc)" || bad "ESC did not cancel"
+[ "$rc" -ne 0 ] && ok "ESC cancels the session picker of a preset ($rc)" || bad "ESC did not cancel"
 [ "$before" -eq "$after" ] && ok "cancelled flow created no export" || bad "cancelled flow exported"
 
 echo "== export flow: confirmation gates the run =="
 reset
+export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 CONFIRME="$TMP/confirm.txt"
 confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
 before=$(count_meta transcript)
-qset "transcript"
-oc_export_flow "ses_A0001" >/dev/null
+qset "__ALL__"
+oc_preset_run "notes" "x" >/dev/null
 after=$(count_meta transcript)
 [ -s "$CONFIRME" ] && grep -q "Start this export" "$CONFIRME" && ok "confirmation asked with the plan" || bad "no confirmation asked"
 [ "$before" -eq "$after" ] && ok "declined confirmation -> no export" || bad "declined but exported"
 
 echo "== export flow: real runs against the fake DB =="
 reset
+export OCED_PRESETS="$TMP/presets.json"
 confirm_action() { return 0; }
 before=$(count_meta transcript)
-qset "transcript"
-oc_export_flow "ses_A0001" >/dev/null
-[ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "flow exports the transcript" || bad "flow export transcript missing"
+qset "ses_A0001"
+oc_preset_run "notes" "x" >/dev/null
+[ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "preset flow exports the transcript" || bad "preset flow export transcript missing"
 ME=$(newest_meta transcript)
 jq -e '.filter == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
-qset "transcript"
-oc_export_flow "" >/dev/null
+qset "__ALL__"
+oc_preset_run "notes" "x" >/dev/null
 MA=$(newest_meta transcript)
-jq -e '.filter == null' "$MA" >/dev/null && ok "ALL sessions -> no filter" || bad "ALL filter not null"
+jq -e '.filter == null' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
 jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
 
-qset "memory"
-oc_export_flow "" >/dev/null
+qset "__ALL__"
+oc_preset_run "rag" "x" >/dev/null
 MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
-[ -f "$MEM/corpus.jsonl" ] && ok "memory flow wrote a corpus" || bad "memory flow corpus"
+[ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
+export OCED_PRESETS="$TMP/no-presets.json"
 
 echo "== shrink in the menu: recipes / custom / dry-run / ESC / confirm =="
 reset
@@ -372,6 +379,62 @@ qset "bare: keep 10 most recent, keep reasoning|shrink|bare"
 oc_pick_shrink >/dev/null
 [ ! -s "$CALLS" ] && ok "shrink rejected on 'n'" || bad "shrink ran on 'n'"
 confirm_action() { return 0; }
+
+echo "== shrinks picker (create + manage, toggle view/remove) =="
+reset
+SHR="$OCED_BACKUP_DIR/shrink"
+mkdir -p "$SHR/20260101-090000" "$SHR/20260102-100000" "$SHR/20260103-110000"
+for d in 20260101-090000 20260102-100000 20260103-110000; do
+    jq -n --arg c "keep 10 + strip reasoning" --argjson t 6 --argjson k 2 --argjson del 4 \
+        --argjson b 100000 --argjson a 30000 --argjson st 0 \
+        '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-01T00:00:00Z"}' \
+        > "$SHR/$d/shrink.json"
+done
+ROWS=$(oc_shrinks_rows view)
+printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "shrinks rows: create first" || bad "shrinks create not first"
+printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && ok "shrinks rows: view/remove toggle" || bad "shrinks toggle missing"
+printf '%s\n' "$ROWS" | grep -q '2026-01-03 11:00:00' && ok "shrinks rows list the produced runs (human stamp)" || bad "shrinks run rows missing"
+printf '%s\n' "$ROWS" | grep -q '2 sess / 4 del' && ok "shrinks rows show the shrunken counts" || bad "shrinks counts in row"
+
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "20260103-110000"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks view 20260103-110000" "$CALLS" && ok "shrinks view dispatches for the run" || bad "shrinks view: $(cat "$CALLS")"
+grep -q "shrinks (view)" "$FZF_HIST" && ok "shrinks picker starts in view mode" || bad "shrinks initial mode"
+
+: > "$CALLS"
+qset "__TOGGLE__" "20260102-100000"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks remove 20260102-100000 --yes" "$CALLS" && ok "shrinks picker toggles to remove and removes the run" || bad "shrinks remove: $(cat "$CALLS")"
+grep -q "shrinks (remove)" "$FZF_HIST" && ok "shrinks picker reached remove mode" || bad "shrinks remove mode not reached"
+
+: > "$CALLS"
+qset "__TOGGLE__" "__DELETE_ALL__"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks remove 20260101-090000 --yes" "$CALLS" && grep -qx "shrinks remove 20260103-110000 --yes" "$CALLS" && ok "shrinks delete-all removes every run (confirmed)" || bad "shrinks delete-all: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__TOGGLE__" "__KEEP_NEWEST__"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks remove 20260101-090000 --yes" "$CALLS" && grep -qx "shrinks remove 20260102-100000 --yes" "$CALLS" && ! grep -qx "shrinks remove 20260103-110000 --yes" "$CALLS" && ok "shrinks keep-newest removes all but the newest" || bad "shrinks keep-newest: $(cat "$CALLS")"
+
+: > "$CALLS"
+confirm_action() { return 1; }
+qset "__TOGGLE__" "__DELETE_ALL__"
+oc_shrinks_picker >/dev/null
+[ ! -s "$CALLS" ] && ok "shrinks delete-all cancelled on 'n'" || bad "shrinks delete-all ran on 'n'"
+confirm_action() { return 0; }
+
+echo "== shrinks picker: empty state + create reaches the dispatcher =="
+reset
+confirm_action() { return 0; }
+rm -rf "$SHR"
+printf '%s\n' "$(oc_shrinks_rows view)" | grep -q '__NONE__' && ok "shrinks rows show (none) when empty" || bad "shrinks none missing"
+: > "$CALLS"; call_log
+qset "__CREATE__" "lean: keep 10 most recent + strip reasoning|shrink|lean"
+oc_shrinks_picker >/dev/null
+grep -qx "shrink lean" "$CALLS" && ok "shrinks picker creates a copy (reaches the dispatcher)" || bad "shrinks create: $(cat "$CALLS")"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

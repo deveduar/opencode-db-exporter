@@ -148,28 +148,39 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 
 Picker-driven with real fzf: TSV rows `key<TAB>display` (`--with-nth=2..`), **no
 TAB multi-select** — mode switches and bulk operations are their own rows. The export
-picker is **preset-first**: if the presets file exists, it lists each preset as a direct
+picker is **preset-only**: if the presets file exists, it lists each preset as a direct
 action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle presets render as
-`[transcript+memory]`) — **no `Manual…` row** (the shipped default plans cover the
-three products with defaults); without the file it is the classic
-picker (ALL + sessions). Picking a preset asks next for **the selection** (`oc_preset_run`,
-reusing the session/ALL rows): **ALL** keeps the preset's embedded selection (runs as
-configured), **one session** runs `export <name> --filter <ses>` — selection is run-time
-state, not part of the plan identity, so a plan behaves ad-hoc just like raw flags (CLI-wins
-already implemented). The manual flow (`oc_export_flow`) is session (**or ALL**) →
-`oc_pick_product` (`transcript|memory|compactions`, 3 rows taken straight from
-`exportlib/plan.py products`, legend via `products --legend`) → `oc_export_confirm` plan →
-run `export <product>` with its **default options** (+ `--filter <session>` when a session
-was picked). Menu labels explain *purpose and relative size*: product rows carry a
-"use it when…" tag; `oc_preset_purpose` annotates the shipped plans
+`[transcript+memory]`); **without the file it prints setup guidance**
+(`cp presets.json.example …`) plus the raw CLI — **there is no manual session→product
+fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone;
+`oc_export_manual_rows` became `oc_selection_rows`, reused by `oc_preset_run`).
+Picking a preset asks next for **the selection** (`oc_preset_run`, reusing the
+session/ALL rows): **ALL** keeps the preset's embedded selection (runs as configured),
+**one session** runs `export <name> --filter <ses>` — selection is run-time state, not
+part of the plan identity, so a plan behaves ad-hoc just like raw flags (CLI-wins
+already implemented). Product rows still come straight from `exportlib/plan.py
+products` but only as the CLI/test API surface (no product-only menu flow). Menu labels
+explain *purpose and relative size*: product rows carry a "use it when…" tag;
+`oc_preset_purpose` annotates the shipped plans
 (`archive`/`quick`/`share`/`notes`/`rag`/`digest`) with their intent (unknown names get
-the bare row). **No `Manual…` row** when presets exist — the shipped default plans
-cover the three products with defaults; the classic session→product flow remains the
-no-presets fallback. There are **no variant tables or custom checklists in the menu**:
-tuning and "bundle everything in one stamp" live in the presets file (`OCED_PRESETS`)
-or the CLI. The confirm step prints a **Will produce:** block with per-product
-descriptions + effective flags, and a sanitize caveat when applicable. The term
-**plan/preset** always means the named config; **product** always the keyword
+the bare row). The confirm step prints a **Will produce:** block with per-product
+descriptions + effective flags, and a sanitize caveat when applicable. There are **no
+variant tables or custom checklists**: tuning and "bundle everything in one stamp" live
+in the presets file (`OCED_PRESETS`) or the CLI.
+
+The root menu recomputes its header on every loop: `run_menu --refresh-cb oc_root_status`
+rebuilds `ACTION_STATUS` (DB/sessions/WAL/backup/exports counts) after each action, so a
+pickered deletion is reflected immediately.
+
+**Create + manage in one picker.** Shrink lives in its own root entry: `oc_shrinks_picker`
+offers `[create shrink copy…]` (the `pick_shrink_profile`/`oc_pick_shrink_custom` recipes,
+LIVE DB, own snapshot) plus a `view`/`remove` toggle with per-run rows and the
+`delete ALL` / `delete old (keep newest)` bulk rows. Rows come from the shrink.sh helpers
+(`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`, so the
+menu never re-aggregates jq. This removed the old `__SHRINK__` row from the backups picker,
+which is now just create/delete-all/keep-newest/delete-one.
+
+The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|compactions`). Usage and the decision matrix:
 `docs/export-guide.md`; short usage: `README.md` (Menu).
 
@@ -188,6 +199,12 @@ pages but does not shrink the file (only `VACUUM` does, and it needs an exclusiv
 5. `integrity_check` + `foreign_key_check` **before** saving `opencode.shrunk.db` +
    `shrink.json` (criteria/counts/per-table).
 6. Manual swap — or `--swap`, see §6.
+
+Produced copies accumulate under `$OCED_BACKUP_DIR/shrink/<o_ts>/`; `oced_shrinks`
+(`shrinks list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>`) manages them the
+way `exports` manages run folders — `list` aggregates each `shrink.json` + the copy size
+into one row, `--tsv` emits `stamp<TAB>display` as the single machine row format (used by
+the menu picker).
 
 ## 6. Operational safety of the swap (`shrink --swap`)
 

@@ -19,11 +19,12 @@ Legend: `R?` = optional key.
 ## 1. presets.json — `$OCED_PRESETS`
 
 Source of truth for `opencode-db export <name>` and the export menu (preset-first
-when the file exists). Authoritative machine schema: `presets.schema.json`
-(draft-07). **Both the schema and this table are generated from
+when the file exists). Authoritative machine schema: [`generated/presets.schema.json`](../generated/presets.schema.json)
+(draft-07). **The schema and the per-key table are generated from
 `modules/exportlib/flags.py`** (flags = the single source of truth; see
-`scripts/generate_schema.py`). Runtime validation in `exportlib/presets.py`
-imports the same key lists, so the three stay in sync by construction.
+`scripts/generate_schema.py`, output in [`generated/`](../generated/)). Runtime
+validation in `exportlib/presets.py` imports the same key lists, so everything stays
+in sync by construction.
 
 ```jsonc
 {
@@ -53,26 +54,15 @@ imports the same key lists, so the three stay in sync by construction.
 }
 ```
 
-> Table generated with `python3 scripts/generate_schema.py --docs` — do not edit by hand.
+> Per-key rules table (generated, checked in): [`generated/flags-table.md`](../generated/flags-table.md)
+> — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
+> Summary of the non-obvious rows:
 
 | `product` | string | `transcript` \| `memory` \| `compactions` | single only (`full` is a CLI alias, **not** a preset product) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
-| Product flags (top level for single, per product for bundle): | | | |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
-| `sub` | string | `separate` \| `inline` \| `omit` | transcript |
-| `tool_output` | string | `full` \| `truncated` \| `omit` | transcript |
-| `tool_input_limit` | int | ≥ 0 | transcript |
-| `tool_output_limit` | int | ≥ 0 | transcript |
-| `patch` | string | `full` \| `omit` | transcript |
-| `no_reasoning` | bool | — | transcript, compactions |
-| `mark_compactions` | bool | — | transcript, compactions |
-| `summary_diffs` | bool | — | transcript, compactions |
-| `role` | string | `all` \| `user` \| `assistant` | transcript, compactions |
 | `json` | bool | — | transcript/compactions (faithful archive) |
-| `sanitize` | bool | — | any |
-| `cap` | int | 0 = unlimited (≥ 0) | memory |
-| `files` | bool | — | memory (touched files) |
-| `out` | string | — | any — CLI-only (never a preset key) |
+| `out` | string | — | CLI-only (never a preset key) |
 
 Unknown keys fail (`additionalProperties: false`). Flags that a product ignores are
 harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole
@@ -292,3 +282,17 @@ roots/subagents = max across metadata files, msgs/comp = sum, size = du of the
 stamp dir; a run with no readable metadata renders `profiles="?"`. `exports view
 <stamp>` prints the `date`/`profile`/`sessions`/`messages`/`compactions`/`db`/
 `db_sha256` line from the first metadata file found.
+
+## 8. shrinks list
+
+`shrinks list --tsv` emits one TSV row per produced copy (the machine format the menu
+picker consumes — same aggregation as `shrinks list`):
+
+```
+<stamp>\t<YYYY-MM-DD HH:MM:SS UTC>  <criteria>  <kept> sess / <deleted> del  <before> -> <after> (<freed>, <pct>%)  <copy or (swapped/no copy)>
+```
+
+`<stamp>` is the run dir name (`YYYYMMDD-HHMMSS`, UTC); numbers come from that run's
+`shrink.json` (see §6); size fields are human-readable. A run whose `opencode.shrunk.db`
+was moved out by `--swap` renders `(swapped/no copy)`. Without `--tsv` the same row is
+printed numbered with a `view <stamp> · remove <stamp> · prune <N>` footer.

@@ -450,12 +450,13 @@ BAD2=$(run export badprod); rc=$?
     && ok "bundle rejects an invalid product" || bad "badprod: $(printf '%s' "$BAD2" | tail -1)"
 export OCED_PRESETS="$PRESETS"
 
-echo "== presets.schema.json contract (docs/schemas.md) =="
-SCHEMA="$TESTS_DIR/../presets.schema.json"
+echo "== presets.schema.json contract (generated/) =="
+SCHEMA="$TESTS_DIR/../generated/presets.schema.json"
 EXAMPLE="$TESTS_DIR/../presets.json.example"
 python3 "$TESTS_DIR/validate_schema.py" "$SCHEMA" "$EXAMPLE" >/dev/null 2>&1 \
     && ok "presets.json.example satisfies presets.schema.json" || bad "example vs schema"
-# Anti-drift: presets.schema.json must equal what scripts/generate_schema.py produces
+# Anti-drift: generated/presets.schema.json + generated/flags-table.md must equal what
+# scripts/generate_schema.py produces (imported directly, so stdout stays clean)
 python3 -c "
 import json, sys, importlib.util
 spec = importlib.util.spec_from_file_location('gen', '$TESTS_DIR/../scripts/generate_schema.py')
@@ -463,7 +464,13 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 expected = json.dumps(m.generate_schema(), indent=2, ensure_ascii=False)
 actual = json.dumps(json.load(open('$SCHEMA')), indent=2, ensure_ascii=False)
 sys.exit(0 if expected == actual else 1)
-" >/dev/null 2>&1 && ok "presets.schema.json matches scripts/generate_schema.py (no drift)" || bad "schema drift vs generate_schema.py"
+" >/dev/null 2>&1 && ok "generated/presets.schema.json matches scripts/generate_schema.py (no drift)" || bad "schema drift vs generate_schema.py"
+python3 -c "
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('gen', '$TESTS_DIR/../scripts/generate_schema.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sys.exit(0 if open('$TESTS_DIR/../generated/flags-table.md').read() == m.flags_table() + '\n' else 1)
+" >/dev/null 2>&1 && ok "generated/flags-table.md matches scripts/generate_schema.py --docs (no drift)" || bad "flags-table drift vs generate_schema.py --docs"
 cat > "$TMP/schema-bad.json" <<'EOF'
 {"presets": {"double": {"product": "transcript", "products": {"memory": {}}}}}
 EOF
@@ -506,6 +513,35 @@ PRE=$(ls "$FAKE".pre-shrink-* 2>/dev/null | head -1)
 [ -n "$PRE" ] && ok "--swap wrote a .pre-shrink safety copy" || bad "--swap safety copy missing"
 [ "$(sqlite3 "file:$PRE?mode=ro" "SELECT count(*) FROM session;")" -eq 6 ] \
     && ok ".pre-shrink holds the original 6 sessions" || bad ".pre-shrink sessions"
+
+echo "== shrinks (manager of the produced shrink copies) =="
+SL=$(run shrinks list)
+NCM=$(printf '%s' "$SL" | grep -oE 'Shrink copies \(([0-9]+)\)' | grep -oE '[0-9]+' | head -1)
+[ -n "${NCM:-}" ] && [ "$NCM" -eq "$(printf '%s' "$SL" | grep -cE '^  [0-9]+\.')" ] \
+    && ok "shrinks list header matches its rows ($NCM)" || bad "shrinks list rows: header vs rows"
+[ "$NCM" -ge 1 ] 2>/dev/null && ok "shrinks list lists the produced runs" || bad "shrinks list empty"
+
+TSV=$(run shrinks list --tsv)
+STAMP=$(printf '%s\n' "$TSV" | sed -n '1p' | cut -f1)
+case "$STAMP" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ok "shrinks tsv: stamp key format" ;;
+    *) bad "shrinks tsv stamp: '$STAMP'" ;;
+esac
+[ "$(printf '%s\n' "$TSV" | wc -l)" -eq "$NCM" ] && ok "shrinks tsv: one row per run" || bad "shrinks tsv rows"
+printf '%s\n' "$TSV" | sed -n '1p' | grep -qE 'UTC.*sess' && ok "shrinks tsv: human display" || bad "shrinks tsv display: $(printf '%s\n' "$TSV" | sed -n '1p')"
+
+VOUT=$(run shrinks view "$STAMP")
+printf '%s' "$VOUT" | grep -q '"criteria"' && ok "shrinks view prints the shrink.json" || bad "shrinks view: [$VOUT]"
+run shrinks view "nonesuch-000000" >/dev/null; [ $? -ne 0 ] && ok "shrinks view unknown stamp -> error" || bad "shrinks view unknown rc"
+run shrinks remove "nonesuch-000000" >/dev/null; [ $? -ne 0 ] && ok "shrinks remove unknown stamp -> error" || bad "shrinks remove unknown rc"
+ROUT=$(run shrinks remove "$STAMP" </dev/null)
+printf '%s' "$ROUT" | grep -q 'y/N' && ok "shrinks remove without --yes asks for confirmation" || bad "shrinks remove no --yes: [$ROUT]"
+[ -d "$BK/shrink/$STAMP" ] && ok "interactive-cancelled remove kept the run" || bad "remove without --yes deleted"
+run shrinks remove "$STAMP" --yes >/dev/null
+[ ! -d "$BK/shrink/$STAMP" ] && ok "shrinks remove --yes deletes the run" || bad "shrinks remove --yes"
+run shrinks prune 0 >/dev/null; [ $? -ne 0 ] && ok "shrinks prune 0 rejected" || bad "shrinks prune 0 rc"
+run shrinks prune 2 --yes >/dev/null
+[ "$(find "$BK/shrink" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] && ok "shrinks prune 2 keeps the 2 newest" || bad "shrinks prune 2"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"
