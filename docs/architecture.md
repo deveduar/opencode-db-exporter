@@ -81,6 +81,13 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
 - **The CLI wins over the preset**: a `--filter`/`--sessions` on the command line voids
   the whole preset selection (`cli_selection`), and any explicit flag (e.g. `--cap`)
   beats the preset value. Detected with `flag_in_argv()`, not with the argparse default.
+- **`snapshot: fresh`** is a workflow key (**single preset only**, `SINGLE_ONLY_KEYS`;
+  never per-product/bundle): when a plan carries it, the export is expected to double as
+  a reference archive. The CLI reads the last backup's manifest and compares
+  sessions/messages/max_updated against the live DB (`_backup_aligned` — the same triple
+  as the menu's `o_backup_aligned`) and warns (`no backup exists yet` / `out of sync`)
+  before exporting; the menu turns that into an offer to create a fresh backup first.
+  Skipped silently under `--from-backup` (the source *is* the snapshot).
 - **Bundle presets** (`products` instead of `product`): a map `{product: {flags}}` over
   `transcript|memory|compactions` (mutually exclusive with `product`). The selection is
   top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
@@ -191,14 +198,30 @@ pages but does not shrink the file (only `VACUUM` does, and it needs an exclusiv
 `oced_shrink` runs on a copy:
 
 1. `.backup` snapshot of the live DB (WAL-safe).
-2. **Closed** keep-set via a recursive CTE (parents and subagents of a kept session are
-   kept too; no orphans).
+2. **One keep rule** (exactly one; the last one given wins): `--keep N` (default 10),
+   `--older-than DAYS`, `--since DATE`, `--keep-all`, `--keep-sessions ID[,ID]` or
+   `--discard-sessions ID[,ID]`. `--keep-sessions` yields the **closed** keep-set via a
+   recursive CTE (parents and subagents of a kept session are kept too; no orphans);
+   `--discard-sessions` inverts it — the kept set is *everything except* the listed ids
+   **and their descendants**, so the discard set is descendant-closed by construction and
+   the keep side needs no extra closure (FK-safe).
 3. FK-safe deletion order of session-bound tables + `event`/`event_sequence` aggregates
    (`aggregate_id LIKE 'ses_%'`).
 4. Optional `--strip-reasoning` (the `part` rows with `data.type='reasoning'`).
 5. `integrity_check` + `foreign_key_check` **before** saving `opencode.shrunk.db` +
-   `shrink.json` (criteria/counts/per-table).
+   `shrink.json` (criteria/counts/per-table + `selection` in the `{"rule", ids/value}`
+   shape the menu consumes).
 6. Manual swap — or `--swap`, see §6.
+
+**Named recipes** (the shrink mirror of §3.3): `modules/shrinklib/` is the python SSoT —
+`flags.py` owns the recipe flags + the built-in plans (`lean`/`recent`/`full`/`bare`),
+`presets.py` loads `$OCED_SHRINK_PRESETS` (validated: exactly one keep rule, unknown keys
+die) and merges it **over** the built-ins, `plan.py` resolves rows/bake/plan/selection
+for the CLI and the menu. `shrink <name>` bakes the preset to the raw flags
+(`--keep 10 --strip-reasoning`, `--discard-sessions ses_…`); unknown names error and
+list the known ones. `--discard-sessions` (CLI or preset) prints a first-step hint —
+`opencode-db export memory --sessions <ids>` — so nothing is lost before the pruned copy
+is made; the menu makes it an actual offer with `keep_sessions` warning instead.
 
 Produced copies accumulate under `$OCED_BACKUP_DIR/shrink/<o_ts>/`; `oced_shrinks`
 (`shrinks list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>`) manages them the
@@ -215,14 +238,22 @@ while opencode is running can lose the WAL tail. `opencode-db shrink
 1. **Process guard**: aborts if there is a process whose cmdline mentions `opencode`
    (excluding the tool itself / `pgrep`) — `pgrep -af`.
 2. **Re-verification** of the copy in `mode=ro` (`integrity_check` + `foreign_key_check`).
-3. **Safety copy** of the live DB with `sqlite3 .backup` → `opencode.db.pre-shrink-<ts>`
-   (WAL-safe; never `cp`).
+3. **Safety copy** of the live DB with `sqlite3 .backup` →
+   `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db` (WAL-safe; never `cp`),
+   auto-keeping only the most recent copy. The swap safety copy is **not** a
+   `backups`/manifest run — `shrinks verify` lists/cleans it.
 4. **Atomic swap** with `mv -f` + cleaning of the old DB's `-wal`/`-shm`.
 5. **Rollback**: if the new DB does not open/verify in `mode=ro`, the safety copy is
    restored.
 
 `--dry-run` never writes; combining it with `--swap` is rejected. Confirmation `[y/N]`
 can be skipped with `--yes`.
+
+`shrinks verify [--tsv] [--yes]` audits the produced copies: orphan run dirs (no
+valid `shrink.json`), old `pre-shrink/*` copies, and a last shrink stale vs the live
+DB. `shrink.json` records `sessions.max_updated` (newest kept session `time_updated`)
+so the freshness check runs in-database; a legacy shrink.json without that field is
+flagged as unverifiable rather than silently "up to date".
 
 ## 7. Links
 

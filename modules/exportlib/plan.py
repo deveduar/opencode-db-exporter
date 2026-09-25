@@ -15,6 +15,7 @@
 #   legend               header lines explaining each shipped plan in the file
 #   resolve <profile>    JSON plan for a product keyword or preset name
 #   plan <profile>       multi-line "Will produce:" block for the confirm
+#   snapshot <name>      "fresh" when the preset pins snapshot: fresh, else ""
 from __future__ import annotations
 
 import json
@@ -353,6 +354,15 @@ def _cli() -> int:
             if not purpose:
                 return 1
             print(purpose)
+            return 0
+        if cmd == "snapshot":
+            if len(args) < 2:
+                return 1
+            presets = load_presets()
+            pdata = presets.get(args[1])
+            if pdata is None:
+                return 1
+            print("fresh" if pdata.get("snapshot") == "fresh" else "")
             return 0
         if cmd == "resolve":
             if len(args) < 2:

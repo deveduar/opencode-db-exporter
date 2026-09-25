@@ -8,6 +8,7 @@
 # --no-reasoning, --mark-compactions, --summary-diffs, --role.
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from exportlib import TOOL_VERSION
-from exportlib.config import default_db, default_out
+from exportlib.config import default_bkp_dir, default_db, default_out
 from exportlib.db import backfill_session_tokens, load_sessions
 from exportlib.faithful import write_session_json
 from exportlib.memory import memory_export
@@ -119,6 +120,35 @@ def build_argparser() -> argparse.ArgumentParser:
     return ap
 
 
+def _backup_aligned(db_path: Path) -> str:
+    """'aligned' | 'out of sync' | 'no backups' — last manifest entry vs LIVE db
+    (read-only): sessions count, message count and max(time_updated) must match
+    (the same triple the menu's o_backup_aligned uses)."""
+    manifest = Path(default_bkp_dir()) / "manifest.json"
+    if not manifest.exists():
+        return "no backups"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        backups = data.get("backups") or []
+        last = backups[-1]
+        msess, mmess, mu = last.get("sessions"), last.get("messages"), last.get("max_updated")
+    except Exception:
+        return "no backups"
+    if msess is None or mmess is None or mu is None:
+        return "no backups"
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        tsess = con.execute("SELECT count(*) FROM session").fetchone()[0]
+        tmess = con.execute("SELECT count(*) FROM message").fetchone()[0]
+        tu = con.execute("SELECT max(time_updated) FROM session").fetchone()[0] or 0
+        con.close()
+    except sqlite3.Error:
+        return "no backups"
+    if msess == tsess and mmess == tmess and mu == tu:
+        return "aligned"
+    return "out of sync"
+
+
 def main() -> None:
     ap = build_argparser()
     args = ap.parse_args()
@@ -146,6 +176,22 @@ def main() -> None:
     if not db_path.exists():
         die(f"Database not found: {db_path}")
     out_base = Path(args.out) if args.out else Path(default_out())
+
+    if args.snapshot == "fresh" and not os.environ.get("OCED_FROM_BACKUP"):
+        align = _backup_aligned(db_path)
+        if align == "no backups":
+            print(
+                "warning: --snapshot fresh but no backup exists yet\n"
+                "         (run: opencode-db backup, or the Backups menu, first)",
+                file=sys.stderr,
+            )
+        elif align == "out of sync":
+            print(
+                "warning: --snapshot fresh but the last backup is out of sync with the live DB\n"
+                "         (the export reads the live DB; run opencode-db backup to align\n"
+                "         the reference archive before a snapshot export)",
+                file=sys.stderr,
+            )
 
     out_dir = make_outdir_final(out_base, args.profile, args.stamp)
     try:

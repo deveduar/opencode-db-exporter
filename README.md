@@ -51,12 +51,14 @@ opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sh
 opencode-db backups [list|verify <file>|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | compactions
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
-opencode-db shrink [--keep N|--older-than DAYS] [--dry-run] [--swap]
+opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
+                    |--keep-sessions ID[,ID]|--discard-sessions ID[,ID]]
+                    [--strip-reasoning] [--list-presets] [--dry-run] [--swap]
                                       # pruned + VACUUMed COPY (never touches the live DB
                                       # unless --swap replaces it safely)
-opencode-db shrinks [list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>]
+opencode-db shrinks [list [--tsv]|view <stamp>|verify [--tsv] [--yes]|remove <stamp> [--yes]|prune <N>]
                                       # manage the produced shrink copies
-opencode-db guide [--list]            # step-by-step console wizard (safe workflow)
+opencode-db guide [--list]            # linear wizard: export -> shrink -> swap (type 'confirm' to swap)
 opencode-db deps [--check]            # idempotent dependency check/install (apt|pacman|dnf)
 opencode-db help
 ```
@@ -183,8 +185,9 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
   mean the product. An unknown name fails listing the known presets.
 - Allowed preset keys: `product` + `sub`, `tool_output`, `tool_input_limit`,
   `tool_output_limit`, `patch`, `role`, `no_reasoning`, `mark_compactions`,
-  `summary_diffs`, `json`, `sanitize`, `cap`, `files` (bools/choices as in the flags) and
-  the selection `filter` (LIKE string) **or** `sessions` (list of ids, not both).
+  `summary_diffs`, `json`, `sanitize`, `cap`, `files` (bools/choices as in the flags),
+  `snapshot` = `"fresh"` (**single preset only**) and the selection `filter` (LIKE
+  string) **or** `sessions` (list of ids, not both).
 - A **bundle preset** uses `products` instead of `product`: a map of
   `{product: {flags}}` (products may only be `transcript|memory|compactions` and each
   keeps its own flags, e.g. `cap`/`files` only matter for `memory`). The selection stays
@@ -195,6 +198,10 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
 - A `filter`/`sessions`/`--sessions` passed on the command line overrides the preset's
   selection; a config flag passed on the command line overrides the preset too (both for
   single and bundle presets).
+- **`snapshot: fresh`** coordinates the export with the reference backup: when this key is
+  set the CLI warns if no backup exists or the last one diverged from the live DB (run
+  `opencode-db backup` to align it), and the menu offers a fresh backup first. The export
+  itself still reads the live DB read-only; this only keeps the *archive* reproducible.
 - No presets file (or none matching) → no presets: export behaves exactly as before.
 The **menu** has no product-only flow: each preset is a first-class action (read from the same
   file), and it asks **which session or ALL SESSIONS** to export (pending state: a plan is config
@@ -248,24 +255,29 @@ opencode-db shrink full                    # keep ALL sessions, strip reasoning 
 opencode-db shrink bare                    # keep 10 most recent, physically shrink only
 opencode-db shrink --keep 5 --dry-run      # only report what would be pruned
 opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
+opencode-db shrink --keep-sessions ses_aaaaaa     # keep ONLY the listed ids + their parents/subagents
+opencode-db shrink --discard-sessions ses_bbbbbb  # keep everything EXCEPT the ids + their subagents
+                                               # (hints to export memory --sessions <ids> first)
 opencode-db shrink lean --swap             # build the copy AND replace the live DB (safe: --yes to skip the prompt)
 ```
 
-The named recipes are presets, like the export recipes: `lean` = `--keep 10 --strip-reasoning`, `recent` = `--older-than 90`, `full` = keep everything + strip reasoning (pure space reclamation), `bare` = `--keep 10` without stripping. Raw flags compose over a recipe (`shrink lean --keep 30` keeps 30 and still strips reasoning). `shrink --help` lists them.
+The named recipes are presets, like the export recipes: `lean` = `--keep 10 --strip-reasoning`, `recent` = `--older-than 90`, `full` = keep everything + strip reasoning (pure space reclamation), `bare` = `--keep 10` without stripping. Raw flags compose over a recipe (`shrink lean --keep 30` keeps 30 and still strips reasoning). The built-ins always exist; a **shrink presets file** (`OCED_SHRINK_PRESETS`, default `~/.config/opencode-db/shrink-presets.json`, auto-created from `shrink-presets.json.example`) extends/overrides them with exactly one keep rule each — see [`generated/shrink.schema.json`](generated/shrink.schema.json) and `shrink --list-presets`. `--keep-sessions`/`--discard-sessions` are exact-id selections (comma-separated). `shrink --help` lists everything.
 
 The kept set is **closed**: parents and subagents of a kept session are kept too (no orphan links), and the sessions-bound tables (message, part, todo, session_message, session_share, session_context_epoch, session_input) plus the `event`/`event_sequence` aggregates of the deleted sessions are pruned — orphans are never shipped. Output is written to `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (profile/criteria, counts, per-table removed rows, sizes, `integrity_check` and `foreign_key_check`). The copy is verified (`PRAGMA integrity_check` = ok, `PRAGMA foreign_key_check` = 0 rows) before being stored. If the swap is fine, replace the DB yourself:
 
 ```bash
-cp "$OPENCODE_DB" "$OPENCODE_DB.pre-shrink$(date +%s)"   # safety copy
+mkdir -p "$OCED_BACKUP_DIR/pre-shrink"
+cp "$OPENCODE_DB" "$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink$(date +%s).db"   # safety copy
 cp <shrunk.db> "$OPENCODE_DB"
 rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
 ```
 
 > **Stop opencode before swapping.** Replacing the DB behind a running opencode process
 > drops the WAL tail and can corrupt state. Prefer `opencode-db shrink --swap`, which
-> aborts if opencode is still running, snapshots a `.pre-shrink` safety copy (sqlite
-> `.backup`, WAL-safe), swaps atomically and rolls back if the new DB does not open
-> read-only (see [docs/architecture.md](docs/architecture.md) §6).
+> aborts if opencode is still running, snapshots a safety copy to
+> `$OCED_BACKUP_DIR/pre-shrink/` (sqlite `.backup`, WAL-safe), swaps atomically and
+> rolls back if the new DB does not open read-only (see
+> [docs/architecture.md](docs/architecture.md) §6).
 
 Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. Prefer the guided version: `opencode-db guide` walks the same steps with explanations.
 
@@ -275,11 +287,12 @@ Produced copies accumulate under `backups/shrink/`; manage them like export runs
 opencode-db shrinks list              # date / criteria / kept-deleted / sizes per copy
 opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
 opencode-db shrinks view <stamp>      # show a copy's shrink.json
+opencode-db shrinks verify [--yes]    # audit: orphan dirs, old pre-shrinks, stale copy vs live DB
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
 ```
 
-`--strip-reasoning` additionally removes the `reasoning` parts on the copy (the weighty chain-of-thought, rarely useful once a session is over). Community tooling reports ~77% extra savings — the combined copy (`delete sessions → strip reasoning → VACUUM`) is the smallest file we can hand you. Reasoning is a *part* stored per message; the exported transcript reads it from the original DB (toggle `--no-reasoning`), so stripping never touches what you can re-export. Stripped reasoning is only **recoverable while you keep the original DB or a backup**: keep `opencode-db backup` and the `.pre-shrink` safety copy if you ever need it.
+`--strip-reasoning` additionally removes the `reasoning` parts on the copy (the weighty chain-of-thought, rarely useful once a session is over). Community tooling reports ~77% extra savings — the combined copy (`delete sessions → strip reasoning → VACUUM`) is the smallest file we can hand you. Reasoning is a *part* stored per message; the exported transcript reads it from the original DB (toggle `--no-reasoning`), so stripping never touches what you can re-export. Stripped reasoning is only **recoverable while you keep the original DB or a backup**: keep `opencode-db backup` and the `pre-shrink` safety copy if you ever need it. If you use opencode between a `shrink` and the swap, the copy is stale — **shrink again before swapping** (the pre-shrink copy is your only rollback).
 
 ## Activity log (opt-in)
 

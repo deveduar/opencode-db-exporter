@@ -273,6 +273,25 @@ SRS=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
 printf '%s' "$(cat "$(dirname "$SRS")/shrink.json")" | jq -e '.stripped_reasoning == 1 and (.criteria | contains("strip reasoning"))' >/dev/null \
     && ok "shrink strip recorded in shrink.json" || bad "shrink strip manifest"
 
+echo "== shrink integrity failure leaves no orphan run dir =="
+# A corrupted source must fail the integrity check BEFORE storing anything: no
+# run dir, no shrink.json (the temp snapshot is removed on the way out).
+BAD="$TMP/bad-src.db"
+cp "$FAKE" "$BAD"
+python3 - "$BAD" <<'PYEOF'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("PRAGMA writable_schema=ON")
+con.execute("UPDATE sqlite_master SET sql='CREATE TABLE broken_session(x)' WHERE name='session'")
+con.commit()
+con.close()
+PYEOF
+DIRS_BEFORE="$(find "$BK/shrink" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+OPENCODE_DB="$BAD" bash "$MOD/opencode-db.sh" shrink --keep 1 >/dev/null 2>&1
+DIRS_AFTER="$(find "$BK/shrink" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+[ "$DIRS_BEFORE" -eq "$DIRS_AFTER" ] && ok "failed shrink leaves no orphan run dir ($DIRS_AFTER)" || bad "orphan dir after failed shrink"
+OPENCODE_DB="$FAKE"
+
 echo "== shrink recipes (named presets) =="
 newest_sj() { find "$BK/shrink" -name shrink.json 2>/dev/null | sort | tail -1; }
 run shrink lean >/dev/null || bad "shrink lean run"
@@ -288,6 +307,51 @@ printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 6 and .stripped_r
 run shrink recent >/dev/null || bad "shrink recent run"
 printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 6 and (.criteria | contains("last 90 day"))' >/dev/null \
     && ok "shrink recent = sessions updated in the last 90 days" || bad "shrink recent: $(cat "$(newest_sj)")"
+
+echo "== shrink session selection: keep-sessions closure =="
+run shrink --keep-sessions ses_A0001 >/dev/null || bad "shrink keep-sessions run"
+SKS=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
+[ "$(sqlite3 "$SKS" "SELECT count(*) FROM session;")" -eq 3 ] \
+    && ok "keep-sessions keeps the listed session + its subagents (3)" || bad "keep-sessions kept=$(sqlite3 "$SKS" "SELECT count(*) FROM session;")"
+[ "$(sqlite3 "$SKS" "PRAGMA foreign_key_check;" | wc -l)" -eq 0 ] && ok "keep-sessions FK clean" || bad "keep-sessions FK"
+printf '%s' "$(cat "$(dirname "$SKS")/shrink.json")" | jq -e '.selection.rule == "keep_sessions" and (.selection.ids | index("ses_A0001"))' >/dev/null \
+    && ok "shrink.json records the keep-sessions selection" || bad "keep-sessions selection in shrink.json"
+
+echo "== shrink session selection: discard-sessions closure =="
+run shrink --discard-sessions ses_A0001 >/dev/null || bad "shrink discard run"
+SDS=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
+[ "$(sqlite3 "$SDS" "SELECT count(*) FROM session;")" -eq 3 ] \
+    && ok "discard-sessions drops the listed session + descendants (kept 3)" || bad "discard kept=$(sqlite3 "$SDS" "SELECT count(*) FROM session;")"
+[ "$(sqlite3 "$SDS" "PRAGMA foreign_key_check;" | wc -l)" -eq 0 ] && ok "discard FK clean" || bad "discard FK"
+[ "$(sqlite3 "$SDS" "SELECT count(*) FROM session WHERE id LIKE 'ses_A%';")" -eq 0 ] \
+    && ok "discard removed the whole ses_A* group" || bad "discard A left"
+grep_run "export memory --sessions ses_A0001" shrink --discard-sessions ses_A0001 \
+    && ok "discard CLI prints the export-first hint" || bad "discard hint missing"
+printf '%s' "$(cat "$(dirname "$SDS")/shrink.json")" | jq -e '.selection.rule == "discard_sessions"' >/dev/null \
+    && ok "shrink.json records the discard-sessions selection" || bad "discard selection in shrink.json"
+
+echo "== shrink presets from OCED_SHRINK_PRESETS (file overrides/extensions) =="
+FPRES="$TMP/shrink-presets.json"
+cat > "$FPRES" <<'EOF'
+{"presets": {"skim": {"discard_sessions": ["ses_A0001"]},
+              "only": {"keep_sessions": ["ses_A0001"]}}}
+EOF
+export OCED_SHRINK_PRESETS="$FPRES"
+run shrink skim >/dev/null || bad "shrink file preset discard"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.selection.rule == "discard_sessions" and (.selection.ids | index("ses_A0001"))' >/dev/null \
+    && ok "file preset bake -> discard-sessions run" || bad "skim preset: $(cat "$(newest_sj)")"
+run shrink only >/dev/null || bad "shrink file preset keep"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.selection.rule == "keep_sessions" and .sessions.kept == 3' >/dev/null \
+    && ok "file preset bake -> keep-sessions run (closure)" || bad "only preset: $(cat "$(newest_sj)")"
+LP=$(run shrink --list-presets)
+printf '%s' "$LP" | grep -q '^lean	' && printf '%s' "$LP" | grep -q '^skim	' \
+    && ok "shrink --list-presets shows built-ins + file presets" || bad "list-presets: [$LP]"
+run shrink nosuchrecipe >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && ok "unknown shrink recipe -> non-zero rc ($rc)" || bad "unknown recipe rc"
+python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json "$FPRES" >/dev/null 2>&1 \
+    && ok "custom OCED_SHRINK_PRESETS satisfies shrink.schema.json" || bad "custom shrink preset vs schema"
+run shrink lean >/dev/null || bad "shrink lean still works with a custom file"
+unset OCED_SHRINK_PRESETS
 
 echo "== export memory (RAG corpus) =="
 run export memory >/dev/null
@@ -400,6 +464,29 @@ jq -e '.preset == null' "$(last_meta transcript)" >/dev/null \
     && ok "absent presets file is a no-op (preset=null)" || bad "missing presets file"
 export OCED_PRESETS="$PRESETS"
 
+echo "== export preset snapshot: fresh -> backup alignment warning =="
+SNAP_PRESETS="$TMP/presets-snap.json"
+cat > "$SNAP_PRESETS" <<'EOF'
+{"presets": {"snap": {"product": "transcript", "json": true, "snapshot": "fresh"}}}
+EOF
+export OCED_PRESETS="$SNAP_PRESETS"
+export OCED_BACKUP_DIR="$TMP/bk-snap"
+SOUT=$(run export snap); rc=$?
+[ "$rc" -eq 0 ] && ok "snapshot preset export runs" || bad "snapshot export rc"
+printf '%s' "$SOUT" | grep -q "no backup exists yet" && ok "snapshot: fresh warns when no backup exists" || bad "snapshot no-backup warn: [$(printf '%s' "$SOUT" | tail -2)]"
+SESSES=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM session")
+MSGS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM message")
+MUTS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT max(time_updated) FROM session")
+mkdir -p "$OCED_BACKUP_DIR"
+printf '{"backups":[{"sessions":%s,"messages":%s,"max_updated":%s}]}' "$SESSES" "$MSGS" "$MUTS" > "$OCED_BACKUP_DIR/manifest.json"
+SOUT2=$(run export snap)
+printf '%s' "$SOUT2" | grep -qE "out of sync|no backups" && bad "aligned snapshot preset warned anyway" || ok "snapshot preset silent when aligned"
+printf '{"backups":[{"sessions":%s,"messages":%s,"max_updated":0}]}' "$SESSES" "$MSGS" > "$OCED_BACKUP_DIR/manifest.json"
+SOUT3=$(run export snap)
+printf '%s' "$SOUT3" | grep -q "out of sync with the live DB" && ok "snapshot: fresh warns when the backup diverged" || bad "snapshot out-of-sync warn: [$(printf '%s' "$SOUT3" | tail -2)]"
+export OCED_BACKUP_DIR="$BK"
+export OCED_PRESETS="$PRESETS"
+
 echo "== export bundle presets (products: one stamp, per-product flags) =="
 cat > "$TMP/presets-bundle.json" <<'EOF'
 {"presets": {
@@ -509,10 +596,34 @@ printf '%s' "$SW" | grep -q "\[OK\] Swap complete" && ok "--swap completed" || b
     && ok "--swap live DB integrity ok" || bad "--swap integrity"
 [ "$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM session;")" -eq 1 ] \
     && ok "--swap replaced the live DB (1 kept session)" || bad "--swap kept sessions"
-PRE=$(ls "$FAKE".pre-shrink-* 2>/dev/null | head -1)
-[ -n "$PRE" ] && ok "--swap wrote a .pre-shrink safety copy" || bad "--swap safety copy missing"
+# Safety copy is now in $OCED_BACKUP_DIR/pre-shrink/ (which is $BK/pre-shrink/)
+PRE=$(ls "$BK/pre-shrink"/opencode.pre-shrink-*.db 2>/dev/null | head -1)
+[ -n "$PRE" ] && ok "--swap wrote a pre-shrink safety copy in pre-shrink/" || bad "--swap safety copy missing"
 [ "$(sqlite3 "file:$PRE?mode=ro" "SELECT count(*) FROM session;")" -eq 6 ] \
-    && ok ".pre-shrink holds the original 6 sessions" || bad ".pre-shrink sessions"
+    && ok "pre-shrink holds the original 6 sessions" || bad "pre-shrink sessions"
+
+# shrink.json now records sessions.max_updated so the stale check can run.
+LASTSJ=$(find "$BK/shrink" -name shrink.json 2>/dev/null | sort | tail -1)
+MU=$(jq -r '.sessions.max_updated // 0' "$LASTSJ" 2>/dev/null)
+LIVE_MU=$(sqlite3 "file:$FAKE?mode=ro" "SELECT coalesce(max(time_updated),0) FROM session;")
+[ -n "$MU" ] && [ "$MU" != "0" ] && ok "shrink.json records sessions.max_updated ($MU)" || bad "shrink.json max_updated missing: [$MU]"
+[ "$MU" = "$LIVE_MU" ] && ok "shrink max_updated == live DB max_updated" || bad "shrink max_updated ($MU) vs live ($LIVE_MU)"
+
+# shrinks verify — clean when the copy is newer than the (swapped) live DB.
+VCLEAN=$(run shrinks verify)
+printf '%s' "$VCLEAN" | grep -q "All clean" && ok "shrinks verify: up-to-date copy is clean" || bad "shrinks verify clean: [$(printf '%s' "$VCLEAN" | tail -2)]"
+
+# Make the live DB newer than the copy -> verify must flag the stale shrink.
+sqlite3 "$FAKE" "UPDATE session SET time_updated=time_updated+1000000;" >/dev/null 2>&1
+VSTALE=$(run shrinks verify)
+printf '%s' "$VSTALE" | grep -q "has newer sessions" && ok "shrinks verify flags a stale shrink vs live" || bad "shrinks verify stale: [$(printf '%s' "$VSTALE" | tail -2)]"
+VT=$(run shrinks verify --tsv)
+printf '%s' "$VT" | grep -q '^stale' && ok "shrinks verify --tsv emits a stale row" || bad "shrinks verify tsv stale: [$(printf '%s' "$VT" | tail -2)]"
+
+# A legacy shrink.json without sessions.max_updated is flagged (unverifiable), not silently clean.
+jq 'del(.sessions.max_updated)' "$LASTSJ" > "$LASTSJ.bak" && mv "$LASTSJ.bak" "$LASTSJ"
+VLEGACY=$(run shrinks verify)
+printf '%s' "$VLEGACY" | grep -q "cannot verify freshness" && ok "shrinks verify flags a legacy shrink.json (no max_updated)" || bad "shrinks verify legacy: [$(printf '%s' "$VLEGACY" | tail -2)]"
 
 echo "== shrinks (manager of the produced shrink copies) =="
 SL=$(run shrinks list)

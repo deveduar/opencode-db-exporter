@@ -36,16 +36,20 @@ Usage: opencode-db.sh [command]
   backups verify <file>   check sha256 of a backup against the manifest
   backups remove <file> [--yes]   delete a backup file
   backups prune <N>    keep only the N most recent backups
-shrink [recipe] [--keep N|--older-than DAYS|--since DATE] [--strip-reasoning] [--dry-run] [--swap] [--yes]
-                         build a PRUNED + VACUUMed COPY of the DB to reclaim space
-                         (a big DB only grows: deleting sessions does NOT shrink
-                         the file). The copy replaces the live DB manually; this
-                         tool never writes it. --swap automates the replacement
-                         safely: aborts if opencode is running, snapshots a
-                         .pre-shrink safety copy (WAL-safe) and rolls back if the
-                         new DB does not open. recipes: lean (keep 10 + strip
-                         reasoning, recommended) | recent (last 90 days) | full
-                         (keep all, strip reasoning) | bare (keep 10, no strip)
+shrink [preset] [--keep N | --older-than DAYS | --since DATE | --keep-all |
+          --keep-sessions ID[,ID] | --discard-sessions ID[,ID]]
+          [--strip-reasoning] [--dry-run] [--swap] [--yes] [--list-presets]
+                      build a PRUNED + VACUUMed COPY of the DB to reclaim space
+                      (a big DB only grows: deleting sessions does NOT shrink
+                      the file). The copy replaces the live DB manually; this
+                      tool never writes it. --swap automates the replacement
+                      safely: aborts if opencode is running, snapshots a
+                      safety copy to $OCED_BACKUP_DIR/pre-shrink/ (WAL-safe)
+                      and rolls back if the new DB does not open. Exactly ONE
+                      keep rule applies (last one wins); named presets come
+                      from $OCED_SHRINK_PRESETS + the built-in recipes
+                      (lean/recent/full/bare, see below). The kept set is
+                      closed (parents/subagents of a kept session stay).
   export [product] [flags]   export sessions to Markdown (see below)
 exports list         list past export runs (date/profile/counts/size);
                         a run with several profiles shows them joined with '+'
@@ -54,10 +58,14 @@ exports list         list past export runs (date/profile/counts/size);
   exports view <stamp> [--files]   show details of an export run (index, sessions, files)
   shrinks list [--tsv]   list the produced shrink copies (criteria/counts/size)
   shrinks view <stamp>   show the shrink.json of a run
+  shrinks verify [--yes] [--tsv]   check for orphan run dirs, old pre-shrink
+                       copies and a shrink that is stale vs the live DB; --yes
+                       auto-removes orphan dirs + old pre-shrinks
   shrinks remove <stamp> [--yes]   delete a shrink run (the pruned + VACUUMed copy)
   shrinks prune <N> [--yes]   keep only the N most recent shrink runs
-  guide [--list]       step-by-step console wizard (inspect -> backup -> export memory
-                       -> shrink -> swap manually); --list prints the plan only
+  guide [--list]       linear step-by-step wizard: export -> optional shrink ->
+                       optional swap (destructive, requires typing 'confirm');
+                       --list prints the plan only
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
   help                 this help
 
@@ -67,6 +75,17 @@ EOF
         cat <<'EOF'
 export products (default: transcript):
   transcript | memory | compactions   (see 'opencode-db export --help' for the flags)
+
+EOF
+    fi
+    # Shrink recipes + flags come from the python SSoT (shrinklib/flags.py --help-shrinks)
+    if ! python3 "$SCRIPT_DIR/shrinklib/flags.py" --help-shrinks 2>/dev/null; then
+        cat <<'EOF'
+shrink presets (default: keep the 10 most recent sessions):
+  lean      keep the 10 most recent sessions + strip reasoning (recommended)
+  recent    keep sessions updated in the last 90 days
+  full      keep ALL sessions, strip reasoning + vacuum (just reclaims space)
+  bare      keep the 10 most recent sessions, keep reasoning
 
 EOF
     fi
@@ -91,6 +110,7 @@ Configuration (env > conf file > built-in default):
   OCED_LOG         1 appends an activity log (backup/prune/shrink) to OCED_ACTIVITY_LOG
   OCED_CONF         config file (default ~/.config/opencode-db/opencode-db.conf)
   OCED_PRESETS      export presets file (default ~/.config/opencode-db/presets.json)
+  OCED_SHRINK_PRESETS shrink presets file (default ~/.config/opencode-db/shrink-presets.json)
 
 Global flag (must precede subcommand):
   --from-backup <file>   use a stored backup as the DB source (read-only).
@@ -111,6 +131,7 @@ fi
 # up the decompressed temp backup on exit. Meta/write-only commands skip this.
 case "${1:-help}" in
     deps|help|-h|menu|guide|backups|shrinks) ;;
+    shrink) [ "${2:-}" = "--list-presets" ] || o_resolve_db ;;
     *) o_resolve_db ;;
 esac
 trap 'o_cleanup_tmp' EXIT

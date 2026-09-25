@@ -32,3 +32,14 @@
 # mark_compactions, summary_diffs, tool_input_limit, tool_output_limit,
 # filter (LIKE) or sessions (exact ids). Empty/missing file = no presets.
 # OCED_PRESETS="$HOME/.config/opencode-db/presets.json"
+
+# Named shrink presets (JSON source of truth for `shrink <name>` and the menu).
+# install.sh auto-creates the file from shrink-presets.json.example when missing.
+# The shipped recipes lean/recent/full/bare always exist; this file extends or
+# overrides them. Example:
+# {"presets": {"lean": {"keep": 10, "strip_reasoning": true},
+#              "spring-clean": {"discard_sessions": ["ses_0123", "ses_4567"]}}}
+# A preset pins EXACTLY ONE keep rule: keep | older_than | since | keep_all |
+# keep_sessions | discard_sessions (+ optional strip_reasoning). Missing file =
+# built-in recipes only. `shrink --list-presets` shows the effective set.
+# OCED_SHRINK_PRESETS="$HOME/.config/opencode-db/shrink-presets.json"

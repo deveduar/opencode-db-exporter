@@ -16,6 +16,7 @@ export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$TMP/backups"
 export OCED_PRESETS="$TMP/no-presets.json" # hermetic: ignore any real ~/.config presets
+export OCED_SHRINK_PRESETS="$TMP/no-shrink-presets.json" # hermetic: built-in shrink recipes only
 export OCED_DISPATCHER="$MOD/opencode-db.sh"
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
@@ -213,6 +214,7 @@ cat > "$OCED_PRESETS" <<'EOF'
    "notes": {"product": "transcript"},
    "rag": {"product": "memory"},
    "digest": {"product": "compactions"},
+   "snappy": {"product": "transcript", "snapshot": "fresh"},
    "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true}
 }}
 EOF
@@ -350,35 +352,85 @@ MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
 export OCED_PRESETS="$TMP/no-presets.json"
 
-echo "== shrink in the menu: recipes / custom / dry-run / ESC / confirm =="
+echo "== export flow: snapshot: fresh -> backup alignment offer =="
+reset
+export OCED_PRESETS="$TMP/presets.json"
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+[ "$(oc_plan_py snapshot snappy 2>/dev/null)" = "fresh" ] && ok "plan.py snapshot exposes the snapshot flag" || bad "plan snapshot"
+qset "__ALL__"
+oc_preset_run "snappy" "product transcript" >/dev/null
+grep -qx "backup" "$CALLS" && ok "snapshot preset offers a fresh backup (no backups yet)" || bad "snap backup offer: $(cat "$CALLS")"
+grep -qx "export snappy" "$CALLS" && ok "snapshot preset exports after the fresh backup" || bad "snap export: $(cat "$CALLS")"
+
+: > "$CALLS"
+# With a backup present + aligned, the snapshot preset must NOT re-offer.
+ALIGNED="$OCED_BACKUP_DIR"
+mkdir -p "$ALIGNED"
+SESSES=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM session" 2>/dev/null)
+MSGS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM message" 2>/dev/null)
+MUTS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT max(time_updated) FROM session" 2>/dev/null)
+printf '{"backups": [{"sessions": %s, "messages": %s, "max_updated": %s}]}' "$SESSES" "$MSGS" "$MUTS" > "$ALIGNED/manifest.json"
+qset "__ALL__"
+oc_preset_run "snappy" "product transcript" >/dev/null
+grep -qx "backup" "$CALLS" && bad "aligned snapshot preset re-offered a backup" || ok "aligned snapshot preset does NOT re-offer a backup"
+export OCED_PRESETS="$TMP/no-presets.json"
+
+echo "== shrink in the menu: presets / custom / dry-run / ESC / confirm =="
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-FZF_FAIL="shrink recipe"
+qempty
 oc_pick_shrink >/dev/null
-unset FZF_FAIL
 [ ! -s "$CALLS" ] && ok "ESC cancels shrink picker" || bad "ESC still ran shrink"
 
-qset "lean: keep 10 most recent + strip reasoning|shrink|lean"
+qset "__PRESET_lean"
 oc_pick_shrink >/dev/null
-grep -qx "shrink lean" "$CALLS" && ok "shrink recipe lean reaches the dispatcher" || bad "shrink lean: $(cat "$CALLS")"
+grep -qx "shrink lean" "$CALLS" && ok "shrink preset lean reaches the dispatcher" || bad "shrink lean: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "dry-run (no file)|shrink|lean --dry-run"
+qset "__DRYRUN__" "__PRESET_lean"
 oc_pick_shrink >/dev/null
-grep -qx "shrink lean --dry-run" "$CALLS" && ok "shrink dry-run reaches the dispatcher (no confirm)" || bad "shrink dry-run: $(cat "$CALLS")"
+grep -qx "shrink lean --dry-run" "$CALLS" && ok "shrink dry-run reaches the dispatcher" || bad "shrink dry-run: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "custom (choose exactly what to keep)...|shrink|custom" "keep sessions since a date (real range)"
+qset "__CUSTOM__" "keep sessions since a date (real range)"
 printf '20260115\n' | oc_pick_shrink >/dev/null
 grep -qx "shrink --since 2026-01-15" "$CALLS" && ok "shrink custom since-date reaches the dispatcher" || bad "shrink custom since-date: $(cat "$CALLS")"
 
 : > "$CALLS"
 confirm_action() { return 1; }
-qset "bare: keep 10 most recent, keep reasoning|shrink|bare"
+qset "__PRESET_bare"
 oc_pick_shrink >/dev/null
 [ ! -s "$CALLS" ] && ok "shrink rejected on 'n'" || bad "shrink ran on 'n'"
 confirm_action() { return 0; }
+
+echo "== shrink in the menu: preset rows come from shrinklib; keep/discard flows =="
+reset
+FPRES="$TMP/shrink-presets.json"
+cat > "$FPRES" <<'EOF'
+{"presets": {
+   "skim": {"discard_sessions": ["ses_A0001"]},
+   "only": {"keep_sessions": ["ses_A0001"]}
+}}
+EOF
+export OCED_SHRINK_PRESETS="$FPRES"
+printf '%s\n' "$(oc_shrink_rows)" | grep -q '^__PRESET_lean' && ok "shrink rows list the built-in recipes" || bad "built-ins missing"
+printf '%s\n' "$(oc_shrink_rows)" | grep -q '^__PRESET_skim' && ok "shrink rows list file presets from OCED_SHRINK_PRESETS" || bad "file preset missing"
+[ "$(oc_shrink_py bake "skim" 2>/dev/null)" = "--discard-sessions ses_A0001" ] && ok "shrink bake pins the discard rule" || bad "shrink bake skim: $(oc_shrink_py bake skim)"
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "__PRESET_skim"
+oc_pick_shrink >/dev/null
+grep -qx "export memory --sessions ses_A0001" "$CALLS" && ok "discard preset offers the export-first guard" || bad "discard guard: $(cat "$CALLS")"
+grep -qx "shrink skim" "$CALLS" && ok "discard preset then shrinks" || bad "shrink skim: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__PRESET_only"
+oc_pick_shrink >/dev/null
+grep -qx "shrink only" "$CALLS" && ok "keep-sessions preset shrinks (warning only, no export)" || bad "shrink only: $(cat "$CALLS")"
+grep -qx "export memory --sessions ses_A0001" "$CALLS" && bad "keep_sessions must NOT auto-export" || ok "keep_sessions does not auto-export"
+unset OCED_SHRINK_PRESETS
 
 echo "== shrinks picker (create + manage, toggle view/remove) =="
 reset
@@ -386,8 +438,8 @@ SHR="$OCED_BACKUP_DIR/shrink"
 mkdir -p "$SHR/20260101-090000" "$SHR/20260102-100000" "$SHR/20260103-110000"
 for d in 20260101-090000 20260102-100000 20260103-110000; do
     jq -n --arg c "keep 10 + strip reasoning" --argjson t 6 --argjson k 2 --argjson del 4 \
-        --argjson b 100000 --argjson a 30000 --argjson st 0 \
-        '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-01T00:00:00Z"}' \
+        --argjson b 100000 --argjson a 30000 --argjson st 0 --argjson mu 0 \
+        '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del, max_updated:$mu}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-01T00:00:00Z"}' \
         > "$SHR/$d/shrink.json"
 done
 ROWS=$(oc_shrinks_rows view)
@@ -395,6 +447,12 @@ printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "shrinks rows:
 printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && ok "shrinks rows: view/remove toggle" || bad "shrinks toggle missing"
 printf '%s\n' "$ROWS" | grep -q '2026-01-03 11:00:00' && ok "shrinks rows list the produced runs (human stamp)" || bad "shrinks run rows missing"
 printf '%s\n' "$ROWS" | grep -q '2 sess / 4 del' && ok "shrinks rows show the shrunken counts" || bad "shrinks counts in row"
+printf '%s\n' "$ROWS" | grep -q '^__VERIFY__' && ok "shrinks rows offer verify" || bad "shrinks verify row missing"
+
+: > "$CALLS"; call_log
+qset "__VERIFY__"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks verify" "$CALLS" && ok "shrinks picker dispatches verify" || bad "shrinks verify: $(cat "$CALLS")"
 
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
@@ -432,7 +490,7 @@ confirm_action() { return 0; }
 rm -rf "$SHR"
 printf '%s\n' "$(oc_shrinks_rows view)" | grep -q '__NONE__' && ok "shrinks rows show (none) when empty" || bad "shrinks none missing"
 : > "$CALLS"; call_log
-qset "__CREATE__" "lean: keep 10 most recent + strip reasoning|shrink|lean"
+qset "__CREATE__" "__PRESET_lean"
 oc_shrinks_picker >/dev/null
 grep -qx "shrink lean" "$CALLS" && ok "shrinks picker creates a copy (reaches the dispatcher)" || bad "shrinks create: $(cat "$CALLS")"
 

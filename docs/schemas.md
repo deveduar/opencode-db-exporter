@@ -62,6 +62,7 @@ in sync by construction.
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
 | `json` | bool | — | transcript/compactions (faithful archive) |
+| `snapshot` | string | `"fresh"` | **single preset only** (never per-product/bundle): coordinate the export + the reference backup — CLI warns, menu offers a fresh backup, when no backup exists or the last one diverged from the live DB |
 | `out` | string | — | CLI-only (never a preset key) |
 
 Unknown keys fail (`additionalProperties: false`). Flags that a product ignores are
@@ -231,6 +232,42 @@ stored file (identical when `OCED_COMPRESS=0`).
 
 ---
 
+## 5b. shrink-presets.json — `$OCED_SHRINK_PRESETS`
+
+Named shrink recipes, the source of truth for `opencode-db shrink <name>` and the
+shrink menu. Authoritative machine schema:
+[`generated/shrink.schema.json`](../generated/shrink.schema.json) (draft-07). **The
+schema and the per-key table are generated from `modules/shrinklib/flags.py`**
+(mirror of §1; same generator `scripts/generate_schema.py`).
+
+The built-in recipes **always exist** — `lean`/`recent`/`full`/`bare` — and the file
+*extends/overrides* them (a file preset with the same name shadows the built-in).
+A missing/empty file simply means "built-ins only".
+
+```jsonc
+{
+  "presets": {
+    "lean":        { "keep": 10, "strip_reasoning": true },   // shadows the built-in lean
+    "spring-check": { "older_than": 30 },
+    "since-march": { "since": "2026-03-01", "strip_reasoning": true },
+    "everything":  { "keep_all": true },
+    "only-project-x": { "keep_sessions": ["ses_…", "ses_…"] },    // closed: parents/subagents kept too
+    "drop-dead":   { "discard_sessions": ["ses_…"] }              // descendant-closed; export memory first!
+  }
+}
+```
+
+Every preset pins **exactly ONE keep rule** (`keep` \| `older_than` \| `since` \|
+`keep_all` \| `keep_sessions` \| `discard_sessions`) + optional
+`strip_reasoning: true`; unknown keys fail (`additionalProperties: false` in the
+generated schema). `opencode-db shrink --list-presets` shows the *effective* set
+(built-ins + file). Bake: `shrink <name>` → the rule flags + `--strip-reasoning`
+(`shrinklib/plan.py bake`); `keep_sessions`/`discard_sessions` ids become
+`--keep-sessions`/`--discard-sessions` (comma-joined). The menu resolves rows, plans
+and the `{"rule","ids"}` offers from `shrinklib/plan.py` — no jq in menu.sh.
+
+---
+
 ## 6. shrink.json
 
 `$OCED_BACKUP_DIR/shrink/<stamp>/shrink.json` (written only when a real run
@@ -240,7 +277,14 @@ finishes; `--dry-run` writes nothing):
 {
   "tool": "opencode-db/shrink", "date": "…", "source": "/…/opencode.db",
   "stamp": "YYYY-MM-DD_HH-MM-SS", "criteria": "keep the 10 most recent session(s) + strip reasoning",
-  "sessions": {"total": 20, "kept": 10, "deleted": 10},
+  "selection": {"rule": "keep", "value": 10},
+                       // the rule that produced the run: keep|older_than|since|keep_all|
+                       //   keep_sessions|discard_sessions; scalar rules carry "value",
+                       //   session rules carry "ids": ["ses_…", …] (the rule/ids shape
+                       //   shrinklib/plan.py emits for the menu)
+  "sessions": {"total": 20, "kept": 10, "deleted": 10, "max_updated": 1790293022000},
+                       // max_updated = the copy's newest session time_updated (ms epoch);
+                       // 0 only for a pre-max_updated legacy shrink.json
   "size": {"before": 123456, "after": 45678},
   "integrity_check": "ok", "foreign_key_check": 0,
   "removed": {"message": 5, "part": 60, "todo": 3, "event": 2, "event_sequence": 2},
@@ -252,20 +296,30 @@ finishes; `--dry-run` writes nothing):
 }
 ```
 
-Recipes (`oced_shrink`):
+Keep rules (`oced_shrink`, last one wins — exactly ONE applies):
 
-| Recipe | Keep-set | strip-reasoning |
+| Rule | Keep-set in the pruned copy | `.selection` |
 |---|---|---|
-| *(default)* | `--keep 10` most recent | no |
-| `lean` | `--keep 10` | yes |
-| `recent` | `--older-than 90` | no |
-| `full` | all sessions | yes |
-| `bare` | `--keep 10` | no (alias of default) |
+| `--keep N` *(default 10)* | the N most recent sessions | `{"rule":"keep","value":N}` |
+| `--older-than DAYS` | sessions updated within the last DAYS days | `{"rule":"older_than","value":DAYS}` |
+| `--since DATE` | sessions updated since DATE | `{"rule":"since","value":"DATE"}` |
+| `--keep-all` | all sessions (strip/vacuum only) | `{"rule":"keep_all"}` |
+| `--keep-sessions ID[,ID]` | the listed ids **+ their parents/subagents** (closed set) | `{"rule":"keep_sessions","ids":[…]}` |
+| `--discard-sessions ID[,ID]` | everything except the listed ids **+ their subagents** (the discard set is descendant-closed, FK-safe by construction) | `{"rule":"discard_sessions","ids":[…]}` |
+
+`--strip-reasoning` also drops every `part` whose `data` JSON has `type=reasoning`
+(kept set unchanged). `--discard-sessions` prints a first-step hint to
+`opencode-db export memory --sessions <ids>` so the knowledge is preserved before
+the pruned copy is made.
 
 The same closed keep-set is used to derive deleted counts. `--swap` additionally
-snapshots the live DB to `…pre-shrink-<ts>` (a real `opencode-db/backup` run) and
-records it through the backup manifest, then performs the atomic swap — the one
-opt-in path that ever writes the live DB.
+snapshots the live DB to `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db`
+(WAL-safe, newest-copy-only auto-cleanup) and performs the atomic swap — the one
+opt-in path that ever writes the live DB. `shrinks verify [--tsv] [--yes]` checks
+for orphan run dirs, old pre-shrink copies, and a last shrink that is stale vs the
+live DB (or unverifiable: a legacy shrink.json without `sessions.max_updated` is
+always flagged; the TTL rule is re-run-shrink-before-swap whenever opencode was
+used in between).
 
 ---
 

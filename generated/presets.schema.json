@@ -116,6 +116,13 @@
       "type": "boolean",
       "description": "Redact safe secret prefixes (sk-, ghp_, AKIA, JWT, PEM) — best effort"
     },
+    "flagSnapshot": {
+      "type": "string",
+      "enum": [
+        "fresh"
+      ],
+      "description": "Snapshot freshness coordination: 'fresh' warns unless the live DB matches the last backup"
+    },
     "flagCap": {
       "type": "integer",
       "description": "Truncate each text value to N chars (0 = unlimited)",
@@ -170,6 +177,9 @@
         },
         "sanitize": {
           "$ref": "#/definitions/flagSanitize"
+        },
+        "snapshot": {
+          "$ref": "#/definitions/flagSnapshot"
         },
         "cap": {
           "$ref": "#/definitions/flagCap"
@@ -256,6 +266,9 @@
             },
             "sanitize": {
               "$ref": "#/definitions/flagSanitize"
+            },
+            "snapshot": {
+              "$ref": "#/definitions/flagSnapshot"
             },
             "cap": {
               "$ref": "#/definitions/flagCap"

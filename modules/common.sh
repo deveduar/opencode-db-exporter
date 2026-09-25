@@ -17,7 +17,7 @@ load_conf() {
     # cannot clobber them (env wins over conf).
     local v
     local -A conf_env_set=() conf_env_val=()
-    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS; do
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS; do
         if [ "${!v+x}" = x ]; then
             conf_env_set[$v]=1
             conf_env_val[$v]="${!v}"
@@ -58,6 +58,9 @@ todo:session_id,content,status
 # Export presets file (named recipes, source of truth for the menu). Absent file
 # = no presets: export keeps working with raw flags.
 : "${OCED_PRESETS:=$HOME/.config/opencode-db/presets.json}"
+# Shrink presets file (named shrink recipes; the shipped recipes lean/recent/
+# full/bare always exist — this file extends/overrides them).
+: "${OCED_SHRINK_PRESETS:=$HOME/.config/opencode-db/shrink-presets.json}"
 
 # o_log <message> -> append one line to the activity log (only when OCED_LOG=1).
 o_log() {

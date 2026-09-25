@@ -13,6 +13,7 @@
 | `role` | string | `all` \| `user` \| `assistant` | transcript, compactions |
 | `json` | bool | — | transcript/compactions (faithful archive) |
 | `sanitize` | bool | — | any |
+| `snapshot` | string | `fresh` | any |
 | `cap` | int | 0 = unlimited (≥ 0) | memory |
 | `files` | bool | — | memory (touched files) |
 | `out` | string | — | any — CLI-only (never a preset key) |

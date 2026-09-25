@@ -2,14 +2,15 @@
 """Tiny JSON-Schema (draft-07 subset) validator for the repo contract schemas.
 
 Supports exactly what the schemas use: `$ref`, `type` (object/string/integer/
-boolean), `properties`, `patternProperties`, `additionalProperties`, `required`,
-`enum`, `minimum`, `minItems`, `minLength`, `minProperties`, `oneOf`, `not`.
-`title`/`description`/`$id`/`$schema` are ignored.
+boolean/array), `properties`, `patternProperties`, `additionalProperties`,
+`required`, `enum`, `minimum`, `minItems`, `minLength`, `minProperties`, `oneOf`,
+`not`, `items`. `title`/`description`/`$id`/`$schema` are ignored.
 
 Usage: validate_schema.py <schema.json> <instance.json>  (exit 0/1)
 
 Test-only tool: keeps the smoke suite dependency-free (stdlib only) while still
-verifying that presets.json.example satisfies generated/presets.schema.json.
+verifying that presets.json.example and shrink-presets.json.example satisfy the
+generated schemas.
 """
 import json
 import re
@@ -40,10 +41,14 @@ def errs(root, schema, data, path):
         t = schema["type"]
         ok = {"object": isinstance(data, dict), "string": isinstance(data, str),
               "integer": isinstance(data, int) and not isinstance(data, bool),
-              "boolean": isinstance(data, bool)}.get(t, False)
+              "boolean": isinstance(data, bool), "array": isinstance(data, list)}.get(t, False)
         if not ok:
             out.append(f"{path}: expected {t}, got {type(data).__name__}")
             return out  # type is final for the other keywords below
+    if isinstance(data, list) and "items" in schema:
+        items = schema["items"]
+        for i, v in enumerate(data):
+            out += errs(root, items, v, f"{path}[{i}]")
     if isinstance(data, dict):
         props = schema.get("properties", {})
         pats = [(re.compile(p), v) for p, v in schema.get("patternProperties", {}).items()]

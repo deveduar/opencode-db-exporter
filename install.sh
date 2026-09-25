@@ -12,6 +12,7 @@ BIN_DIR="${HOME}/.local/bin"
 CONF_DIR="$HOME/.config/opencode-db"
 CONF_DEST="$CONF_DIR/opencode-db.conf"
 PRESETS_DEST="$CONF_DIR/presets.json"
+SHRINK_PRESETS_DEST="$CONF_DIR/shrink-presets.json"
 
 check_deps() {
     local missing=""
@@ -75,6 +76,14 @@ else
     cp "$SOURCE_ROOT/presets.json.example" "$PRESETS_DEST"
     chmod 600 "$PRESETS_DEST"
     echo "   Presets created from example: $PRESETS_DEST (permissions 600)"
+fi
+
+if [ -f "$SHRINK_PRESETS_DEST" ]; then
+    echo "   Existing shrink presets: $SHRINK_PRESETS_DEST (not modified)"
+else
+    cp "$SOURCE_ROOT/shrink-presets.json.example" "$SHRINK_PRESETS_DEST"
+    chmod 600 "$SHRINK_PRESETS_DEST"
+    echo "   Shrink presets created from example: $SHRINK_PRESETS_DEST (permissions 600)"
 fi
 
 echo "[OK] opencode-db-exporter installed in $PREFIX"

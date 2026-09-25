@@ -414,6 +414,20 @@ oc_preset_run() {
     case "$key" in
         __NONE__) return 1 ;;
         __ALL__)
+            # snapshot: fresh presets coordinate with the reference archive: offer a
+            # fresh backup when the live DB diverged from the last one.
+            if [ "$(oc_plan_py snapshot "$name" 2>/dev/null)" = "fresh" ]; then
+                local align
+                align=$(o_backup_aligned)
+                if [ "$align" != "aligned" ]; then
+                    echo ""
+                    echo "   Preset '$name' pins 'snapshot: fresh' — the export doubles as a reference"
+                    echo "   archive, so the last backup should match the live DB (currently: $align)."
+                    if confirm_action "Create a fresh backup first? (recommended)"; then
+                        run_oced_tool backup
+                    fi
+                fi
+            fi
             oc_export_confirm "preset: $name" "(preset as configured)" "preset '$name' (${descr:-see the presets file})" || return 0
             run_oced_tool export "$name"
             ;;
@@ -624,16 +638,79 @@ oc_export_confirm() {
 }
 
 #-----------------------------------------------------------------------
-# shrink in the menu: named recipes (like the export recipes), custom N/days/date
-# and dry-run. shrink only WRITES a copy (never modifies the live DB); the
-# swap is manual. Manages the produced copies (list/view/remove) like exports.
+# shrink in the menu: named presets (shrinklib — the OCED_SHRINK_PRESETS file +
+# the shipped recipes), custom N/days/date and dry-run. shrink only WRITES a
+# copy (never modifies the live DB); the swap is manual. Preset rows, plans and
+# the keep/discard selection metadata all come from shrinklib/plan.py (single
+# source of truth); these shell shims pin OCED_SHRINK_PRESETS for the python.
 #-----------------------------------------------------------------------
-pick_shrink_profile() {
-    local sel
-    sel=$(printf 'lean: keep 10 most recent + strip reasoning|shrink|lean\nrecent: sessions updated in the last 90 days|shrink|recent\nfull: keep ALL sessions, strip reasoning only|shrink|full\nbare: keep 10 most recent, keep reasoning|shrink|bare\ndry-run (no file)|shrink|lean --dry-run\ncustom (choose exactly what to keep)...|shrink|custom\n' \
-        | fzf --prompt="shrink recipe > " --height=50% --border --header="Shrink works on the LIVE DB (own snapshot), not on a backup. ESC: cancel") || return 1
-    [ -n "$sel" ] || return 1
-    printf '%s\n' "$sel"
+oc_shrink_py() {
+    OCED_SHRINK_PRESETS="${OCED_SHRINK_PRESETS:-}" python3 "$SCRIPT_DIR/shrinklib/plan.py" "$@" 2>/dev/null
+}
+
+oc_shrink_rows() {
+    oc_shrink_py rows
+}
+
+oc_shrink_plan() { # <preset> -> multi-line "Will do:" block for the confirm
+    oc_shrink_py plan "$1" || return 1
+}
+
+oc_shrink_selection() { # <preset> -> JSON {"rule": ..., "ids": [...]}
+    oc_shrink_py selection "$1" 2>/dev/null
+}
+
+# oc_shrink_confirm <preset> -> print the plan + ask. Live DB never modified.
+oc_shrink_confirm() {
+    local name="$1"
+    echo ""
+    echo "-> shrink plan"
+    printf '   %-9s %s\n' "Source:" "$OPENCODE_DB (LIVE DB, own snapshot)"
+    printf '   %-9s %s\n' "Output:" "$OCED_BACKUP_DIR/shrink/<timestamp>/ (swap manually)"
+    printf '   Will do:\n'
+    oc_shrink_plan "$name" | sed 's/^/  /'
+    echo ""
+    confirm_action "Continue? The live DB is never modified; export memory first to keep its knowledge." \
+        || { echo "   cancelled."; return 1; }
+    return 0
+}
+
+# oc_shrink_preset_run <preset> -> keep/discard-sessions offers, confirm, run.
+oc_shrink_preset_run() {
+    local name="$1" sel ids
+    sel=$(oc_shrink_selection "$name") || sel='{"rule":"keep"}'
+    if printf '%s' "$sel" | jq -e '.rule == "discard_sessions"' >/dev/null 2>&1; then
+        ids=$(printf '%s' "$sel" | jq -r '.ids | join(",")')
+        echo ""
+        echo "   This shrink WILL DISCARD the listed session(s):"
+        echo "     $ids"
+        if confirm_action "Export them first as a memory corpus (opencode-db export memory --sessions)? This is the SAFE order (backup -> export memory -> shrink)."; then
+            run_oced_tool export memory --sessions "$ids"
+            echo ""
+        else
+            echo "   Skipping the export. You can also run: opencode-db export memory --sessions $ids"
+        fi
+    elif printf '%s' "$sel" | jq -e '.rule == "keep_sessions"' >/dev/null 2>&1; then
+        echo ""
+        echo "   Keeping ONLY the listed sessions: everything else is discarded from the copy."
+        echo "   To keep a reference of the non-kept sessions, export first:"
+        echo "     opencode-db export memory   (or with --sessions / --filter)"
+    fi
+    oc_shrink_confirm "$name" || return 1
+    run_oced_tool shrink "$name"
+    return 0
+}
+
+# oc_shrink_dry_pick -> pick a preset to preview (dry-run writes nothing).
+oc_shrink_dry_pick() {
+    local sel key
+    sel=$(oc_shrink_rows | oc_fzf_sel "shrink dry-run (preset)" \
+        $'Pick the preset to PREVIEW (dry-run: only reports what would be pruned, no file written; ESC: back)') || return $?
+    key=$(oc_sel_key "$sel")
+    case "$key" in
+        __PRESET_*) run_oced_tool shrink "${key#__PRESET_}" --dry-run ;;
+        *) return 0 ;;
+    esac
 }
 
 oc_pick_shrink_custom() {
@@ -668,25 +745,38 @@ oc_pick_shrink_custom() {
 }
 
 oc_pick_shrink() {
-    local presel runargs
-    presel=$(pick_shrink_profile) || return 1
-    runargs="${presel##*|}"
-    if [ "$runargs" = "custom" ]; then
-        runargs=$(oc_pick_shrink_custom) || { echo "   cancelled."; return 0; }
-        runargs="${runargs#shrink }"
-    fi
-    if [[ "$runargs" != *"--dry-run"* ]]; then
-        echo ""
-        echo "-> shrink plan (workflow: backup -> export memory -> shrink)"
-        printf '   %-9s %s\n' "Action:" "write a pruned + VACUUMed COPY ($runargs)"
-        printf '   %-9s %s\n' "Source:" "$OPENCODE_DB (LIVE DB, own snapshot)"
-        printf '   %-9s %s\n' "Output:" "$OCED_BACKUP_DIR/shrink/<timestamp>/ (swap manually)"
-        confirm_action "Continue? The live DB is never modified; export memory first to keep its knowledge." \
-            || { echo "   cancelled."; return 0; }
-    fi
+    local sel key
+    local header
+    header=$'Shrink on the LIVE DB (own snapshot; the live DB is never modified).'$'\n'$'Safe workflow: backup -> export memory -> shrink. ESC: back'
+    sel=$(printf '%s\n__CUSTOM__\t[custom (choose exactly what to keep)...]\n__DRYRUN__\t[dry-run (preview only, no file written)]\n' \
+        "$(oc_shrink_rows)" | oc_fzf_sel "shrink (presets)" "$header") || return $?
+    key=$(oc_sel_key "$sel")
+    case "$key" in
+        __CUSTOM__)
+            local runargs
+            runargs=$(oc_pick_shrink_custom) || { echo "   cancelled."; return 0; }
+            runargs="${runargs#shrink }"
+            oc_shrink_confirm_custom "$runargs"
+            ;;
+        __DRYRUN__) oc_shrink_dry_pick ;;
+        __PRESET_*) oc_shrink_preset_run "${key#__PRESET_}" ;;
+        *) return 0 ;;
+    esac
+}
+
+# oc_shrink_confirm_custom <runargs> -> plan + confirm for the custom row.
+oc_shrink_confirm_custom() {
+    local runargs="$1"
+    echo ""
+    echo "-> shrink plan (workflow: backup -> export memory -> shrink)"
+    printf '   %-9s %s\n' "Action:" "write a pruned + VACUUMed COPY ($runargs)"
+    printf '   %-9s %s\n' "Source:" "$OPENCODE_DB (LIVE DB, own snapshot)"
+    printf '   %-9s %s\n' "Output:" "$OCED_BACKUP_DIR/shrink/<timestamp>/ (swap manually)"
+    confirm_action "Continue? The live DB is never modified; export memory first to keep its knowledge." \
+        || { echo "   cancelled."; return 1; }
     # shellcheck disable=SC2086  # runargs must split ("--keep 30")
     run_oced_tool shrink $runargs
-    menu_pause "Shrinks" || return 0
+    return $?
 }
 
 # --------------------------------------------------------------------
@@ -698,6 +788,7 @@ oc_pick_shrink() {
 oc_shrinks_rows() {
     local mode="$1" run
     printf '__CREATE__\t[create shrink copy (pruned + VACUUMed from the LIVE DB)...]\n'
+    printf '__VERIFY__\t[verify: check for orphan dirs, old pre-shrinks, stale shrinks]\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
         printf '__DELETE_ALL__\t[delete ALL shrink copies]\n'
@@ -745,6 +836,7 @@ oc_shrinks_picker() {
         key=$(oc_sel_key "$sel")
         case "$key" in
             __CREATE__)     oc_pick_shrink; continue ;;
+            __VERIFY__)     run_oced_tool shrinks verify; menu_pause "Shrinks Verify" || return 0; continue ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_shrinks_bulk all; continue ;;
             __KEEP_NEWEST__) oc_shrinks_bulk newest; continue ;;
@@ -754,6 +846,19 @@ oc_shrinks_picker() {
                     run_oced_tool shrinks view "$key"
                     menu_pause "Shrinks" || return 0
                     return 0
+                fi
+                # Remove mode: check if this shrink is stale vs live DB
+                local stale
+                stale=$(o_shrink_stale "$OCED_BACKUP_DIR/shrink/$key/shrink.json")
+                if [ -n "$stale" ]; then
+                    echo ""
+                    echo "⚠️  WARNING: $stale"
+                    echo "   Swapping with this copy would LOSE recent sessions (or freshness is unknown)."
+                    echo "   You should create a new shrink (Step 2 in guide) before swapping."
+                    echo ""
+                    if ! confirm_action "Continue with stale shrink anyway? (NOT RECOMMENDED)"; then
+                        continue
+                    fi
                 fi
                 confirm_action "Remove shrink run $key? It deletes the generated copy." || continue
                 run_oced_tool shrinks remove "$key" --yes

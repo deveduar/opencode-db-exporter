@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opencode-db-exporter.local/schemas/shrink.schema.json",
+  "title": "opencode-db shrink-presets.json",
+  "description": "Contract for the OCED_SHRINK_PRESETS file, the source of truth for `opencode-db shrink <name>` and the shrink menu. Each preset pins EXACTLY ONE keep rule (keep | older_than | since | keep_all | keep_sessions | discard_sessions) plus an optional strip_reasoning; a user file may override or extend the built-in recipes (lean/recent/full/bare).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "presets"
+  ],
+  "properties": {
+    "presets": {
+      "type": "object",
+      "description": "Name -> preset. Built-in recipes (lean/recent/full/bare) are always available; a file entry with the same name overrides them.",
+      "additionalProperties": {
+        "$ref": "#/definitions/shrinkPreset"
+      }
+    }
+  },
+  "definitions": {
+    "flagKeep": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Keep the N most recent sessions (by last update)"
+    },
+    "flagOlder_than": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Keep sessions updated within the last N days"
+    },
+    "flagSince": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Keep sessions updated on or after DATE (YYYY-MM-DD, UTC)"
+    },
+    "flagKeep_all": {
+      "type": "boolean",
+      "description": "Keep ALL sessions (just prune orphans + vacuum)"
+    },
+    "flagKeep_sessions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Keep ONLY the listed session ids (+ their parents and subagents)",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "flagDiscard_sessions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Keep everything EXCEPT the listed session ids (+ their subagents)",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "flagStrip_reasoning": {
+      "type": "boolean",
+      "description": "Also drop the 'reasoning' parts (the bulk of the size) on the copy"
+    },
+    "shrinkPreset": {
+      "oneOf": [
+        {
+          "title": "keep rule: keep",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keep"
+          ],
+          "properties": {
+            "keep": {
+              "$ref": "#/definitions/flagKeep"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        },
+        {
+          "title": "keep rule: older_than",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "older_than"
+          ],
+          "properties": {
+            "older_than": {
+              "$ref": "#/definitions/flagOlder_than"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        },
+        {
+          "title": "keep rule: since",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "since"
+          ],
+          "properties": {
+            "since": {
+              "$ref": "#/definitions/flagSince"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        },
+        {
+          "title": "keep rule: keep_all",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keep_all"
+          ],
+          "properties": {
+            "keep_all": {
+              "$ref": "#/definitions/flagKeep_all"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        },
+        {
+          "title": "keep rule: keep_sessions",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keep_sessions"
+          ],
+          "properties": {
+            "keep_sessions": {
+              "$ref": "#/definitions/flagKeep_sessions"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        },
+        {
+          "title": "keep rule: discard_sessions",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "discard_sessions"
+          ],
+          "properties": {
+            "discard_sessions": {
+              "$ref": "#/definitions/flagDiscard_sessions"
+            },
+            "strip_reasoning": {
+              "$ref": "#/definitions/flagStrip_reasoning"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

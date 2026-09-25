@@ -1,0 +1,21 @@
+{
+  "presets": {
+    "lean": {
+      "keep": 10,
+      "strip_reasoning": true
+    },
+    "recent": {
+      "older_than": 90
+    },
+    "full": {
+      "keep_all": true,
+      "strip_reasoning": true
+    },
+    "bare": {
+      "keep": 10
+    },
+    "spring-clean": {
+      "discard_sessions": ["ses_00000000000000000000000000000000"]
+    }
+  }
+}

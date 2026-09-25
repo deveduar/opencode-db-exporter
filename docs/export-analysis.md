@@ -261,3 +261,91 @@ folder, extracting archivable info) is deferred too — "proceed with the plan".
   shrinks picker + header refresh (`102 OK`); `tests/export_smoke.sh` gained the shrinks
   CLI section (`list --tsv` row format, `view`, interactive/`--yes` remove, unknown
   stamps, `prune N`) — `175 OK`.
+
+## §16 Guided workflow rework, pre-shrink folder, stale-shrink detection (later iteration)
+
+The `guide` deferred in §15 was redesigned from scratch: the first fzf-picker attempt was
+rejected ("este no es un modo guiado de verdad") — the workflow is fixed (export → shrink →
+swap), nothing to inspect or choose in a menu. Final shape (decision log):
+
+- **Linear guide (no fzf)** — Step 1 runs `oc_export_picker` (named-preset only) and prints
+  where the export was written (`$OCED_OUT/<stamp>/`); Step 2 optionally builds a shrink copy
+  via `oc_pick_shrink` (warning: using opencode after the shrink makes the copy stale — re-shrink
+  before swapping); Step 3 optionally swaps by re-running `shrink --swap --yes`, requiring the
+  user to type exactly `confirm`, and warning via `o_shrink_stale` when the copy is stale or its
+  freshness is unknown. `--list`/non-TTY = plan-only. No snapshot is added: exports read the live
+  DB (`o_effective_db`), the shrink does its own `.backup`, and the swap's safety copy is the
+  rollback.
+- **Pre-shrink moved to a managed folder** — `shrink --swap` safety copy now lives in
+  `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db` (was `$OPENCODE_DB.pre-shrink-<ts>`
+  next to the live DB), auto-keeping only the most recent copy. It is **not** a `backups`
+  manifest run (not listable/verifiable there); `shrinks verify` lists and cleans it.
+- **Shrink temp snapshot + no orphan dirs** — a non-dry shrink snapshots to
+  `mktemp /tmp/opencode-db-shrink-*.db` and only after `integrity_check`+`foreign_key_check`
+  +`VACUUM` creates `shrink/<stamp>/` and `mv`s the copy in — a cancelled/failed run leaves
+  nothing behind.
+- **`shrinks verify [--tsv] [--yes]`** — new subcommand (interactive; `--yes` auto-removes
+  orphan dirs + old pre-shrinks; `--tsv` emits `type<TAB>key<TAB>display` rows). Also reachable
+  from the shrinks picker via a `__VERIFY__` row.
+- **Stale-shrink detection (bug discovered by the user)** — the freshness check read
+  `shrink.json` `.sessions.max_updated`, but `oced_shrink` never wrote that field, and the guard
+  `max_updated > 0` silently treated old shrinks as "up to date". Fix: `oced_shrink` now records
+  `sessions.max_updated` (copy's newest kept `session.time_updated`), and the check is one helper
+  `o_shrink_stale <shrink.json>` used by `shrinks verify`, `guide.sh` Step 3 and the menu's
+  remove mode — it warns when the live DB has newer sessions **or** when the field is missing
+  (legacy copy ⇒ unverifiable, never silently "clean").
+- **Docs/artifacts reorg (done here)** — moved `presets.schema.json` to `generated/` (with the
+  `--docs` flags table), extracted the pre-redesign analysis into
+  `docs/archive/export-analysis-2026-09-predesign.md`, and updated `docs/schemas.md`,
+  `docs/architecture.md`, README and AGENTS.md to the new paths and contracts.
+- **Verified** — `tests/export_smoke.sh` gained: `shrink.json` records `max_updated == live`,
+  `shrinks verify` clean/stale/legacy cases (+`--tsv` stale row), pre-shrink in `pre-shrink/`,
+  and a failed shrink leaves no orphan run dir — `183 OK`; `tests/menu_flow.sh` gained the
+  `__VERIFY__` row + dispatch — `104 OK`.
+
+## §17 Shrink recipes redesign + export snapshot coordination (later decision)
+
+The shrink recipes (`lean`/`recent`/`full`/`bare` + custom) were extracted from
+`shrink.sh`/`menu.sh` literals into a python SSoT mirroring the export-presets
+architecture (user confirmed the 4-decision plan: "procede"):
+
+- **`modules/shrinklib/` — the shrink SSoT** — `flags.py` owns the recipe flags
+  (`keep`/`older_than`/`since`/`keep_all`/`keep_sessions`/`discard_sessions` +
+  `strip_reasoning`) + the built-in plans (`DEFAULT_SHRINK_PRESETS`:
+  `lean`=`keep 10 + strip`, `recent`=`older_than 90`, `full`=`keep_all + strip`,
+  `bare`=`keep 10`), `presets.py` validates `$OCED_SHRINK_PRESETS` (exactly ONE keep
+  rule; unknown keys die; ids arrays non-empty) and merges it **over** the built-ins,
+  `plan.py` resolves rows/descr/purpose/plan/bake/selection for the CLI + the menu
+  (the `{"rule","ids"}` shape for the keep/discard offers), `bake_args` turns a name
+  into raw flags (`--keep 10 --strip-reasoning`, `--discard-sessions ses_…`).
+  New union report: keep-sessions vs discard-sessions are now explicit rules instead
+  of an opaque `--keep`; the bake order keeps "last one wins" for `--keep N`.
+- **`shrink --keep-sessions / --discard-sessions`** — session-level selection with the
+  same tree semantics as everything else: `keep_sessions` yields the **closed** kept set
+  (a kept session keeps its parents/subagents), `discard_sessions` keeps *everything
+  except* the listed ids + their subagents (the discard set is descendant-closed ⇒
+  FK-safe by construction), and the CLI prints the first-step hint
+  `opencode-db export memory --sessions <ids>`; the menu turns the discard case into an
+  actual pre-run export offer (keep_sessions just warns). `shrink.json` records
+  `.selection` in the `{"rule", …}` shape the menu consumes.
+- **Generated artifacts** — `generated/shrink.schema.json` + `generated/shrink-flags-table.md`
+  are now generated by `scripts/generate_schema.py` (second SSoT branch; `tests/validate_schema.py`
+  gained the `array` type so the ids presets are checkable — the example `spring-clean`
+  uses `discard_sessions`). Anti-drift checks both artifacts against the generator output.
+- **Export `snapshot: fresh`** — a SINGLE-preset-only workflow key (business rule: you
+  can't make "one snapshot decision" per product in a bundle). Semantics from the user:
+  no new snapshot file, no backup-side changes — the export reads the live DB read-only
+  and only **coordinates**: the CLI warns when no backup exists or the last one diverged
+  from the live DB (`_backup_aligned`, same sessions/messages/max_updated triple as the
+  menu's `o_backup_aligned`); the menu offers a fresh `backup` first. Skipped under
+  `--from-backup` (source already is a snapshot). The plan listened to the user: "no
+  shipping the -wal flag", "the CLI does not change its behavior for non-snapshot
+  presets".
+- **Wiring** — `OCED_SHRINK_PRESETS` joins `common.sh` `load_conf` (env > conf > default
+  `~/.config/opencode-db/shrink-presets.json`), conf example, `install.sh` auto-create
+  (600), and the `opencode-db help` shrink block now comes from
+  `shrinklib/flags.py --help-shrinks` (static fallback), same as the exports block.
+- **Verified** — `tests/export_smoke.sh` gained keep/discard closures + FK-clean +
+  `.selection`, file-preset bake/override/unknown/`--list-presets`, shrink.schema.json
+  validation, and the snapshot warn/no-warn triple — `200 OK`; `tests/menu_flow.sh`
+  gained the shrink preset rows/offers and the snapshot backup offer — `115 OK`.

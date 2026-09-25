@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""Generate the versioned artifacts under generated/ from FLAGS.
+"""Generate the versioned artifacts under generated/ from FLAGS (+ SHRINK_FLAGS).
 
-Single source of truth: modules/exportlib/flags.py. Whenever FLAGS changes, run
-this script and commit both generated artifacts:
-    python3 scripts/generate_schema.py            # rewrites generated/presets.schema.json
-    python3 scripts/generate_schema.py --docs     # rewrites generated/flags-table.md (also prints it)
+Single source of truth: modules/exportlib/flags.py (presets) and
+modules/shrinklib/flags.py (shrink). Whenever FLAGS/SHRINK_FLAGS change, run
+this script and commit the generated artifacts:
+    python3 scripts/generate_schema.py            # rewrites the schema .json files
+    python3 scripts/generate_schema.py --docs     # rewrites the flags-table .md files (also prints them)
 """
 import argparse
 import json
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "modules"))
-from exportlib.flags import FLAGS, PRODUCT_KEYWORDS, BUNDLE_PRODUCT_KEYS, SELECTION_KEYS, get_flags_for_product
+from exportlib.flags import FLAGS, PRODUCT_KEYWORDS, get_flags_for_product
+from shrinklib.flags import SHRINK_FLAGS, KEEP_RULE_KEYS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATED = os.path.join(ROOT, "generated")
 SCHEMA_PATH = os.path.join(GENERATED, "presets.schema.json")
 FLAGS_TABLE_PATH = os.path.join(GENERATED, "flags-table.md")
+SHRINK_SCHEMA_PATH = os.path.join(GENERATED, "shrink.schema.json")
+SHRINK_FLAGS_TABLE_PATH = os.path.join(GENERATED, "shrink-flags-table.md")
+
+# Flags present at a single preset's top level but NEVER per-product (bundle) nor
+# in the product flag groups. Kept in sync with exportlib.flags.SINGLE_ONLY_KEYS.
+_SINGLE_ONLY = ("snapshot",)
 
 
 def generate_schema() -> dict:
@@ -41,7 +49,7 @@ def generate_schema() -> dict:
     for prod in PRODUCT_KEYWORDS:
         product_flag_props[prod] = {}
         for f in get_flags_for_product(prod):
-            if f.name not in ["filter", "sessions", "out"]:
+            if f.name not in ["filter", "sessions", "out"] + list(_SINGLE_ONLY):
                 product_flag_props[prod][f.name] = {"$ref": f"#/definitions/flag{f.name.capitalize()}"}
 
     # Bundle product flag groups
@@ -49,7 +57,8 @@ def generate_schema() -> dict:
     for prod in PRODUCT_KEYWORDS:
         bundle_product_props[prod] = {}
         for f in get_flags_for_product(prod):
-            bundle_product_props[prod][f.name] = {"$ref": f"#/definitions/flag{f.name.capitalize()}"}
+            if f.name not in list(_SINGLE_ONLY):
+                bundle_product_props[prod][f.name] = {"$ref": f"#/definitions/flag{f.name.capitalize()}"}
 
     # Selection properties
     selection_props = {
@@ -127,7 +136,7 @@ def generate_schema() -> dict:
                                         "description": "Per-product flags; the selection (top level) is shared by every product.",
                                         "additionalProperties": False,
                                         "properties": {
-                                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in ["filter", "sessions", "out"]}
+                                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in ["filter", "sessions", "out"] + list(_SINGLE_ONLY)}
                                         }
                                     }
                                 }
@@ -194,13 +203,107 @@ def flags_table() -> str:
         "| `out` | string | — | any — CLI-only (never a preset key) |"
     )
     return "\n".join(rows)
+
+
+# ---- Shrink (OCED_SHRINK_PRESETS) ------------------------------------------
+
+def generate_shrink_schema() -> dict:
+    """Shrink-presets schema from SHRINK_FLAGS. Exactly ONE keep rule per preset
+    (oneOf), optional strip_reasoning companion. keep_sessions/discard_sessions
+    are the special id-array flags. The subset used must stay within
+    validate_schema.py's supported keywords (oneOf/not etc.)."""
+    defs: dict = {}
+    for f in SHRINK_FLAGS:
+        if f.flag_type == "bool":
+            defs[f"flag{f.name.capitalize()}"] = {"type": "boolean", "description": f.description}
+        elif f.flag_type == "int":
+            defs[f"flag{f.name.capitalize()}"] = {
+                "type": "integer", "minimum": f.min_value or 1, "description": f.description,
+            }
+        elif f.name in ("keep_sessions", "discard_sessions"):
+            defs[f"flag{f.name.capitalize()}"] = {
+                "type": "array",
+                "minItems": 1,
+                "description": f.description,
+                "items": {"type": "string", "minLength": 1},
+            }
+        else:  # since
+            defs[f"flag{f.name.capitalize()}"] = {"type": "string", "minLength": 1, "description": f.description}
+
+    branch_props = {
+        k: {"$ref": f"#/definitions/flag{k.capitalize()}"}
+        for k in KEEP_RULE_KEYS
+    }
+    preset_branches = [
+        {
+            "title": f"keep rule: {k}",
+            "type": "object",
+            "additionalProperties": False,
+            "required": [k],
+            "properties": {
+                k: branch_props[k],
+                "strip_reasoning": {"$ref": "#/definitions/flagStrip_reasoning"},
+            },
+        }
+        for k in KEEP_RULE_KEYS
+    ]
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "https://opencode-db-exporter.local/schemas/shrink.schema.json",
+        "title": "opencode-db shrink-presets.json",
+        "description": "Contract for the OCED_SHRINK_PRESETS file, the source of truth for `opencode-db shrink <name>` and the shrink menu. Each preset pins EXACTLY ONE keep rule (keep | older_than | since | keep_all | keep_sessions | discard_sessions) plus an optional strip_reasoning; a user file may override or extend the built-in recipes (lean/recent/full/bare).",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["presets"],
+        "properties": {
+            "presets": {
+                "type": "object",
+                "description": "Name -> preset. Built-in recipes (lean/recent/full/bare) are always available; a file entry with the same name overrides them.",
+                "additionalProperties": {"$ref": "#/definitions/shrinkPreset"},
+            }
+        },
+        "definitions": {
+            **defs,
+            "shrinkPreset": {"oneOf": preset_branches},
+        },
+    }
+
+
+def _shrink_flag_cell(name: str) -> str:
+    """Allowed-values cell of one shrink flag row."""
+    if name in ("keep", "older_than"):
+        return "int ≥ 1"
+    if name == "since":
+        return "date string `YYYY-MM-DD` (UTC)"
+    if name in ("keep_sessions", "discard_sessions"):
+        return "string[] (session ids, ≥ 1 item)"
+    return "true/false"
+
+
+def shrink_flags_table() -> str:
+    """Render the docs/schemas.md shrink-presets table (also written to
+    generated/shrink-flags-table.md)."""
+    rows = [
+        "| Key | Allowed | Meaning |",
+        "|---|---|---|",
+        "| `keep` | int ≥ 1 | keep the N most recent sessions (by last update) |",
+        "| `older_than` | int ≥ 1 | keep sessions updated within the last N days |",
+        "| `since` | string | keep sessions updated on or after DATE (YYYY-MM-DD, UTC) |",
+        "| `keep_all` | true/false | keep ALL sessions (just prune orphans + vacuum) |",
+        "| `keep_sessions` | string[] | keep ONLY the listed session ids (+ their parents/subagents) |",
+        "| `discard_sessions` | string[] | keep everything EXCEPT the listed session ids (+ their subagents) |",
+        "| `strip_reasoning` | true/false | also drop the 'reasoning' parts (the bulk of the size) on the copy |",
+        "",
+        "Exactly ONE keep rule (`keep` \\| `older_than` \\| `since` \\| `keep_all` \\| `keep_sessions` \\| `discard_sessions`) per preset — they are mutually exclusive. `strip_reasoning` is the only optional companion.",
+    ]
+    return "\n".join(rows)
     return "\n".join(rows)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--docs", action="store_true",
-                    help="rewrite generated/flags-table.md and print it (backwards-compatible)")
+                    help="rewrite generated/flags-table.md + shrink-flags-table.md and print them (backwards-compatible)")
     args = ap.parse_args()
     os.makedirs(GENERATED, exist_ok=True)
     if args.docs:
@@ -209,8 +312,17 @@ if __name__ == "__main__":
             f.write(table)
         print(f"Generated {os.path.relpath(FLAGS_TABLE_PATH, ROOT)}")
         print(table, end="")
+        shrink_table = shrink_flags_table() + "\n"
+        with open(SHRINK_FLAGS_TABLE_PATH, "w", encoding="utf-8") as f:
+            f.write(shrink_table)
+        print(f"Generated {os.path.relpath(SHRINK_FLAGS_TABLE_PATH, ROOT)}")
+        print(shrink_table, end="")
         sys.exit(0)
     schema = generate_schema()
     with open(SCHEMA_PATH, "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2, ensure_ascii=False)
     print(f"Generated {os.path.relpath(SCHEMA_PATH, ROOT)}")
+    shrink_schema = generate_shrink_schema()
+    with open(SHRINK_SCHEMA_PATH, "w", encoding="utf-8") as f:
+        json.dump(shrink_schema, f, indent=2, ensure_ascii=False)
+    print(f"Generated {os.path.relpath(SHRINK_SCHEMA_PATH, ROOT)}")

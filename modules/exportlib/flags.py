@@ -205,6 +205,17 @@ FLAGS: list[Flag] = [
         description="Redact safe secret prefixes (sk-, ghp_, AKIA, JWT, PEM) — best effort",
         cli_help="Redact secret-like values (best effort)"
     ),
+    # Workflow flag: snapshot coordination (single-preset-only; never per-product
+    # in a bundle, never part of the product flag groups).
+    Flag(
+        name="snapshot",
+        flag_type="choice",
+        products=["*"],
+        default=None,
+        choices=["fresh"],
+        description="Snapshot freshness coordination: 'fresh' warns unless the live DB matches the last backup",
+        cli_help="Before exporting, require a fresh backup aligned with the live DB (warns if out of sync)"
+    ),
 
     # Memory flags
     Flag(
@@ -282,6 +293,11 @@ FLAG_HELP: Dict[str, str] = {
         "  --sanitize         redact secret-looking values (API keys, bearer tokens,\n"
         "                     private keys, key=... pairs) in the exported output"
     ),
+    "snapshot": (
+        "  --snapshot fresh   snapshot coordination: warn if the live DB is NOT aligned\n"
+        "                     with the last backup (the export itself reads the LIVE DB,\n"
+        "                     so a reference archive is only sound when they agree)"
+    ),
     "cap": (
         "  --cap N  --files   memory tuning: truncate each text value to N chars\n"
         "                     (0 = unlimited, default) and/or include touched files"
@@ -324,10 +340,16 @@ def get_flags_for_product(product: str) -> list[Flag]:
 
 
 # ---- Product-specific flag groups for validation ----
+# `snapshot` is a workflow flag: valid at the SINGLE preset's top level but NEVER
+# per-product (bundle) — a snapshot decision is one decision, not per product.
+SINGLE_ONLY_KEYS: tuple[str, ...] = ("snapshot",)
 PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
-    "transcript": [f.name for f in FLAGS if "transcript" in f.products or f.products == ["*"]],
-    "memory": [f.name for f in FLAGS if "memory" in f.products or f.products == ["*"]],
-    "compactions": [f.name for f in FLAGS if "compactions" in f.products or f.products == ["*"]],
+    p: [
+        f.name
+        for f in FLAGS
+        if (p in f.products or f.products == ["*"]) and f.name not in SINGLE_ONLY_KEYS
+    ]
+    for p in ("transcript", "memory", "compactions")
 }
 
 # For bundle presets: per-product allowed keys
