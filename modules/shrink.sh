@@ -19,42 +19,14 @@ o_sql_qlist() {
 }
 
 oced_shrink_usage() {
-    cat <<'EOF'
+    # The whole --help text lives in shrinklib/flags.py (--usage, single source;
+    # also served by `opencode-db help`). Static fallback for a broken python.
+    if ! python3 "$SCRIPT_DIR/shrinklib/flags.py" --usage 2>/dev/null; then
+        cat <<'EOF'
 Usage: opencode-db shrink [recipe|preset] [--keep N | --older-than DAYS | --since DATE | --keep-all | --keep-sessions ID[,ID] | --discard-sessions ID[,ID]] [--strip-reasoning] [--dry-run] [--out DIR] [--swap] [--yes] [--list-presets]
-
-Recipes (built-in named presets; no recipe = --keep 10):
-  lean      keep the 10 most recent sessions + strip reasoning (recommended)
-  recent    keep sessions updated in the last 90 days
-  full      keep ALL sessions, strip reasoning + vacuum (just reclaims space)
-  bare      keep the 10 most recent sessions, keep reasoning
-
-Named shrink presets also come from the OCED_SHRINK_PRESETS file (see
-`opencode-db shrink --list-presets`); explicit flags win over a preset
-(e.g. `shrink lean --keep 3` keeps 3 and still strips reasoning).
-
-Flags:
-  --keep N             keep the N most recent sessions (by last update); default 10
-  --older-than DAYS    keep sessions updated within the last DAYS days
-  --since DATE         keep sessions updated on or after DATE (YYYY-MM-DD, UTC)
-  --keep-all           keep ALL sessions (just prune orphans + vacuum)
-  --keep-sessions ID[,ID]    keep ONLY the listed sessions (+ their parents/subagents)
-  --discard-sessions ID[,ID] keep everything EXCEPT the listed sessions (+ their subagents)
-  --strip-reasoning    also drop the 'reasoning' parts (the bulk of the size after
-                       the event store) on the copy
-  --dry-run            only report what would be pruned (no output written)
-  --out DIR            where to write the shrink/<stamp>/ output (default $OCED_BACKUP_DIR)
-  --list-presets       list the known shrink presets (built-ins + presets file)
-  --swap               build the copy AND replace the live DB with it (requires
-                       confirmation, or --yes). Safe: aborts if opencode is running,
-                       snapshots a .pre-shrink safety copy (sqlite .backup, WAL-safe),
-                       swaps atomically and rolls back if the new DB does not open.
-  --yes                skip the confirmation prompt of --swap
-
-Exactly ONE keep rule applies (last one wins on the CLI). The kept set is closed:
-every parent and subagent of a kept session is kept too (no orphans). The result
-is written as a pruned + VACUUMed copy; the live DB is never modified unless
---swap is given.
+Try: opencode-db shrink --list-presets
 EOF
+    fi
 }
 
 # oced_shrink_swap <snap> <yes> — replace the LIVE opencode DB with the pruned copy.
@@ -172,15 +144,22 @@ oced_shrink() {
     # plan.py (single source of truth). Its baked flags are PREPENDED, so the
     # user's explicit flags later still win (last-wins).
     if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then
-        local baked rc
-        baked=$(python3 "$SCRIPT_DIR/shrinklib/plan.py" bake "$1" 2>/dev/null)
+        local baked rc err
+        err=$(mktemp) || o_die "cannot create a temp file"
+        baked=$(python3 "$SCRIPT_DIR/shrinklib/plan.py" bake "$1" 2>"$err")
         rc=$?
         if [ "$rc" -ne 0 ]; then
-            echo "Unknown shrink recipe/preset: $1" >&2
-            echo "Known: $(python3 "$SCRIPT_DIR/shrinklib/plan.py" names 2>/dev/null | tr '\n' ' ')" >&2
-            echo "Try: opencode-db shrink --list-presets" >&2
+            # the python error is the helpful one (unknown recipe / invalid file);
+            # fall back to the generic hint only when it is silent
+            if [ -s "$err" ]; then cat "$err" >&2; else
+                echo "Unknown shrink recipe/preset: $1" >&2
+                echo "Known: $(python3 "$SCRIPT_DIR/shrinklib/plan.py" names 2>/dev/null | tr '\n' ' ')" >&2
+                echo "Try: opencode-db shrink --list-presets" >&2
+            fi
+            rm -f "$err"
             return 1
         fi
+        rm -f "$err"
         shift
         [ -n "$baked" ] && set -- $baked "$@"
     fi
@@ -258,15 +237,20 @@ oced_shrink() {
     [ "$swap" -eq 1 ] && [ "$dry" -eq 1 ] && o_die "--swap cannot be combined with --dry-run"
     [ -n "$rule" ] || rule="keep"   # no keep rule given -> default --keep 10
 
+    # Human criteria line comes from the python single source (rule-line builds
+    # it from rule_lines() in presets.py — the same phrases as the menu rows).
+    local crit_val="" strip_arg="0"
     case "$rule" in
-        keep)           criteria="keep the $keep_n most recent session(s)" ;;
-        older_than)     criteria="keep sessions updated within the last $older_than day(s)" ;;
-        since)          criteria="keep sessions updated since $since_date" ;;
-        keep_all)       criteria="keep all sessions" ;;
-        keep_sessions)  criteria="keep only the ${#keep_sessions[@]} listed session(s) (+ their parents and subagents)" ;;
-        discard_sessions) criteria="keep everything except the ${#discard_sessions[@]} listed session(s) (+ their subagents)" ;;
+        keep)           crit_val="$keep_n" ;;
+        older_than)     crit_val="$older_than" ;;
+        since)          crit_val="$since_date" ;;
+        keep_all)       crit_val="" ;;
+        keep_sessions)  crit_val="${#keep_sessions[@]}" ;;
+        discard_sessions) crit_val="${#discard_sessions[@]}" ;;
     esac
-    [ "$strip" -eq 1 ] && criteria="$criteria + strip reasoning"
+    [ "$strip" -eq 1 ] && strip_arg="1"
+    criteria=$(python3 "$SCRIPT_DIR/shrinklib/plan.py" rule-line "$rule" "$crit_val" "$strip_arg" 2>/dev/null)
+    [ -n "$criteria" ] || criteria="keep the $keep_n most recent session(s)"
 
     # Selection metadata for shrink.json (rule/ids/value shape, mirrors plan.py's
     # "selection" contract used by the menu).
@@ -365,10 +349,11 @@ oced_shrink() {
     if [ "$rule" = "discard_sessions" ] && [ "$dry" -eq 0 ]; then
         local ids_csv
         ids_csv=$(IFS=','; echo "${discard_sessions[*]}")
+        local profile="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
         echo ""
         echo "   TEMPORARY: the listed sessions will NOT survive in the copy — to keep a"
         echo "   reference of them in an export BEFORE building the shrink copy, run:"
-        echo "     opencode-db export memory --sessions $ids_csv"
+        echo "     opencode-db export $profile --sessions $ids_csv"
         echo ""
     fi
 

@@ -128,10 +128,7 @@ guide_step_swap() {
     echo "   - If anything fails, the swap rolls back automatically"
     echo ""
     echo "   Type 'confirm' (exact, lowercase) to proceed:"
-    local confirm_input
-    printf '   > '
-    IFS= read -r confirm_input || return 1
-    if [ "$confirm_input" != "confirm" ]; then
+    if ! oc_confirm_typed "confirm"; then
         echo "   Aborted. Input must be exactly 'confirm'."
         return 1
     fi

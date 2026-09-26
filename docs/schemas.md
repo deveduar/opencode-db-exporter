@@ -234,37 +234,47 @@ stored file (identical when `OCED_COMPRESS=0`).
 
 ## 5b. shrink-presets.json — `$OCED_SHRINK_PRESETS`
 
-Named shrink recipes, the source of truth for `opencode-db shrink <name>` and the
-shrink menu. Authoritative machine schema:
+Named shrink **recipes**, the source of truth for `opencode-db shrink <name>` and the
+shrink menu's recipe step (the picker's rows are exactly these recipes, plus the
+built-ins; picking one goes straight to the read-only plan). Authoritative machine schema:
 [`generated/shrink.schema.json`](../generated/shrink.schema.json) (draft-07). **The
-schema and the per-key table are generated from `modules/shrinklib/flags.py`**
+schema and the per-key tables are generated from `modules/shrinklib/flags.py`**
 (mirror of §1; same generator `scripts/generate_schema.py`).
 
-The built-in recipes **always exist** — `lean`/`recent`/`full`/`bare` — and the file
-*extends/overrides* them (a file preset with the same name shadows the built-in).
-A missing/empty file simply means "built-ins only".
+A recipe is split in **two disjoint families** (see
+[`generated/shrink-flags-table.md`](../generated/shrink-flags-table.md)):
+
+- **session SELECTION** — `keep` / `older_than` / `since` / `keep_all` /
+  `keep_sessions` / `discard_sessions`: **CLI flags only**, never recipe keys. The
+  menu asks for them with its sessions picker (root sessions, `[x]` = survive) and
+  forwards `--keep-all` / `--discard-sessions`; headless users pass them directly.
+  Exactly ONE applies (`keep` = 10 is the default).
+- **OPERATIONS** — today only `strip_reasoning`: what is done to the copy besides
+  the pruning. These are the **only valid recipe keys**.
+
+The built-in recipes **always exist** — `lean` (strip reasoning) and `quiet`
+(prune + vacuum) — and the file *extends/overrides* them (a file recipe with the
+same name shadows the built-in). A missing/empty file simply means "built-ins only".
 
 ```jsonc
 {
   "presets": {
-    "lean":        { "keep": 10, "strip_reasoning": true },   // shadows the built-in lean
-    "spring-check": { "older_than": 30 },
-    "since-march": { "since": "2026-03-01", "strip_reasoning": true },
-    "everything":  { "keep_all": true },
-    "only-project-x": { "keep_sessions": ["ses_…", "ses_…"] },    // closed: parents/subagents kept too
-    "drop-dead":   { "discard_sessions": ["ses_…"] }              // descendant-closed; export memory first!
+    "lean":      { "strip_reasoning": true },   // shadows the built-in lean
+    "quiet":     {},                            // same as the built-in quiet
+    "text-only": { "strip_reasoning": false }   // keep the reasoning parts
   }
 }
 ```
 
-Every preset pins **exactly ONE keep rule** (`keep` \| `older_than` \| `since` \|
-`keep_all` \| `keep_sessions` \| `discard_sessions`) + optional
-`strip_reasoning: true`; unknown keys fail (`additionalProperties: false` in the
-generated schema). `opencode-db shrink --list-presets` shows the *effective* set
-(built-ins + file). Bake: `shrink <name>` → the rule flags + `--strip-reasoning`
-(`shrinklib/plan.py bake`); `keep_sessions`/`discard_sessions` ids become
-`--keep-sessions`/`--discard-sessions` (comma-joined). The menu resolves rows, plans
-and the `{"rule","ids"}` offers from `shrinklib/plan.py` — no jq in menu.sh.
+An empty object is legal (no operation = just prune + vacuum). A keep rule inside a
+recipe is **rejected** with a pointer to the matching CLI flag, unknown keys fail
+(`additionalProperties: false`), and `strip_reasoning` must be a boolean.
+`opencode-db shrink --list-presets` shows the *effective* set (built-ins + file).
+Bake: `shrink <name>` → the operation flags only (`shrinklib/plan.py bake`), and they
+are **prepended**, so an explicit selection flag still wins (`shrink lean --keep 3`).
+The menu resolves its operation rows, descriptions and baked flags from
+`shrinklib/plan.py` (`rows`/`descr`/`bake`/`ops-flags`/`op-lines`) — no jq in menu.sh,
+and it never derives a selection from a recipe.
 
 ---
 

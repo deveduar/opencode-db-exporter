@@ -5,7 +5,8 @@ from pathlib import Path
 
 
 def default_shrink_presets() -> str:
-    return os.environ.get(
-        "OCED_SHRINK_PRESETS",
-        str(Path.home() / ".config/opencode-db/shrink-presets.json"),
+    # An EMPTY value counts as unset (the menu shim exports "" when the env var
+    # is absent; Path("") would resolve to the current directory).
+    return os.environ.get("OCED_SHRINK_PRESETS") or str(
+        Path.home() / ".config/opencode-db/shrink-presets.json"
     )

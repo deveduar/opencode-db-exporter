@@ -1,18 +1,30 @@
 # Shrink plan API — the single Python place that answers "what will this shrink
-# produce?" for any named recipe/preset, plus the bash<->python bridge used by
-# menu.sh and shrink.sh. Built-in recipes (lean/recent/full/bare) always resolve;
-# presets from OCED_SHRINK_PRESETS extend/override them. Flag/rule validation and
-# the baked raw args live in shrinklib/presets.py (single source of truth).
+# produce?", plus the bash<->python bridge used by menu.sh and shrink.sh.
+#
+# TWO families (mirroring exportlib's product/preset split):
+#   * SESSION SELECTION — WHICH sessions survive. The menu asks for it with its
+#     sessions picker and passes the CLI selection flags; the CLI takes the flags.
+#     NOT a recipe key (see shrinklib/presets.py validate_preset).
+#   * OPERATIONS — WHAT is done to the copy besides the pruning (today:
+#     strip_reasoning). These are the only keys a recipe/preset may carry, so a
+#     recipe is just a named combination of operations (lean/quiet built-ins +
+#     whatever OCED_SHRINK_PRESETS adds).
+#
+# The row/description/flag BAKING lives here (pure config, no DB). The live
+# NUMBERS of the confirm block are counted by menu.sh with read-only queries.
 #
 # CLI subcommands:
-#   rows                 TSV preset rows for the fzf picker (key<TAB>display)
+#   rows                 TSV operation-recipe rows for the fzf picker (key<TAB>display)
 #   names                recipe/preset names (merged, one per line)
-#   descr <name>         one-line summary of a recipe/preset
+#   descr <name>         one-line summary of a recipe (its operations)
 #   purpose <name>       one-line purpose for the shipped recipes (unknown -> 1)
-#   plan <name>          multi-line "Will produce:" block for the confirm
-#   bake <name>          raw flags for the bash parser (last-wins on the CLI)
-#   selection <name>     JSON {"rule": ..., "ids": [...]} for keep/discard offer
+#   plan <name>          multi-line "Will produce:" block for a recipe
+#   bake <name>          raw flags for the bash parser (operations; last-wins)
+#   ops-flags <strip>    raw flags for a TOGGLED operation set (menu: 0|1)
+#   op-lines <strip>     human operation lines for a TOGGLED operation set
 #   list-presets         <name>\t<summary> rows for `shrink --list-presets`
+#   rule-line <rule> [value] [strip 0|1]   human criteria line for the bash
+#                                      engine's final resolved rule
 from __future__ import annotations
 
 import json
@@ -28,12 +40,13 @@ try:
         bake_args,
         load_shrink_presets,
         merged_presets,
+        op_lines,
         rule_lines,
     )
     from shrinklib.flags import SHRINK_PRESET_PURPOSE
 except ImportError:
     # fallback for in-place execution (python3 modules/shrinklib/plan.py ...)
-    from presets import bake_args, load_shrink_presets, merged_presets, rule_lines
+    from presets import bake_args, load_shrink_presets, merged_presets, op_lines, rule_lines
     from flags import SHRINK_PRESET_PURPOSE
 
 
@@ -46,12 +59,17 @@ def _cfg(name: str) -> dict:
 
 
 def _short(cfg: dict) -> str:
-    return " + ".join(rule_lines(cfg))
+    return " + ".join(op_lines(cfg)) or "no operation (just prune + vacuum)"
+
+
+def ops_cfg(strip: bool) -> dict:
+    """The operation set built from the menu's toggles."""
+    return {"strip_reasoning": True} if strip else {}
 
 
 def preset_rows() -> list[str]:
-    """TSV rows: __PRESET_<name>\t<name>  <summary>. Built-ins first (in their
-    natural order), then file presets that are not shipped recipes."""
+    """TSV rows: __PRESET_<name>\t<name>  <operations>. Built-ins first (in their
+    natural order), then file recipes that are not shipped."""
     merged = merged_presets()
     rows: list[str] = []
     for name in merged:
@@ -64,29 +82,30 @@ def preset_names() -> list[str]:
 
 
 def plan_text(name: str) -> str:
-    """Multi-line 'Will produce:' block (no leading indentation; the caller adds
-    uniform indentation)."""
+    """Multi-line 'Will produce:' block of a recipe (its operations; no leading
+    indentation — the caller adds uniform indentation)."""
     cfg = _cfg(name)
     lines = [f"{name}:"]
-    for line in rule_lines(cfg):
+    for line in op_lines(cfg):
         lines.append(f"  - {line}")
     return "\n".join(lines)
 
 
-def selection_json(name: str) -> str:
-    """Selection metadata for the menu: the keep rule and the exact session ids
-    (meaningful for keep_sessions/discard_sessions)."""
-    cfg = _cfg(name)
-    for k in ("keep_sessions", "discard_sessions"):
-        if k in cfg:
-            return json.dumps({"rule": k, "ids": cfg[k]})
-    if "keep" in cfg:
-        return json.dumps({"rule": "keep"})
-    if "older_than" in cfg:
-        return json.dumps({"rule": "older_than"})
-    if "since" in cfg:
-        return json.dumps({"rule": "since"})
-    return json.dumps({"rule": "keep_all"})
+def ops_flags(strip: bool) -> str:
+    """Raw flags for a toggled operation set (the space to forward to `shrink`)."""
+    return " ".join(bake_args_from_cfg(ops_cfg(strip)))
+
+
+def ops_text(strip: bool) -> str:
+    """Human lines for a toggled operation set (empty = no operation)."""
+    return " + ".join(op_lines(ops_cfg(strip)))
+
+
+def bake_args_from_cfg(cfg: dict) -> list[str]:
+    args: list[str] = []
+    if cfg.get("strip_reasoning"):
+        args.append("--strip-reasoning")
+    return args
 
 
 def _cli() -> int:
@@ -104,12 +123,10 @@ def _cli() -> int:
             for n in preset_names():
                 print(n)
             return 0
-        if cmd in ("descr", "plan", "bake", "selection", "purpose"):
+        if cmd in ("descr", "plan", "bake", "purpose"):
             if len(args) < 2:
                 return 1
             name = args[1]
-        else:
-            name = ""
         if cmd == "descr":
             print(_short(_cfg(name)))
             return 0
@@ -119,14 +136,18 @@ def _cli() -> int:
         if cmd == "bake":
             print(" ".join(bake_args(name)))
             return 0
-        if cmd == "selection":
-            print(selection_json(name))
-            return 0
         if cmd == "purpose":
             purpose = SHRINK_PRESET_PURPOSE.get(name)
             if not purpose:
                 return 1
             print(purpose)
+            return 0
+        if cmd in ("ops-flags", "op-lines"):
+            # Args: <strip 0|1> — the menu's operation toggles.
+            if len(args) < 2:
+                return 1
+            strip = args[1] == "1"
+            print(ops_flags(strip) if cmd == "ops-flags" else ops_text(strip))
             return 0
         if cmd == "list-presets":
             for name in preset_names():
@@ -135,6 +156,30 @@ def _cli() -> int:
                 if name in SHRINK_PRESET_PURPOSE:
                     tag = f"  → {SHRINK_PRESET_PURPOSE[name]}"
                 print(f"{name}\t{_short(cfg)}{tag}")
+            return 0
+        if cmd == "rule-line":
+            # Human criteria line for a resolved rule (the bash engine's final rule
+            # after last-wins). Args: <rule> [value] [strip 0|1]. Single source with
+            # rule_lines() — shrink.sh never builds these phrases itself.
+            if len(args) < 2:
+                return 1
+            rule = args[1]
+            value = args[2] if len(args) > 2 else None
+            strip = len(args) > 3 and args[3] == "1"
+            cfg: dict = {}
+            if rule == "keep" or rule == "older_than":
+                cfg[rule] = int(value)
+            elif rule == "since":
+                cfg["since"] = value
+            elif rule == "keep_all":
+                cfg["keep_all"] = True
+            elif rule in ("keep_sessions", "discard_sessions"):
+                cfg[rule] = [""] * int(value)
+            else:
+                return 1
+            if strip:
+                cfg["strip_reasoning"] = True
+            print(" + ".join(rule_lines(cfg)))
             return 0
     except ValueError:
         return 1

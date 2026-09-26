@@ -1,14 +1,18 @@
 # Named shrink presets.
 # A presets file (JSON, default ~/.config/opencode-db/shrink-presets.json, path via
 # OCED_SHRINK_PRESETS) is the source of truth for named shrink recipes:
-#   {"presets": {"lean": {"keep": 10, "strip_reasoning": true},
-#                "spring-clean": {"discard_sessions": ["ses_...", "ses_..."]}}}
-# A preset pins EXACTLY ONE keep rule (keep | older_than | since | keep_all |
-# keep_sessions | discard_sessions) and optionally strip_reasoning. The built-in
-# recipes (DEFAULT_SHRINK_PRESETS) are always available and a file preset may
-# override or extend them. Invoked as `shrink <name>`; explicit CLI flags
-# (--keep, --older-than, ...) win over the preset thanks to last-wins baking.
-# The menu reads the same file for its preset rows and plans.
+#   {"presets": {"lean":  {"strip_reasoning": true},
+#                "quiet": {}}}
+# A preset carries ONLY OPERATIONS (what is done to the copy besides the pruning).
+# The SESSION SELECTION is deliberately NOT a preset key: the menu asks for it
+# (sessions picker -> --keep-all/--keep-sessions/--discard-sessions) and the CLI
+# takes the selection flags (--keep/--older-than/--since/--keep-all/
+# --keep-sessions/--discard-sessions, exactly ONE, `keep` = 10 by default). A keep
+# rule inside a preset is rejected with a pointer to those flags.
+# The built-in recipes (DEFAULT_SHRINK_PRESETS) are always available and a file
+# preset may override or extend them. Invoked as `shrink <name>`; explicit CLI
+# flags win over the recipe thanks to last-wins baking.
+# The menu reads the same file for its operation rows and plans.
 import json
 from pathlib import Path
 from typing import Any
@@ -38,45 +42,24 @@ def load_shrink_presets() -> dict:
 
 
 def validate_preset(name: str, pdata: Any) -> dict:
-    """Validate one preset: shape, allowed keys, exactly one keep rule, types."""
+    """Validate one preset: shape, allowed keys (operations only), types."""
     if not isinstance(pdata, dict):
         die(f"shrink preset '{name}': expected an object, got {type(pdata).__name__}")
+    # A keep rule is not "legacy": the selection is simply a different concern.
+    # Point the user at the CLI flags instead of silently ignoring it.
+    for k in pdata:
+        if k in KEEP_RULE_KEYS:
+            die(
+                f"shrink preset '{name}': '{k}' selects sessions, and a recipe no longer "
+                f"selects sessions (the menu asks you with its picker). Use the CLI flag "
+                f"--{k.replace('_', '-')} instead, or move the rule out of the preset."
+            )
     unknown = [k for k in pdata if k not in SHRINK_PRESET_KEYS]
     if unknown:
         die(
             f"shrink preset '{name}': unknown key '{unknown[0]}' "
-            f"(allowed: {' | '.join(SHRINK_PRESET_KEYS)})"
+            f"(a recipe carries operations only: {' | '.join(SHRINK_PRESET_KEYS)})"
         )
-    rules = [k for k in KEEP_RULE_KEYS if k in pdata]
-    if len(rules) != 1:
-        die(
-            f"shrink preset '{name}': exactly ONE keep rule required "
-            f"(keep | older_than | since | keep_all | keep_sessions | discard_sessions), "
-            f"got {len(rules)}"
-        )
-    rule = rules[0]
-    if rule in ("keep", "older_than"):
-        v = pdata[rule]
-        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
-            die(f"shrink preset '{name}': '{rule}' must be a positive integer (got {v!r})")
-    elif rule == "since":
-        v = pdata[rule]
-        if not isinstance(v, str) or not v:
-            die(f"shrink preset '{name}': 'since' must be a date string YYYY-MM-DD (got {v!r})")
-    elif rule == "keep_all":
-        if not isinstance(pdata[rule], bool):
-            die(f"shrink preset '{name}': 'keep_all' must be true/false (got {pdata[rule]!r})")
-    else:  # keep_sessions / discard_sessions
-        v = pdata[rule]
-        if (
-            not isinstance(v, list)
-            or not v
-            or not all(isinstance(x, str) and x.strip() for x in v)
-        ):
-            die(
-                f"shrink preset '{name}': '{rule}' must be a non-empty list of session ids "
-                f"(got {v!r})"
-            )
     if "strip_reasoning" in pdata and not isinstance(pdata["strip_reasoning"], bool):
         die(
             f"shrink preset '{name}': 'strip_reasoning' must be true/false "
@@ -95,36 +78,25 @@ def merged_presets() -> dict:
 
 
 def bake_args(name: str) -> list[str]:
-    """Resolve a preset/recipe into raw cross-flag arguments for the bash parser.
-    `shrink <name>` prepends these BEFORE the user's flags (last-wins on the CLI).
-    Dies with the list of known presets for unknown names."""
+    """Resolve a recipe into raw cross-flag arguments for the bash parser
+    (operations only). `shrink <name>` prepends these BEFORE the user's flags
+    (last-wins on the CLI). Dies with the list of known recipes for unknown names."""
     presets = merged_presets()
     if name not in presets:
         known = ", ".join(sorted(presets))
         die(f"unknown shrink recipe/preset '{name}' — known: {known}")
     cfg = presets[name]
     args: list[str] = []
-    if "keep" in cfg:
-        args += ["--keep", str(cfg["keep"])]
-    if "older_than" in cfg:
-        args += ["--older-than", str(cfg["older_than"])]
-    if "since" in cfg:
-        args += ["--since", cfg["since"]]
-    if cfg.get("keep_all"):
-        args.append("--keep-all")
-    if "keep_sessions" in cfg:
-        args += ["--keep-sessions", ",".join(cfg["keep_sessions"])]
-    if "discard_sessions" in cfg:
-        args += ["--discard-sessions", ",".join(cfg["discard_sessions"])]
     if cfg.get("strip_reasoning"):
         args.append("--strip-reasoning")
     return args
 
 
-def rule_lines(cfg: dict) -> list[str]:
-    """Human description lines of a preset config ("keep the N most recent…").
-    Kept phrase-compatible with the bash criteria strings so shrink.json and the
-    menu plan agree."""
+def selection_lines(cfg: dict) -> list[str]:
+    """Human description of a SESSION SELECTION rule (keep the N most recent…).
+
+    Used by the CLI (`shrink --help`, shrink.json `criteria`, the criteria line of
+    a real run) — never by a recipe, which carries no selection."""
     out: list[str] = []
     if "keep" in cfg:
         out.append(f"keep the {cfg['keep']} most recent session(s)")
@@ -144,6 +116,22 @@ def rule_lines(cfg: dict) -> list[str]:
             f"keep everything except the {len(cfg['discard_sessions'])} listed "
             "session(s) (their subagents are dropped too)"
         )
+    return out
+
+
+def op_lines(cfg: dict) -> list[str]:
+    """Human description of the OPERATIONS of a recipe ("strip reasoning …").
+
+    Kept phrase-compatible with the bash criteria strings so shrink.json and the
+    menu plan agree."""
+    out: list[str] = []
     if cfg.get("strip_reasoning"):
         out.append("strip reasoning (drop the 'reasoning' parts in the copy)")
     return out
+
+
+def rule_lines(cfg: dict) -> list[str]:
+    """Full human criteria of a resolved invocation: selection + operations.
+
+    Single source with the bash engine's criteria line (plan.py rule-line)."""
+    return selection_lines(cfg) + op_lines(cfg)

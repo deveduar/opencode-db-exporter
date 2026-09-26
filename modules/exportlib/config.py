@@ -16,4 +16,6 @@ def default_bkp_dir() -> str:
 
 
 def default_presets() -> str:
-    return os.environ.get("OCED_PRESETS", str(Path.home() / ".config/opencode-db/presets.json"))
+    # An EMPTY value counts as unset (the menu shim exports "" when the env var
+    # is absent; Path("") would resolve to the current directory).
+    return os.environ.get("OCED_PRESETS") or str(Path.home() / ".config/opencode-db/presets.json")

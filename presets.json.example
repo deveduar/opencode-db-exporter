@@ -25,6 +25,19 @@
     },
     "digest": {
       "product": "compactions"
+    },
+    "backup_then_full": {
+      "product": "transcript",
+      "snapshot": "fresh",
+      "tool_output": "full"
+    },
+    "one_session": {
+      "product": "memory",
+      "sessions": ["ses_ONLY_THIS_ID"]
+    },
+    "this_week": {
+      "product": "transcript",
+      "filter": "%2026-09%"
     }
   }
 }

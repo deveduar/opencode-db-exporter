@@ -7,6 +7,11 @@ o_like_literal() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
 }
 
+# `list --order` vocabulary (axis + direction, comma-separated for messages).
+# The default is created-asc (the historical order, i.e. oldest first); the
+# shrink sessions picker asks for updated-desc (most recently used first).
+OCED_LIST_ORDERS="created-asc, created-desc, updated-asc, updated-desc"
+
 # o_version_block -> tool version + opencode CLI version + migrations (3-space prefix).
 o_version_block() {
     local oc_version mig_count mig_last
@@ -195,7 +200,7 @@ oced_version() {
 oced_list() {
     o_check_deps
     o_db_exists
-    local scope=all filter="" showinfo=0
+    local scope=all filter="" showinfo=0 order=created-asc oby="" odir=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --root) scope=root ;;
@@ -203,10 +208,27 @@ oced_list() {
             --all) scope=all ;;
             --filter) [ "$#" -ge 2 ] || o_die "--filter needs a pattern"; filter="$2"; shift ;;
             --info) showinfo=1 ;;
+            --order)
+                [ "$#" -ge 2 ] || o_die "--order needs a value ($OCED_LIST_ORDERS)"
+                order="$2"; shift ;;
             *) o_die "Unknown argument: $1" ;;
         esac
         shift
     done
+    # --order is a WHITELIST (no interpolation of the raw value): the axis and
+    # the direction are picked apart and the SQL is rebuilt from constants.
+    case "$order" in
+        created-asc)  oby="s.time_created";     odir="ASC"  ;;
+        created-desc) oby="s.time_created";     odir="DESC" ;;
+        updated-asc)  oby="s.time_updated";     odir="ASC"  ;;
+        updated-desc) oby="s.time_updated";     odir="DESC" ;;
+        *) o_die "Unknown --order '$order' (choose: $OCED_LIST_ORDERS)" ;;
+    esac
+    # A tie on the ordering axis always falls back to time_created (same
+    # direction), so the order is total and stable; when the axis already IS
+    # time_created there is nothing left to break.
+    local orderby="$oby $odir"
+    [ "$oby" = "s.time_created" ] || orderby="$orderby, s.time_created $odir"
 
     local where="" col_extra=""
     case "$scope" in
@@ -219,7 +241,7 @@ oced_list() {
     [ "$showinfo" -eq 1 ] && cols="$cols, s.tokens_input AS TOK_IN, s.tokens_output AS TOK_OUT, s.cost AS COST"
 
     echo "== Sessions ($scope) =="
-    o_q -header -column "SELECT $cols FROM session s LEFT JOIN session p ON p.id = s.parent_id $where ORDER BY s.time_created;"
+    o_q -header -column "SELECT $cols FROM session s LEFT JOIN session p ON p.id = s.parent_id $where ORDER BY $orderby;"
 }
 
 oced_info() {

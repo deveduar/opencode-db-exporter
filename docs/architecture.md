@@ -48,8 +48,9 @@ describe an invented schema):
 ## 3. Export pipeline
 
 `export.sh` is a "bash → python" bridge: it validates dependencies/DB and delegates to the
-`exportlib` package (`modules/export.py` is just the entry shim), which is the only SQLite
-reader. There is no fork toward the opencode CLI (the CLI offers no `session export` and
+`exportlib` package (`modules/exportlib/cli.py` is the self-bootstrapping CLI entry — the old
+`modules/export.py` shim is gone), which is the only SQLite reader. There is no fork toward
+the opencode CLI (the CLI offers no `session export` and
 its environment filters would hide sessions; reading the DB directly in `mode=ro` is what
 guarantees seeing everything).
 
@@ -92,7 +93,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   `transcript|memory|compactions` (mutually exclusive with `product`). The selection is
   top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
   (`run_bundle()` in `cli.py`) computes one shared collision-free stamp (bumped to
-  `stamp@N` only when any product dir already exists), then re-executes `modules/export.py
+  `stamp@N` only when any product dir already exists), then re-executes `exportlib/cli.py
   <product>` per product with the shared `--stamp` and a hidden `--preset-name` for
   provenance. Each child runs the unchanged single-product pipeline, so a bundle subfolder
   is byte-identical to a normal run; the parent writes an `index.md` at the stamp root
@@ -180,12 +181,14 @@ rebuilds `ACTION_STATUS` (DB/sessions/WAL/backup/exports counts) after each acti
 pickered deletion is reflected immediately.
 
 **Create + manage in one picker.** Shrink lives in its own root entry: `oc_shrinks_picker`
-offers `[create shrink copy…]` (the `pick_shrink_profile`/`oc_pick_shrink_custom` recipes,
-LIVE DB, own snapshot) plus a `view`/`remove` toggle with per-run rows and the
-`delete ALL` / `delete old (keep newest)` bulk rows. Rows come from the shrink.sh helpers
-(`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`, so the
-menu never re-aggregates jq. This removed the old `__SHRINK__` row from the backups picker,
-which is now just create/delete-all/keep-newest/delete-one.
+offers `[create shrink copy…]` (a **3-step wizard**: sessions → recipe → read-only
+plan, see §5; LIVE DB, own snapshot), a **`__SWAP__`** row that
+swaps the picked copy into the LIVE DB behind `oc_confirm_typed "confirm"` (staleness
+checked via `o_shrink_stale` first), plus a `view`/`remove` toggle with per-run rows and
+the `delete ALL` / `delete old (keep newest)` bulk rows. Rows come from the shrink.sh
+helpers (`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`,
+so the menu never re-aggregates jq. This removed the old `__SHRINK__` row from the backups
+picker, which is now just create/delete-all/keep-newest/delete-one.
 
 The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|compactions`). Usage and the decision matrix:
@@ -213,15 +216,56 @@ pages but does not shrink the file (only `VACUUM` does, and it needs an exclusiv
    shape the menu consumes).
 6. Manual swap — or `--swap`, see §6.
 
-**Named recipes** (the shrink mirror of §3.3): `modules/shrinklib/` is the python SSoT —
-`flags.py` owns the recipe flags + the built-in plans (`lean`/`recent`/`full`/`bare`),
-`presets.py` loads `$OCED_SHRINK_PRESETS` (validated: exactly one keep rule, unknown keys
-die) and merges it **over** the built-ins, `plan.py` resolves rows/bake/plan/selection
-for the CLI and the menu. `shrink <name>` bakes the preset to the raw flags
-(`--keep 10 --strip-reasoning`, `--discard-sessions ses_…`); unknown names error and
-list the known ones. `--discard-sessions` (CLI or preset) prints a first-step hint —
+**Named recipes = OPERATIONS only** (the shrink mirror of §3.3): `modules/shrinklib/` is
+the python SSoT, split in two disjoint families. **Session selection** (`keep`/
+`older_than`/`since`/`keep_all`/`keep_sessions`/`discard_sessions`) is a **CLI flag**
+— exactly one per invocation, never a recipe key. **Operations** (today
+`strip_reasoning`) are the only valid recipe keys: `flags.py` owns both families +
+the built-ins (`lean` = strip, `quiet` = prune+vacuum), `presets.py` loads
+`$OCED_SHRINK_PRESETS` (validated: a keep rule inside a recipe dies pointing at the
+matching flag, unknown keys die) and merges it **over** the built-ins, `plan.py`
+resolves rows/descriptions/bake/`ops-flags` for the CLI and the menu. `shrink <name>`
+bakes the recipe to the raw **operation** flags (`--strip-reasoning`) and prepends
+them, so an explicit selection flag still wins (`shrink lean --keep 3`); unknown names
+error and list the known ones. `--discard-sessions` prints a first-step hint —
 `opencode-db export memory --sessions <ids>` — so nothing is lost before the pruned copy
-is made; the menu makes it an actual offer with `keep_sessions` warning instead.
+is made; the menu makes it an actual offer.
+
+**The create flow is sessions-first** (`oc_pick_shrink` = the `__CREATE__` entry of the
+shrinks picker), and it is the only way to create a shrink from the menu:
+
+1. `oc_shrink_sessions_pick` — **root sessions only** (`list --root`): a subagent always
+   follows its root, so it never needs a row, and an orphan whose parent is gone *is* a
+   root. `[x]` = survives in the copy, default ALL marked; a `(N sub)` badge (recursive)
+   shows what each root drags along. Bulk rows `__ALL__`/`__NONE__`/`__LAST__ <N>`/
+   `__OLDEST__ <N>`/`__DAYS__ <N>` (the age ones **rest**: unmark all, then mark the
+   matching ones). `__MAKE__` is **continue**, not "build": all marked → `--keep-all`,
+   unmarked roots → `--discard-sessions <csv>`, nothing marked → refused ("the copy
+   would be an EMPTY database"). Rows are **sorted by `time_updated` (newest first)**
+   and an `__TOGGLE__` row flips to oldest-first: the rows are re-read on every render
+   and the marks live in an associative array, so re-sorting loses nothing. The session
+   order is the *only* thing the toggle changes — the selection is run-time state.
+2. `oc_shrink_ops_pick <sel-args>` — the **recipe**, and nothing else: the recipe rows
+   (`shrinklib/plan.py rows`), each described by its purpose. There is no operation
+   toggle and no "continue" row: every row is a named ops-only recipe (`lean` strips
+   reasoning, `quiet` prunes + vacuums), and picking one bakes its operations and goes
+   straight to the plan. Composition is expressed by writing a recipe, not by stacking
+   toggles in a picker.
+3. `oc_shrink_confirm_run` — the **read-only plan**: exact counts on the LIVE DB using
+   the *engine's own predicates* (kept roots+subagents, the discarded cascade, rows per
+   table, reasoning parts, current size) via `WITH RECURSIVE` closures, the
+   `export memory --sessions` offer when discarding, the picked `Recipe:`/`Command:`
+   lines, then the y/N gate.
+
+Rationale: the *selection* is the decision users actually think in ("which conversations
+do I keep?"), and it is a property of a specific DB, never of a reusable recipe — so it
+is asked at run time, not baked into a named preset. The *operations* are the reusable,
+DB-independent part, so that is all a recipe may carry. The plan reuses the numbers the
+engine will really apply, so the confirmation cannot lie. `__CUSTOM__`, `__DRYRUN__` and
+`__SESSIONS__` are gone (the picker itself is the custom flow, and the plan replaces the
+dry-run); the CLI keeps `--dry-run` and the full selection flag set for headless use.
+Declining at the plan re-renders the recipe rows (pick another one; the selection is
+untouched) and ESC there climbs back to the sessions picker with the marks intact.
 
 Produced copies accumulate under `$OCED_BACKUP_DIR/shrink/<o_ts>/`; `oced_shrinks`
 (`shrinks list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>`) manages them the

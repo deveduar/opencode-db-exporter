@@ -49,6 +49,9 @@ INSERT INTO session VALUES
   0,500,90,0,0,0,1789001000000,1789001600000,NULL,NULL),
  ('ses_B0002','proj2','beta-sub','/tmp/projB','Translate docs (@explore subagent)','1.0',NULL,'ses_B0001','explore','{"id":"model-b","providerID":"opencode"}',
   0,50,10,0,0,0,1789001100000,1789001200000,NULL,NULL),
+ -- the orphan is the newest ROOT on BOTH axes (so `shrink --keep N` picks it
+ -- first), but B was used more recently than A: the two axes disagree on the
+ -- A/B pair, so all four list --order axes are distinguishable
  ('ses_ORPHAN01','proj3','orphan','/tmp/projC','Orphan subagent (@explore subagent)','1.0',NULL,'ses_MISSING','explore','{"id":"model-b","providerID":"opencode"}',
   0,10,5,0,0,0,1789002000000,1789002100000,NULL,NULL);
 

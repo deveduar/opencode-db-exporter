@@ -61,6 +61,10 @@ todo:session_id,content,status
 # Shrink presets file (named shrink recipes; the shipped recipes lean/recent/
 # full/bare always exist — this file extends/overrides them).
 : "${OCED_SHRINK_PRESETS:=$HOME/.config/opencode-db/shrink-presets.json}"
+# Export profile used when shrink offers to export discarded sessions first.
+# Default: archive (transcript + memory). Set to "memory" for corpus-only, or any
+# valid export product/profile.
+: "${OCED_SHRINK_DISCARD_EXPORT_PROFILE:=archive}"
 
 # o_log <message> -> append one line to the activity log (only when OCED_LOG=1).
 o_log() {

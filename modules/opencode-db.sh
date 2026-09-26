@@ -21,8 +21,11 @@ Usage: opencode-db.sh [command]
                        + version/schema probe + dependency check
   version              tool version (opencode-db) + opencode CLI version + schema compatibility probe
   list [--root|--sub|--all] [--filter PATTERN] [--info]
+                       [--order created-asc|created-desc|updated-asc|updated-desc]
                        list sessions (id | title | date | agent | dir | tokens);
                        --filter: SQL LIKE pattern on id/title, e.g. 'ses_f7%'
+                       --order: sort axis + direction (default created-asc = oldest
+                       first); ties always fall back to time_created
   info <id>            full detail of one session (tokens, compactions, counts)
   compactions <id> [show [last|N|all]]
                        list compaction points (date + new queue) of a session;
@@ -45,11 +48,12 @@ shrink [preset] [--keep N | --older-than DAYS | --since DATE | --keep-all |
                       tool never writes it. --swap automates the replacement
                       safely: aborts if opencode is running, snapshots a
                       safety copy to $OCED_BACKUP_DIR/pre-shrink/ (WAL-safe)
-                      and rolls back if the new DB does not open. Exactly ONE
-                      keep rule applies (last one wins); named presets come
-                      from $OCED_SHRINK_PRESETS + the built-in recipes
-                      (lean/recent/full/bare, see below). The kept set is
-                      closed (parents/subagents of a kept session stay).
+                       and rolls back if the new DB does not open. Exactly ONE
+                       keep rule applies (last one wins); a recipe is a named
+                       combination of OPERATIONS only (lean/quiet, see below) —
+                       the session selection is the keep rule above, or the menu
+                       picker. The kept set is closed (parents/subagents of a
+                       kept session stay).
   export [product] [flags]   export sessions to Markdown (see below)
 exports list         list past export runs (date/profile/counts/size);
                         a run with several profiles shows them joined with '+'

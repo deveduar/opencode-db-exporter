@@ -57,6 +57,7 @@ cp -f "$SOURCE_ROOT/uninstall.sh" "$PREFIX/uninstall.sh"
 chmod +x "$PREFIX/uninstall.sh"
 # Contract files referenced by the smoke suite (tests/../generated/presets.schema.json, tests/../presets.json.example).
 cp -f "$SOURCE_ROOT/presets.json.example" "$PREFIX/presets.json.example"
+cp -f "$SOURCE_ROOT/shrink-presets.json.example" "$PREFIX/shrink-presets.json.example"
 if [ -f "$SOURCE_ROOT/LICENSE" ]; then
     cp -f "$SOURCE_ROOT/LICENSE" "$PREFIX/LICENSE"
 fi

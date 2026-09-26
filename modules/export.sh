@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# export.sh — oced_export: forwards to the Python renderer (modules/export.py).
+# export.sh — oced_export: forwards to the Python renderer
+# (exportlib/cli.py, the self-bootstrapping CLI entry — no shim needed).
 set -uo pipefail
 
 oced_export_one() {
@@ -7,11 +8,11 @@ oced_export_one() {
     OCED_OUT="$OCED_OUT" \
     OCED_BACKUP_DIR="$OCED_BACKUP_DIR" \
     OCED_PRESETS="$OCED_PRESETS" \
-        python3 "$SCRIPT_DIR/export.py" "$@"
+        python3 "$SCRIPT_DIR/exportlib/cli.py" "$@"
 }
 
 # oced_export [product] [flags]
-# product: transcript | memory | compactions (see modules/export.py).
+# product: transcript | memory | compactions (see exportlib/cli.py).
 oced_export() {
     o_check_deps
     o_db_exists

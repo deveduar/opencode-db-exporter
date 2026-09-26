@@ -376,60 +376,192 @@ oc_preset_run "snappy" "product transcript" >/dev/null
 grep -qx "backup" "$CALLS" && bad "aligned snapshot preset re-offered a backup" || ok "aligned snapshot preset does NOT re-offer a backup"
 export OCED_PRESETS="$TMP/no-presets.json"
 
-echo "== shrink in the menu: presets / custom / dry-run / ESC / confirm =="
+echo "== shrink create flow: sessions (roots) -> recipe -> plan =="
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 qempty
 oc_pick_shrink >/dev/null
-[ ! -s "$CALLS" ] && ok "ESC cancels shrink picker" || bad "ESC still ran shrink"
+[ ! -s "$CALLS" ] && ok "ESC cancels the shrink create flow" || bad "ESC still ran shrink"
 
-qset "__PRESET_lean"
+# all marked -> --keep-all; a recipe goes straight to the plan
+: > "$CALLS"
+qset "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink >/dev/null
-grep -qx "shrink lean" "$CALLS" && ok "shrink preset lean reaches the dispatcher" || bad "shrink lean: $(cat "$CALLS")"
+grep -qx "shrink --keep-all" "$CALLS" && ok "sessions(all marked) -> recipe 'quiet' -> shrink --keep-all" || bad "sessions keep-all: $(cat "$CALLS")"
+
+# a recipe applies ITS operations (there is no toggle and no 'continue' row)
+: > "$CALLS"
+qset "__MAKE__" "__PRESET_lean"
+oc_pick_shrink >/dev/null
+grep -qx "shrink --keep-all --strip-reasoning" "$CALLS" && ok "recipe 'lean' applies strip_reasoning" || bad "recipe lean: $(cat "$CALLS")"
+
+OROWS=$(oc_shrink_rows)
+printf '%s\n' "$OROWS" | grep -q '__STRIP__\|__GO__' && bad "the operation toggle/continue rows leaked into the recipe list" || ok "recipe list has no toggle and no 'continue' row"
+[ "$(printf '%s\n' "$OROWS" | grep -c '__PRESET_')" -ge 2 ] \
+    && ok "the recipe list is the built-ins (lean/quiet) + the file recipes" || bad "recipe rows: $OROWS"
+
+echo "== shrink sessions picker: ROOT sessions only, marked = survive =="
+# the fake DB has 6 sessions but 3 roots (ses_A0001, ses_B0001, ses_ORPHAN01 —
+# the orphan's parent is gone, so it IS a root); subagents never get a row.
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+RROWS=$(session_rows --root)
+[ "$(printf '%s\n' "$RROWS" | grep -c '^ses_')" = "3" ] && ok "sessions picker lists only the 3 root sessions" || bad "root rows: $RROWS"
+printf '%s\n' "$RROWS" | grep -q '^ses_A0002' && bad "a subagent leaked into the picker rows" || ok "no subagent rows in the picker"
+SUBS=$(oc_shrink_sub_counts)
+printf '%s' "$SUBS" | grep -q "$(printf 'ses_A0001\t2')" && ok "the root row can show its subagent count (A0001 -> 2)" || bad "sub counts: [$SUBS]"
+
+# the picker sorts by time_updated (newest first), and the two axes really
+# disagree: in the fake DB B was used more recently than A, while A is older.
+ord_ids() { session_rows --root --order "$1" | awk '{print $1}' | paste -sd, -; }
+[ "$(ord_ids updated-desc)" = "ses_ORPHAN01,ses_B0001,ses_A0001" ] \
+    && ok "list --order updated-desc: most recently used first" || bad "updated-desc: $(ord_ids updated-desc)"
+[ "$(ord_ids updated-asc)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
+    && ok "list --order updated-asc: the reverse" || bad "updated-asc: $(ord_ids updated-asc)"
+[ "$(ord_ids created-asc)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
+    && ok "list --order created-asc is the default order (unchanged)" || bad "created-asc: $(ord_ids created-asc)"
+oced_out list --order nope >/dev/null 2>&1 && bad "an invalid --order was accepted" || ok "an invalid --order is rejected"
+
+# the picker opens in newest-first and the order row flips it, keeping the marks
+: > "$CALLS"
+qset "__TOGGLE__" "__NONE__" "ses_A0001" "__TOGGLE__" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/order.txt"
+grep -q 'Sorted: newest first' "$FZF_HIST" && ok "the sessions picker opens sorted newest first" || bad "order mode: $(grep -o 'Sorted: [a-z ]*' "$FZF_HIST" | head -2 | tr '\n' '/')"
+grep -q 'Sorted: oldest first' "$FZF_HIST" && ok "the order row switches to oldest first (header follows)" || bad "order toggle label missing"
+[ "$(grep -c '^-> shrink plan' "$TMP/order.txt")" = "1" ] && ok "re-ordering keeps the picker usable (one plan)" || bad "plan count after re-order"
+grep -qx "shrink --discard-sessions ses_ORPHAN01,ses_B0001" "$CALLS" \
+    && ok "the marks survive the order switch (2nd __TOGGLE__ did not reset them)" || bad "marks after re-order: $(cat "$CALLS")"
+
+# the order row itself (the fzf prompt only carries the header, so log the rows)
+reset
+qempty
+: > "$TMP/sessions_rows.txt"
+( oc_fzf_sel() { tee -a "$TMP/sessions_rows.txt" | fzf "$@"; }
+  oc_shrink_sessions_pick >/dev/null )
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+grep -q 'shrink — order: newest first' "$TMP/sessions_rows.txt" \
+    && ok "the order row advertises the current mode (newest first)" || bad "order row missing"
+grep -q 'switch to oldest first' "$TMP/sessions_rows.txt" \
+    && ok "the order row offers the reverse sort" || bad "order row label missing"
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink >/dev/null
+grep -q '^export archive --sessions ' "$CALLS" && ok "unmarked roots are offered for export first (archive bundle)" || bad "sessions export offer: $(cat "$CALLS")"
+grep -q '^shrink --discard-sessions ' "$CALLS" && ok "unmarked roots -> --discard-sessions" || bad "sessions discard: $(cat "$CALLS")"
+[ "$(grep '^shrink --discard-sessions ' "$CALLS" | tail -1 | grep -o ',' | wc -l)" = "1" ] \
+    && ok "sessions picker: 2 unmarked roots (1 kept of 3) -> 1 comma" || bad "sessions discard csv count"
+
+# the plan prints the exact read-only counts before the y/N gate
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/plan.txt"
+grep -q "Rows to remove:" "$TMP/plan.txt" && ok "the plan lists the rows to remove" || bad "plan rows block missing"
+# ses_A0001 survives with its 2 subagents; ses_B0001 (+ its subagent) and the
+# orphan root ses_ORPHAN01 are discarded (the descendant-closed cascade).
+grep -qE "Keep: +1 root\(s\) \+ 2 subagent\(s\) = 3 session\(s\)" "$TMP/plan.txt" \
+    && ok "the plan counts the kept roots + subagents" || bad "plan keep line: $(grep -E 'Keep:|Discard:' "$TMP/plan.txt")"
+grep -qE "Discard: +2 root\(s\) \+ 1 subagent\(s\) = 3 session\(s\) \(cascade\)" "$TMP/plan.txt" \
+    && ok "the plan counts the discarded cascade (roots + their subagent)" || bad "plan discard line: $(grep -E 'Keep:|Discard:' "$TMP/plan.txt")"
+grep -qE "^     part +[0-9]+$" "$TMP/plan.txt" && ok "the plan counts rows per table" || bad "plan per-table rows missing"
+grep -q "read-only counts" "$TMP/plan.txt" && ok "the plan says it is read-only" || bad "plan read-only note missing"
+grep -qE "Recipe: +quiet - prune \+ vacuum only" "$TMP/plan.txt" \
+    && ok "the plan names the recipe picked in the previous step (with its purpose)" || bad "plan recipe line: $(grep -E 'Recipe:|Command:' "$TMP/plan.txt")"
+grep -qE "Command: +shrink --discard-sessions" "$TMP/plan.txt" \
+    && ok "the plan shows the effective command the engine will run" || bad "plan command line missing"
 
 : > "$CALLS"
-qset "__DRYRUN__" "__PRESET_lean"
-oc_pick_shrink >/dev/null
-grep -qx "shrink lean --dry-run" "$CALLS" && ok "shrink dry-run reaches the dispatcher" || bad "shrink dry-run: $(cat "$CALLS")"
+qset "__LAST__" "__MAKE__" "__PRESET_quiet"
+printf '2\n' | oc_pick_shrink >/dev/null
+grep -q '^shrink --discard-sessions ' "$CALLS" && ok "sessions picker: LAST-N keeps only the N most recent" || bad "sessions LAST: $(cat "$CALLS")"
+[ "$(grep '^shrink --discard-sessions ' "$CALLS" | tail -1 | grep -o ',' | wc -l)" = "0" ] \
+    && ok "sessions LAST-2: 1 of 3 roots unmarked -> no comma" || bad "sessions LAST-2 csv count"
 
 : > "$CALLS"
-qset "__CUSTOM__" "keep sessions since a date (real range)"
-printf '20260115\n' | oc_pick_shrink >/dev/null
-grep -qx "shrink --since 2026-01-15" "$CALLS" && ok "shrink custom since-date reaches the dispatcher" || bad "shrink custom since-date: $(cat "$CALLS")"
+qset "__DAYS__" "__MAKE__" "__PRESET_quiet"
+printf '3650\n' | oc_pick_shrink >/dev/null
+grep -qx "shrink --keep-all" "$CALLS" && ok "sessions DAYS-N (a wide window) marks every root" || bad "sessions DAYS: $(cat "$CALLS")"
+
+: > "$CALLS"
+qset "__NONE__" "__MAKE__"
+oc_pick_shrink > "$TMP/sessions-empty.txt"
+[ ! -s "$CALLS" ] && ok "sessions picker: nothing marked -> no shrink (guard)" || bad "sessions empty ran: $(cat "$CALLS")"
+grep -q 'EMPTY database' "$TMP/sessions-empty.txt" && ok "sessions picker prints the empty-copy warning" || bad "sessions empty warning missing"
+
+echo "== shrink flow navigation: ESC climbs one level, 'n' aborts =="
+reset
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+# ESC at the recipe step returns to the sessions picker with the marks intact
+# (the queue: NONE, mark A0001, continue -> recipe (ESC), continue -> recipe -> lean)
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__MAKE__" "__MAKE__" "__PRESET_lean"
+oc_pick_shrink >/dev/null
+grep -qx "shrink --discard-sessions ses_ORPHAN01,ses_B0001 --strip-reasoning" "$CALLS" \
+    && ok "ESC at the recipe step keeps the marks (back to sessions, then continue)" || bad "ESC ops: $(cat "$CALLS")"
 
 : > "$CALLS"
 confirm_action() { return 1; }
-qset "__PRESET_bare"
+qset "__MAKE__" "__PRESET_lean"
 oc_pick_shrink >/dev/null
-[ ! -s "$CALLS" ] && ok "shrink rejected on 'n'" || bad "shrink ran on 'n'"
+[ ! -s "$CALLS" ] && ok "shrink plan rejected on 'n' (nothing ran)" || bad "shrink ran on 'n'"
 confirm_action() { return 0; }
 
-echo "== shrink in the menu: preset rows come from shrinklib; keep/discard flows =="
+# declining the plan re-renders the RECIPE list to pick another one (the session
+# selection is untouched). --keep-all keeps the export offer out of the way, so
+# the first confirm_action call IS the build gate.
+: > "$CALLS"
+CONFIRM_N=0
+confirm_action() { CONFIRM_N=$((CONFIRM_N+1)); [ "$CONFIRM_N" -eq 1 ] && return 1; return 0; }
+qset "__MAKE__" "__PRESET_lean" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/decline.txt"
+grep -q "declined — back to the recipe step" "$TMP/decline.txt" \
+    && ok "the plan says a decline goes back to the recipe step" || bad "decline hint missing"
+[ "$(grep -c '^-> shrink plan' "$TMP/decline.txt")" = "2" ] \
+    && ok "declining the plan re-renders the recipes (plan shown again)" || bad "decline plan count"
+grep -qx "shrink --keep-all" "$CALLS" \
+    && ok "after a decline another recipe can be chosen (quiet, not lean)" \
+    || bad "decline -> recipe: $(cat "$CALLS")"
+confirm_action() { return 0; }
+
+echo "== shrink rows/bake come from shrinklib (recipes = operations only) =="
 reset
 FPRES="$TMP/shrink-presets.json"
 cat > "$FPRES" <<'EOF'
 {"presets": {
-   "skim": {"discard_sessions": ["ses_A0001"]},
-   "only": {"keep_sessions": ["ses_A0001"]}
+   "skim": {"strip_reasoning": true},
+   "keep-text": {"strip_reasoning": false}
 }}
 EOF
 export OCED_SHRINK_PRESETS="$FPRES"
 printf '%s\n' "$(oc_shrink_rows)" | grep -q '^__PRESET_lean' && ok "shrink rows list the built-in recipes" || bad "built-ins missing"
-printf '%s\n' "$(oc_shrink_rows)" | grep -q '^__PRESET_skim' && ok "shrink rows list file presets from OCED_SHRINK_PRESETS" || bad "file preset missing"
-[ "$(oc_shrink_py bake "skim" 2>/dev/null)" = "--discard-sessions ses_A0001" ] && ok "shrink bake pins the discard rule" || bad "shrink bake skim: $(oc_shrink_py bake skim)"
+printf '%s\n' "$(oc_shrink_rows)" | grep -q '^__PRESET_skim' && ok "shrink rows list file recipes from OCED_SHRINK_PRESETS" || bad "file preset missing"
+[ "$(oc_shrink_py bake skim)" = "--strip-reasoning" ] && ok "shrink bake emits only the operation flag" || bad "shrink bake skim: $(oc_shrink_py bake skim)"
+[ "$(oc_shrink_py bake "keep-text")" = "" ] && ok "a recipe with an explicit false bakes nothing" || bad "bake keep-text: $(oc_shrink_py bake "keep-text")"
+# a keep rule inside a recipe is rejected (the selection is a CLI flag)
+[ "$(oc_shrink_py bake lean)" = "--strip-reasoning" ] && ok "a built-in recipe still bakes its operation" || bad "bake lean: $(oc_shrink_py bake lean)"
+# the recipe step lists the recipes and NOTHING else (log every row it renders,
+# then answer ESC)
+reset
+: > "$TMP/ops_rows.txt"
+( oc_fzf_sel() { cat > "$TMP/ops_rows.txt"; return 130; }
+  oc_shrink_ops_pick --keep-all >/dev/null )
+reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-qset "__PRESET_skim"
-oc_pick_shrink >/dev/null
-grep -qx "export memory --sessions ses_A0001" "$CALLS" && ok "discard preset offers the export-first guard" || bad "discard guard: $(cat "$CALLS")"
-grep -qx "shrink skim" "$CALLS" && ok "discard preset then shrinks" || bad "shrink skim: $(cat "$CALLS")"
-
+OROWS=$(cat "$TMP/ops_rows.txt")
+printf '%s\n' "$OROWS" | grep -q '^__PRESET_lean' && ok "the recipe step lists the built-in recipes" || bad "ops recipe rows missing"
+printf '%s\n' "$OROWS" | grep -q '^__PRESET_skim' && ok "the recipe step lists the file recipes too" || bad "file recipe row missing"
+printf '%s\n' "$OROWS" | grep -q '__STRIP__\|__GO__' \
+    && bad "a toggle/continue row leaked into the recipe step" || ok "the recipe step has no toggle and no 'continue' row (only recipes)"
+printf '%s\n' "$OROWS" | grep -q '__CUSTOM__\|__DRYRUN__\|__SESSIONS__' && bad "the old custom/dry-run rows leaked" || ok "no custom/dry-run/sessions rows (the flow is fixed)"
 : > "$CALLS"
-qset "__PRESET_only"
-oc_pick_shrink >/dev/null
-grep -qx "shrink only" "$CALLS" && ok "keep-sessions preset shrinks (warning only, no export)" || bad "shrink only: $(cat "$CALLS")"
-grep -qx "export memory --sessions ses_A0001" "$CALLS" && bad "keep_sessions must NOT auto-export" || ok "keep_sessions does not auto-export"
+qset "__PRESET_skim"
+oc_shrink_ops_pick "--keep-all" >/dev/null
+grep -qx "shrink --keep-all --strip-reasoning" "$CALLS" && ok "the recipe step forwards the baked operation flags" || bad "ops flags: $(cat "$CALLS")"
 unset OCED_SHRINK_PRESETS
 
 echo "== shrinks picker (create + manage, toggle view/remove) =="
@@ -442,12 +574,20 @@ for d in 20260101-090000 20260102-100000 20260103-110000; do
         '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del, max_updated:$mu}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-01T00:00:00Z"}' \
         > "$SHR/$d/shrink.json"
 done
+mkdir -p "$SHR/20251231-120000"
+jq -n --arg c "keep 10 + strip reasoning" --argjson t 6 --argjson k 2 --argjson del 4 \
+    --argjson b 100000 --argjson a 30000 --argjson st 0 --argjson mu 9999999999999 \
+    '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del, max_updated:$mu}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-04T00:00:00Z"}' \
+    > "$SHR/20251231-120000/shrink.json"
+: > "$SHR/20251231-120000/opencode.shrunk.db"
+: > "$SHR/20260101-090000/opencode.shrunk.db"
 ROWS=$(oc_shrinks_rows view)
 printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "shrinks rows: create first" || bad "shrinks create not first"
 printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && ok "shrinks rows: view/remove toggle" || bad "shrinks toggle missing"
 printf '%s\n' "$ROWS" | grep -q '2026-01-03 11:00:00' && ok "shrinks rows list the produced runs (human stamp)" || bad "shrinks run rows missing"
 printf '%s\n' "$ROWS" | grep -q '2 sess / 4 del' && ok "shrinks rows show the shrunken counts" || bad "shrinks counts in row"
 printf '%s\n' "$ROWS" | grep -q '^__VERIFY__' && ok "shrinks rows offer verify" || bad "shrinks verify row missing"
+printf '%s\n' "$ROWS" | grep -q '^__SWAP__' && ok "shrinks rows offer the swap entry" || bad "shrinks swap row missing"
 
 : > "$CALLS"; call_log
 qset "__VERIFY__"
@@ -460,6 +600,28 @@ qset "20260103-110000"
 oc_shrinks_picker >/dev/null
 grep -qx "shrinks view 20260103-110000" "$CALLS" && ok "shrinks view dispatches for the run" || bad "shrinks view: $(cat "$CALLS")"
 grep -q "shrinks (view)" "$FZF_HIST" && ok "shrinks picker starts in view mode" || bad "shrinks initial mode"
+
+echo "== shrinks SWAP (destructive, typed confirm; fresh + stale copy) =="
+reset
+: > "$CALLS"; call_log
+oced_shrink_swap() { printf '%s\n' "$*" >> "$CALLS"; }   # stub the real swap engine
+confirm_action() { return 0; }
+: > "$CALLS"
+qset "__SWAP__" "20251231-120000"
+printf 'confirm\n' | oc_shrinks_picker > "$TMP/swap-fresh.txt" 2>&1
+grep -q 'opencode.shrunk.db 1$' "$CALLS" && ok "shrinks SWAP swaps the picked copy (typed confirm)" || bad "shrinks swap: $(cat "$CALLS")"
+grep -q "swap (pick a copy)" "$FZF_HIST" && ok "shrinks SWAP uses the pick-a-copy picker" || bad "shrinks swap picker prompt missing"
+
+: > "$CALLS"
+qset "__SWAP__" "20260101-090000"   # stale/unverifiable copy (max_updated=0)
+printf 'confirm\n' | oc_shrinks_picker > "$TMP/swap-stale.txt" 2>&1
+grep -q 'opencode.shrunk.db 1$' "$CALLS" && ok "shrinks SWAP proceeds after the stale warning + confirm" || bad "shrinks stale swap: $(cat "$CALLS")"
+grep -Eqi 'stale|freshness' "$TMP/swap-stale.txt" && ok "shrinks SWAP warns on a stale/unverifiable copy" || bad "shrinks stale warning missing"
+
+: > "$CALLS"
+qset "__SWAP__" "20251231-120000"
+printf 'noperd\n' | oc_shrinks_picker > "$TMP/swap-nope.txt" 2>&1
+[ ! -s "$CALLS" ] && ok "shrinks SWAP aborts when 'confirm' is not typed" || bad "shrinks swap ran without confirm: $(cat "$CALLS")"
 
 : > "$CALLS"
 qset "__TOGGLE__" "20260102-100000"
@@ -489,10 +651,13 @@ reset
 confirm_action() { return 0; }
 rm -rf "$SHR"
 printf '%s\n' "$(oc_shrinks_rows view)" | grep -q '__NONE__' && ok "shrinks rows show (none) when empty" || bad "shrinks none missing"
+oc_shrinks_swap_pick > "$TMP/swap-none.txt" 2>&1 || true
+grep -q 'no shrink copies' "$TMP/swap-none.txt" && ok "shrinks SWAP with no copies prints guidance" || bad "shrinks swap empty-state guidance missing"
 : > "$CALLS"; call_log
-qset "__CREATE__" "__PRESET_lean"
+qset "__CREATE__" "__MAKE__" "__PRESET_lean"
 oc_shrinks_picker >/dev/null
-grep -qx "shrink lean" "$CALLS" && ok "shrinks picker creates a copy (reaches the dispatcher)" || bad "shrinks create: $(cat "$CALLS")"
+grep -qx "shrink --keep-all --strip-reasoning" "$CALLS" \
+    && ok "shrinks picker: __CREATE__ walks sessions -> recipe -> the dispatcher" || bad "shrinks create: $(cat "$CALLS")"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

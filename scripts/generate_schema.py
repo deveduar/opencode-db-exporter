@@ -13,7 +13,7 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "modules"))
 from exportlib.flags import FLAGS, PRODUCT_KEYWORDS, get_flags_for_product
-from shrinklib.flags import SHRINK_FLAGS, KEEP_RULE_KEYS
+from shrinklib.flags import SHRINK_FLAGS, OPERATION_KEYS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATED = os.path.join(ROOT, "generated")
@@ -208,63 +208,47 @@ def flags_table() -> str:
 # ---- Shrink (OCED_SHRINK_PRESETS) ------------------------------------------
 
 def generate_shrink_schema() -> dict:
-    """Shrink-presets schema from SHRINK_FLAGS. Exactly ONE keep rule per preset
-    (oneOf), optional strip_reasoning companion. keep_sessions/discard_sessions
-    are the special id-array flags. The subset used must stay within
-    validate_schema.py's supported keywords (oneOf/not etc.)."""
+    """Shrink-presets schema from the OPERATION keys of SHRINK_FLAGS. A recipe
+    carries only operations (what is done to the copy besides the pruning); the
+    session selection is NOT a preset key — it is the CLI selection flags or the
+    menu's sessions picker (see the selection flags in the flags table)."""
     defs: dict = {}
     for f in SHRINK_FLAGS:
+        if f.name not in OPERATION_KEYS:
+            continue
         if f.flag_type == "bool":
             defs[f"flag{f.name.capitalize()}"] = {"type": "boolean", "description": f.description}
         elif f.flag_type == "int":
             defs[f"flag{f.name.capitalize()}"] = {
                 "type": "integer", "minimum": f.min_value or 1, "description": f.description,
             }
-        elif f.name in ("keep_sessions", "discard_sessions"):
-            defs[f"flag{f.name.capitalize()}"] = {
-                "type": "array",
-                "minItems": 1,
-                "description": f.description,
-                "items": {"type": "string", "minLength": 1},
-            }
-        else:  # since
+        else:
             defs[f"flag{f.name.capitalize()}"] = {"type": "string", "minLength": 1, "description": f.description}
 
-    branch_props = {
-        k: {"$ref": f"#/definitions/flag{k.capitalize()}"}
-        for k in KEEP_RULE_KEYS
-    }
-    preset_branches = [
-        {
-            "title": f"keep rule: {k}",
-            "type": "object",
-            "additionalProperties": False,
-            "required": [k],
-            "properties": {
-                k: branch_props[k],
-                "strip_reasoning": {"$ref": "#/definitions/flagStrip_reasoning"},
-            },
-        }
-        for k in KEEP_RULE_KEYS
-    ]
+    op_props = {k: {"$ref": f"#/definitions/flag{k.capitalize()}"} for k in OPERATION_KEYS}
     return {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "$id": "https://opencode-db-exporter.local/schemas/shrink.schema.json",
         "title": "opencode-db shrink-presets.json",
-        "description": "Contract for the OCED_SHRINK_PRESETS file, the source of truth for `opencode-db shrink <name>` and the shrink menu. Each preset pins EXACTLY ONE keep rule (keep | older_than | since | keep_all | keep_sessions | discard_sessions) plus an optional strip_reasoning; a user file may override or extend the built-in recipes (lean/recent/full/bare).",
+        "description": "Contract for the OCED_SHRINK_PRESETS file, the source of truth for `opencode-db shrink <name>` and the shrink menu's operations step. A recipe carries ONLY operations (e.g. strip_reasoning); the session selection is a separate concern (CLI selection flags, or the menu's sessions picker). A user file may override or extend the built-in recipes (lean/quiet).",
         "type": "object",
         "additionalProperties": False,
         "required": ["presets"],
         "properties": {
             "presets": {
                 "type": "object",
-                "description": "Name -> preset. Built-in recipes (lean/recent/full/bare) are always available; a file entry with the same name overrides them.",
+                "description": "Name -> recipe (operations only). Built-in recipes (lean/quiet) are always available; a file entry with the same name overrides them.",
                 "additionalProperties": {"$ref": "#/definitions/shrinkPreset"},
             }
         },
         "definitions": {
             **defs,
-            "shrinkPreset": {"oneOf": preset_branches},
+            "shrinkPreset": {
+                "type": "object",
+                "description": "Operations applied to the copy besides the session pruning. An empty object = prune + vacuum only.",
+                "additionalProperties": False,
+                "properties": op_props,
+            },
         },
     }
 
@@ -281,9 +265,12 @@ def _shrink_flag_cell(name: str) -> str:
 
 
 def shrink_flags_table() -> str:
-    """Render the docs/schemas.md shrink-presets table (also written to
-    generated/shrink-flags-table.md)."""
+    """Render the docs/schemas.md shrink tables (also written to
+    generated/shrink-flags-table.md): the CLI selection flags and the operation
+    keys a recipe may carry."""
     rows = [
+        "## Session selection — CLI only (the menu asks you with its picker)",
+        "",
         "| Key | Allowed | Meaning |",
         "|---|---|---|",
         "| `keep` | int ≥ 1 | keep the N most recent sessions (by last update) |",
@@ -292,11 +279,21 @@ def shrink_flags_table() -> str:
         "| `keep_all` | true/false | keep ALL sessions (just prune orphans + vacuum) |",
         "| `keep_sessions` | string[] | keep ONLY the listed session ids (+ their parents/subagents) |",
         "| `discard_sessions` | string[] | keep everything EXCEPT the listed session ids (+ their subagents) |",
-        "| `strip_reasoning` | true/false | also drop the 'reasoning' parts (the bulk of the size) on the copy |",
         "",
-        "Exactly ONE keep rule (`keep` \\| `older_than` \\| `since` \\| `keep_all` \\| `keep_sessions` \\| `discard_sessions`) per preset — they are mutually exclusive. `strip_reasoning` is the only optional companion.",
+        "Exactly ONE selection rule (`keep` \\| `older_than` \\| `since` \\| `keep_all` \\| `keep_sessions` \\| `discard_sessions`) per invocation — they are mutually exclusive (`keep` = 10 is the default).",
+        "",
+        "## Operations — the only keys a recipe/preset may carry",
+        "",
+        "| Key | Allowed | Meaning |",
+        "|---|---|---|",
     ]
-    return "\n".join(rows)
+    for f in SHRINK_FLAGS:
+        if f.name in OPERATION_KEYS:
+            rows.append(f"| `{f.name}` | {_shrink_flag_cell(f.name)} | {f.description} |")
+    rows += [
+        "",
+        "A recipe is a named combination of operations; the session selection never lives in a recipe (a keep rule inside a preset is rejected, pointing at the flags above).",
+    ]
     return "\n".join(rows)
 
 

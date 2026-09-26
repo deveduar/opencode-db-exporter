@@ -55,8 +55,9 @@ Implemented with `--sessions` (query `sessions IN (…)`) and `metadata.json.pre
 the package `modules/exportlib/` (`util`/`config`/`sanitize`/`presets`/`db`/`render`/
 `transcript`/`faithful`/`memory`/`writers`/`cli`; version in `exportlib/__init__.py`).
 Purely mechanical refactor: same behavior, same test suites, zero new dependencies.
-`export.sh` still calls `modules/export.py`, which now only forwards to
-`exportlib.cli.main()`. This document keeps §1 as the historical state of the code before
+`export.sh` calls `modules/exportlib/cli.py` directly — the entry is self-bootstrapping
+(it adds `modules/` to `sys.path` when run as a script), so the `export.py` shim has since
+been removed. This document keeps §1 as the historical state of the code before
 the redesign.
 
 ## 10. Product-only menu (later decision, sep 2026)
@@ -100,7 +101,7 @@ Decision: **bundle presets**. A preset may now use `products` (a map
 `product`) instead of a single `product`. The selection (`filter`/`sessions`) stays
 top-level and shared; `apply_bundle()` validates and stores `args.bundle`; `run_bundle()`
 in `cli.py` computes one shared collision-free stamp and re-executes
-`modules/export.py <product> --stamp <shared> --preset-name <name>` per product, so each
+`exportlib/cli.py <product> --stamp <shared> --preset-name <name>` per product, so each
 bundle subfolder is byte-identical to a standalone run (own `index.md` + `metadata.json`
 recording the preset name) and `exports list` aggregates the stamp as
 `transcript+memory`. The parent writes an `index.md` at the stamp root. The menu gets it
@@ -305,6 +306,10 @@ swap), nothing to inspect or choose in a menu. Final shape (decision log):
 
 ## §17 Shrink recipes redesign + export snapshot coordination (later decision)
 
+> **Superseded in part by §19**: the *selection* was removed from the recipes and the
+> create flow became sessions-first. The python-SSoT extraction and the export
+> `snapshot: fresh` coordination described below still stand.
+
 The shrink recipes (`lean`/`recent`/`full`/`bare` + custom) were extracted from
 `shrink.sh`/`menu.sh` literals into a python SSoT mirroring the export-presets
 architecture (user confirmed the 4-decision plan: "procede"):
@@ -349,3 +354,155 @@ architecture (user confirmed the 4-decision plan: "procede"):
   `.selection`, file-preset bake/override/unknown/`--list-presets`, shrink.schema.json
   validation, and the snapshot warn/no-warn triple — `200 OK`; `tests/menu_flow.sh`
   gained the shrink preset rows/offers and the snapshot backup offer — `115 OK`.
+
+## §18 Shrink menu rework: custom-on-preset, sessions toggle, swap entry + naming/dedup (later iteration)
+
+> **Superseded in part by §19/§20**: `__CUSTOM__`/`__SESSIONS__`/`__DRYRUN__` are gone,
+> replaced by the sessions → recipe → plan wizard. The SWAP entry, the
+> naming/dedup and the single-sourced help described below still stand.
+
+Follow-up to §17, from the user's 4 answers ("procede, sobre last y oldest deben restar
+de la seleccion"): the shrink **create** flow and the **shrinks manager** were rebuilt,
+and the export entry/naming + shrink help strings were unified.
+
+- **Custom = base preset + tunings** — the loose standalone custom wizard
+  (`oc_pick_shrink_custom`) is gone. `__CUSTOM__` first picks a **base preset**, then
+  `oc_shrink_adjust_pick` tunes `N`/days/since/strip: `--keep`, `--older-than`,
+  `--since` (format hint `YYYYMMDD`, the picker prints the DB's real
+  `min..max time_updated` range to **stderr** — the stdout contract stays clean for the
+  `runargs`), and a strip toggle. It prints the raw flags to run (base + tunings,
+  `shrink bare --strip-reasoning`): the bash engine's "last one wins" makes the last
+  rule the final one; strip is additive only. The plan block comes from
+  `oc_shrink_confirm_custom "$runargs"`.
+- **Sessions on/off picker** (`__SESSIONS__`) — reuses the session/ALL rows as
+  run-time state, like the export picker. `[x]` = survive (default: **all marked**);
+  bulk rows `__ALL__`/`__NONE__`/`__LAST__ <N>`/`__OLDEST__ <N>` — the last two
+  **restan de la selección**: unmark EVERYTHING first, then mark only the N most
+  recent (`ORDER BY time_updated DESC, LIMIT N`) / oldest (ASC). `__MAKE__` (first row)
+  builds the copy: nothing unmarked = `--keep-all` (zero friction); some unmarked =
+  offer `export memory --sessions` first, then `--discard-sessions <csv>` (the discard
+  set is descendant-closed, so it is FK-safe by construction); nothing marked = guard
+  "the copy would be an EMPTY database" and loop. Session rows are toggleable
+  individually (a loop picker — no fzf `--multi` anywhere).
+- **Swap inside the shrinks manager** — `oc_shrinks_rows` gained a `__SWAP__` row
+  (always visible, before the view/remove toggle): pick a copy, `o_shrink_stale`
+  warns first (stale OR unverifiable — max_updated missing), then the hard gate
+  `oc_confirm_typed "confirm"` (extracted from guide.sh, now reused by both) hands the
+  path to `oced_shrink_swap` (pre-shrink WAL-safe snapshot + rollback unchanged).
+  `__VERIFY__` stays as the manager's `shrinks verify`.
+- **Naming** — `modules/export.py` (a 4-line shim) is **gone**: `exportlib/cli.py` is
+  self-bootstrapping (adds `modules/` to sys.path when run directly, mirroring
+  `shrinklib/plan.py`), `export.sh` calls `python3 "$SCRIPT_DIR/exportlib/cli.py"`, and
+  `run_bundle()` re-executes `exportlib/cli.py <product> …`. The `shrink --help` +
+  `shrink presets` block is now single-sourced in python: `shrinklib/flags.py` gained
+  `--usage` (`usage_main_shrinks()`) + a sys.path bootstrap (it was silently falling
+  back in the dispatcher before), and the bash `criteria` case in `shrink.sh` delegates
+  to the new `plan.py rule-line <rule> [value] [strip]` (same human phrases as
+  `rule_lines()`).
+- **Misc** — `install.sh` ships `shrink-presets.json.example` to the prefix;
+  `presets.json.example` showcases `snapshot:"fresh"` + `sessions`/`filter` selection.
+- **Verified** — `tests/menu_flow.sh` gained the custom base+tunings flows, the
+  sessions toggle matrix (ALL/NONE/LAST-2/OLDEST-1/single-toggle/EMPTY guard),
+  the SWAP fresh/stale/typo cases (`oced_shrink_swap` stubbed, `opencode.shrunk.db`
+  fixture per run) — `133 OK`; `tests/export_smoke.sh` — `200 OK`; install smoke with
+  the shrink example in the prefix runs `status`/`shrink --help` offline.
+
+## §19 Shrink create flow: sessions first, operations second, plan last (later decision)
+
+> **Superseded in part by §20**: step 2 became **recipe-only** (no operation toggle, no
+> `__GO__` row) and the sessions picker gained a newest-first/oldest-first order toggle.
+
+The §17/§18 model put the *selection* inside the named recipe and left the menu as a
+recipe + tuning wizard. The user's read of the real workflow killed that: nobody thinks
+"which conversations do I keep?" in terms of a preset name, and asking for a recipe
+first made the copy's fate depend on a config file before anyone had seen the
+sessions. Decision: **three steps, no other way in** — sessions → operations → plan.
+
+- **Two disjoint families, one SSoT** — `shrinklib/flags.py` now exports
+  `KEEP_RULE_KEYS` (selection: `keep`/`older_than`/`since`/`keep_all`/
+  `keep_sessions`/`discard_sessions` — **CLI flags only, never recipe keys**) and
+  `OPERATION_KEYS` (`strip_reasoning` — the **only** valid recipe keys).
+  `generated/shrink.schema.json` therefore no longer has a `oneOf` keep rule: a recipe
+  is an object with operation properties only. A keep rule inside a recipe is rejected
+  by `presets.py` with a pointer to the matching flag (better than a schema error
+  message a user has to decode).
+- **Built-ins became operations-only** — `lean` (strip reasoning) and `quiet`
+  (prune + vacuum, no op) replace `lean`/`recent`/`full`/`bare`, which had selection
+  baked in and were therefore unreusable across DBs. `shrink lean` now means "the
+  default selection (10 most recent) + strip", and `shrink lean --keep 30` keeps 30 and
+  still strips: the baked op flags are prepended so the CLI selection still wins.
+- **Step 1, sessions (roots only)** — `oc_shrink_sessions_pick` lists
+  `list --root` rows: a subagent always follows its root, so it never needs a row, and
+  an orphan whose parent is gone *is* a root. `[x]` = survives (default all marked), a
+  recursive `(N sub)` badge shows what each root drags along, and the bulk rows are
+  `__ALL__`/`__NONE__`/`__LAST__ <N>`/`__OLDEST__ <N>`/`__DAYS__ <N>` (the age ones
+  **rest** the selection: unmark all, then mark the N most recent/oldest/recent-by-
+  `time_updated`). `__MAKE__` = **continue**, not "build": all marked →
+  `--keep-all`, unmarked roots → `--discard-sessions <csv>`, nothing marked → refused
+  ("the copy would be an EMPTY database").
+- **Step 2, operations** — `oc_shrink_ops_pick` shows the recipe rows
+  (`shrinklib/plan.py rows`/`ops-flags`/`op-lines`) + a `__STRIP__` toggle + `__GO__`:
+  a recipe applies its ops and jumps to the plan, a toggle stays so ops can be
+  combined. This is where the presets file earns its keep, and it is a **toggle set**,
+  not a single profile: the ops are additive, so the menu can compose them.
+- **Step 3, the plan** — `oc_shrink_confirm_run` prints the exact read-only numbers
+  **on the LIVE DB with the engine's own predicates** (`o_shrink_sql_ids` +
+  `WITH RECURSIVE` closures): kept roots + subagents, the discarded cascade, rows per
+  table, reasoning parts, current size. The `export memory --sessions <ids>` offer
+  still fires before discarding; then the y/N gate. Rationale: a confirmation that
+  cannot quote the engine's own counts is decoration.
+- **Removed** — `__CUSTOM__`, `__SESSIONS__`, `__DRYRUN__` rows and
+  `oc_shrink_adjust_pick`/`oc_shrink_dry_pick`/`oc_shrink_confirm_custom`/
+  `oc_shrink_preset_run`: the sessions picker *is* the custom flow and the plan
+  *replaces* the dry-run. The CLI keeps `--dry-run` and the full selection flag set for
+  headless use. ESC climbs: operations → sessions (marks intact) → cancel.
+- **Config migration** — a recipes file that carried a keep rule (the interim
+  `~/.config/opencode-db/shrink-presets.json` with `keep`) is now invalid, so the
+  installed example ships `lean`/`quiet` only and the loader dies loudly on the old
+  shape instead of silently ignoring it.
+- **Verified** — `tests/export_smoke.sh` covers the ops-only schema, the
+  keep-rule-in-recipe rejection, `bake` + explicit-override and `--list-presets`
+  (`205 OK`); `tests/menu_flow.sh` covers the roots-only rows and badge, the bulk
+  matrix, the EMPTY guard, the operations toggle + recipe rows, the snapshot-fresh
+  backup offer and the plan confirm/reject (`144 OK`).
+
+## §20 Recipe-only second step + recency-ordered sessions (current)
+
+§19 solved *where* the selection is asked, but two things were still wrong in the real
+flow, both reported from using it.
+
+- **The operation toggle was a lie about the model.** §19's step 2 mixed recipes
+  (`lean`/`quiet` + file recipes) with a `__STRIP__` toggle and a `__GO__` row, so the
+  user could compose operations *in the picker* while the reusable, shareable unit — a
+  recipe in `$OCED_SHRINK_PRESETS` — could not be. A recipe then silently replaced the
+  toggles, and the "continue" row added a third way to say the same thing as picking a
+  recipe. Decision: **step 2 is the recipe and nothing else**. Every row is a named
+  ops-only recipe, picking one bakes its operations and goes **straight to the plan**
+  (y/N). Composition belongs in the recipes file, where it is shareable and testable;
+  `__STRIP__`/`__GO__` are gone. ESC there climbs to sessions with the marks intact.
+- **The session order was the wrong default.** The picker inherited the CLI's
+  `created-asc` (oldest first), which is the *worst* order to decide "what do I keep?":
+  recency is what users actually reason about. `list` gained
+  `--order created-asc|created-desc|updated-asc|updated-desc` (whitelisted in
+  `OCED_LIST_ORDERS`, default unchanged for the CLI) and the picker opens
+  **`updated-desc`** with an `__TOGGLE__` row for `updated-asc`. Because the rows are
+  re-read on every render, the marks had to stop being "absent = unmarked": they now
+  live in a 1/0 assoc array that is never unset, so re-sorting (or a bulk row) cannot
+  resurrect an explicitly unmarked session. `time_created` is the tie-break in every
+  axis.
+- **The plan names the recipe** (`Recipe: <name> - <purpose>` + the effective
+  `Command:`), so what will run is always visible before the gate; declining re-renders
+  the recipe rows to choose another one.
+- **Fixture note** — the fake DB's roots had to disagree across the two axes
+  (`B` used more recently than `A`, the orphan newest on both) for all four orders to
+  be distinguishable, while `shrink --keep N` keeps the same root as before, so the
+  identity-based smoke assertions are untouched.
+- **Subagents stay non-selectable** — measured on the real DB: 639.1 MiB of
+  `event`/`event_sequence` rows belong to roots and 12.2 MiB (1.5%) to subagents, the
+  heaviest being 1.7 MiB. Per-subagent discarding would need a new selection rule
+  (a keep rule *plus* a "discard these subagents" set) for ~1% of the bytes, so the
+  roots-only model stays: a subagent always follows its root.
+- **Verified** — `tests/export_smoke.sh` `205 OK`, `tests/menu_flow.sh` `158 OK`
+  (order axes, the order row and mark survival, recipe-only rows, `lean`/`quiet` jumping
+  to the plan, the decline -> another recipe loop, ESC climbing, the plan's `Recipe:` /
+  `Command:` lines).

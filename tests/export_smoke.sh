@@ -292,21 +292,29 @@ DIRS_AFTER="$(find "$BK/shrink" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc
 [ "$DIRS_BEFORE" -eq "$DIRS_AFTER" ] && ok "failed shrink leaves no orphan run dir ($DIRS_AFTER)" || bad "orphan dir after failed shrink"
 OPENCODE_DB="$FAKE"
 
-echo "== shrink recipes (named presets) =="
+echo "== shrink recipes (named OPERATIONS, selection stays a CLI flag) =="
 newest_sj() { find "$BK/shrink" -name shrink.json 2>/dev/null | sort | tail -1; }
+# lean = strip_reasoning ONLY: the session selection is the CLI default (--keep 10)
 run shrink lean >/dev/null || bad "shrink lean run"
 printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 6 and .stripped_reasoning == 1 and (.criteria | contains("keep the 10 most recent") and contains("strip reasoning"))' >/dev/null \
-    && ok "shrink lean = keep 10 + strip reasoning" || bad "shrink lean: $(cat "$(newest_sj)")"
-run shrink bare >/dev/null || bad "shrink bare run"
+    && ok "shrink lean = default selection + strip reasoning" || bad "shrink lean: $(cat "$(newest_sj)")"
+# quiet = no operation: the recipe must NOT prune sessions nor strip anything
+run shrink quiet >/dev/null || bad "shrink quiet run"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.stripped_reasoning == 0' >/dev/null \
+    && ok "shrink quiet strips nothing" || bad "shrink quiet: $(cat "$(newest_sj)")"
 SB=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
 [ "$(sqlite3 "$SB" "SELECT count(*) FROM part WHERE json_extract(data, '$.type') = 'reasoning';")" -eq 1 ] \
-    && ok "shrink bare keeps reasoning" || bad "shrink bare reasoning lost"
-run shrink full >/dev/null || bad "shrink full run"
-printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 6 and .stripped_reasoning == 1' >/dev/null \
-    && ok "shrink full = keep all + strip reasoning" || bad "shrink full: $(cat "$(newest_sj)")"
-run shrink recent >/dev/null || bad "shrink recent run"
+    && ok "shrink quiet keeps reasoning" || bad "shrink quiet reasoning lost"
+# explicit flags win over the recipe: `lean --keep 2` keeps 2 AND strips
+# (the kept set is closed: their subagent is kept too -> 3 rows; the fixture's
+# only reasoning part belongs to a dropped session -> nothing left to strip)
+run shrink lean --keep 2 >/dev/null || bad "shrink lean --keep 2 run"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 3 and (.criteria | contains("keep the 2 most recent") and contains("strip reasoning"))' >/dev/null \
+    && ok "explicit selection wins over the recipe (lean --keep 2)" || bad "lean --keep 2: $(cat "$(newest_sj)")"
+# the selection CLI rules are still there (not "legacy"): the age-based one
+run shrink --older-than 90 >/dev/null || bad "shrink --older-than 90 run"
 printf '%s' "$(cat "$(newest_sj)")" | jq -e '.sessions.kept == 6 and (.criteria | contains("last 90 day"))' >/dev/null \
-    && ok "shrink recent = sessions updated in the last 90 days" || bad "shrink recent: $(cat "$(newest_sj)")"
+    && ok "shrink --older-than 90 = sessions updated in the last 90 days" || bad "older-than: $(cat "$(newest_sj)")"
 
 echo "== shrink session selection: keep-sessions closure =="
 run shrink --keep-sessions ses_A0001 >/dev/null || bad "shrink keep-sessions run"
@@ -325,32 +333,51 @@ SDS=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
 [ "$(sqlite3 "$SDS" "PRAGMA foreign_key_check;" | wc -l)" -eq 0 ] && ok "discard FK clean" || bad "discard FK"
 [ "$(sqlite3 "$SDS" "SELECT count(*) FROM session WHERE id LIKE 'ses_A%';")" -eq 0 ] \
     && ok "discard removed the whole ses_A* group" || bad "discard A left"
-grep_run "export memory --sessions ses_A0001" shrink --discard-sessions ses_A0001 \
+grep_run "export archive --sessions ses_A0001" shrink --discard-sessions ses_A0001 \
     && ok "discard CLI prints the export-first hint" || bad "discard hint missing"
 printf '%s' "$(cat "$(dirname "$SDS")/shrink.json")" | jq -e '.selection.rule == "discard_sessions"' >/dev/null \
     && ok "shrink.json records the discard-sessions selection" || bad "discard selection in shrink.json"
 
-echo "== shrink presets from OCED_SHRINK_PRESETS (file overrides/extensions) =="
+echo "== shrink recipes from OCED_SHRINK_PRESETS (file overrides/extensions) =="
 FPRES="$TMP/shrink-presets.json"
 cat > "$FPRES" <<'EOF'
-{"presets": {"skim": {"discard_sessions": ["ses_A0001"]},
-              "only": {"keep_sessions": ["ses_A0001"]}}}
+{"presets": {"skim": {"strip_reasoning": true},
+              "noisy": {"strip_reasoning": false}}}
 EOF
 export OCED_SHRINK_PRESETS="$FPRES"
-run shrink skim >/dev/null || bad "shrink file preset discard"
-printf '%s' "$(cat "$(newest_sj)")" | jq -e '.selection.rule == "discard_sessions" and (.selection.ids | index("ses_A0001"))' >/dev/null \
-    && ok "file preset bake -> discard-sessions run" || bad "skim preset: $(cat "$(newest_sj)")"
-run shrink only >/dev/null || bad "shrink file preset keep"
-printf '%s' "$(cat "$(newest_sj)")" | jq -e '.selection.rule == "keep_sessions" and .sessions.kept == 3' >/dev/null \
-    && ok "file preset bake -> keep-sessions run (closure)" || bad "only preset: $(cat "$(newest_sj)")"
+run shrink skim >/dev/null || bad "shrink file recipe skim"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.stripped_reasoning == 1' >/dev/null \
+    && ok "file recipe bake -> --strip-reasoning" || bad "skim recipe: $(cat "$(newest_sj)")"
+run shrink noisy >/dev/null || bad "shrink file recipe noisy"
+printf '%s' "$(cat "$(newest_sj)")" | jq -e '.stripped_reasoning == 0' >/dev/null \
+    && ok "file recipe with an explicit false -> no strip" || bad "noisy recipe: $(cat "$(newest_sj)")"
 LP=$(run shrink --list-presets)
 printf '%s' "$LP" | grep -q '^lean	' && printf '%s' "$LP" | grep -q '^skim	' \
-    && ok "shrink --list-presets shows built-ins + file presets" || bad "list-presets: [$LP]"
+    && ok "shrink --list-presets shows built-ins + file recipes" || bad "list-presets: [$LP]"
 run shrink nosuchrecipe >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] && ok "unknown shrink recipe -> non-zero rc ($rc)" || bad "unknown recipe rc"
-python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json "$FPRES" >/dev/null 2>&1 \
-    && ok "custom OCED_SHRINK_PRESETS satisfies shrink.schema.json" || bad "custom shrink preset vs schema"
 run shrink lean >/dev/null || bad "shrink lean still works with a custom file"
+unset OCED_SHRINK_PRESETS
+# the shipped example must satisfy the generated schema
+python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json shrink-presets.json.example >/dev/null 2>&1 \
+    && ok "shipped shrink-presets.json.example satisfies shrink.schema.json" || bad "example vs shrink schema"
+
+# A KEEP RULE inside a recipe is rejected (a recipe carries operations ONLY) and
+# the schema rejects it too. It gets its own file: an invalid recipe poisons all.
+FBAD="$TMP/shrink-bad.json"
+printf '%s' '{"presets": {"raw": {"keep": 3, "strip_reasoning": true}}}' > "$FBAD"
+export OCED_SHRINK_PRESETS="$FBAD"
+RO=$(run shrink raw 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ok "a keep rule inside a recipe -> non-zero rc ($rc)" || bad "raw recipe rc"
+printf '%s' "$RO" | grep -q -- "--keep" && ok "the rejection points at the CLI selection flag" || bad "rejection hint: $RO"
+RO=$(run shrink lean 2>&1); rc=$?
+[ "$rc" -ne 0 ] && printf '%s' "$RO" | grep -q "selects sessions" \
+    && ok "an invalid recipe file is rejected, not silently ignored" || bad "invalid recipe file: $RO"
+if python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json "$FBAD" >/dev/null 2>&1; then
+    bad "schema accepted a recipe with a keep rule"
+else
+    ok "a recipe with a keep rule does NOT satisfy shrink.schema.json"
+fi
 unset OCED_SHRINK_PRESETS
 
 echo "== export memory (RAG corpus) =="

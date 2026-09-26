@@ -1,6 +1,6 @@
 # CLI entry: argument parsing, read-only DB access and run orchestration.
 # Products (transcript | memory | compactions):
-#   transcript  markdown transcript with verbosity toggles (+ optional faithful JSON)
+# transcript  markdown transcript with verbosity toggles (+ optional faithful JSON)
 #   memory      RAG corpus (corpus.jsonl, one entry per root session)
 #   compactions the compacted-context digests (markdown)
 # Global flags: --filter, --json (faithful archive alongside), --sanitize (redact
@@ -14,6 +14,13 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Self-bootstrapping entry (like shrinklib/plan.py): running this file directly
+# adds modules/ to sys.path so the `exportlib` imports below resolve. The old
+# modules/export.py shim existed only for this; it has been removed.
+MODULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if MODULES_DIR not in sys.path:
+    sys.path.insert(0, MODULES_DIR)
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir, default_db, default_out
@@ -78,10 +85,10 @@ def run_bundle(args) -> None:
     base_stamp = args.stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
     products = list(args.bundle)
     stamp = _free_bundle_stamp(out_base, base_stamp, products)
-    shim = Path(__file__).resolve().parent.parent / "export.py"
+    entry = Path(__file__).resolve()  # this same file IS the CLI entry (no shim)
     for product in products:
         argv = bundle_child_argv(args, product)
-        cmd = [sys.executable, str(shim)] + argv + ["--stamp", stamp]
+        cmd = [sys.executable, str(entry)] + argv + ["--stamp", stamp]
         res = subprocess.run(cmd)
         if res.returncode:
             sys.exit(res.returncode)

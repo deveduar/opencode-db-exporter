@@ -44,6 +44,7 @@ opencode-db menu                      # interactive fzf menu
 opencode-db status                    # DB state + alignment with the last backup + version/schema + dependency check
 opencode-db version                   # tool version + opencode CLI version + schema probe
 opencode-db list [--root|--sub] [--filter PATTERN] [--info]
+                                      # --order: created-asc|created-desc|updated-asc|updated-desc
 opencode-db info <session_id>         # tokens, cost, compactions, counts
 opencode-db compactions <session_id> [show [last|N|all]]
                                       # compaction points; 'show' prints the digest
@@ -80,9 +81,19 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
   `--from-backup` checks.
 - **sessions** picker (details only) — one row per session; selecting one shows the full
   info + compaction digests.
-- **shrinks** picker (create + manage) — rows: `[create shrink copy…]` (recipes from the LIVE
-  DB, own snapshot), a `view`/`remove` toggle (remove mode adds `[delete ALL]` /
-  `[delete old (keep newest)]` and one row per produced copy).
+- **shrinks** picker (create + manage) — rows: `[create shrink copy…]` (a 3-step wizard
+  from the LIVE DB, own snapshot), `[>] swap into the LIVE DB` (destructive, requires
+  typing `confirm` — the copy is checked for staleness first), a `view`/`remove` toggle
+  (remove mode adds `[delete ALL]` / `[delete old (keep newest)]` and one row per
+  produced copy). Creating a copy asks, in order: **(1) sessions** — one row per ROOT
+  session with a `(N sub)` badge, `[x]` = survive (default all marked; bulk `ALL` /
+  `NONE` / last-N / oldest-N / last-N-days; `make` continues), sorted **newest used
+  first** with a row to flip to oldest first (re-sorting keeps your marks),
+  **(2) the recipe** — `lean` (strip reasoning) or `quiet` (prune + vacuum), and nothing
+  else: picking one goes straight to **(3) the plan** — the exact read-only counts
+  (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
+  before the y/N gate; discarding offers `export memory --sessions <ids>` first, and
+  declining goes back to the recipes.
 - **export** picker (preset-only) — one row per named plan in the presets file (bundle plans
   render `[transcript+memory]`), then a session or `ALL SESSIONS`. Without a presets file it
   prints the setup guidance (`cp presets.json.example …`) and the raw CLI as fallback — there
@@ -249,19 +260,34 @@ The opencode DB only grows, and most of the weight is the event store (`event` a
 
 ```bash
 opencode-db shrink                         # default: copy with the 10 most recent sessions
-opencode-db shrink lean                    # keep 10 most recent + strip reasoning (recommended)
-opencode-db shrink recent                  # keep sessions updated in the last 90 days
-opencode-db shrink full                    # keep ALL sessions, strip reasoning + vacuum
-opencode-db shrink bare                    # keep 10 most recent, physically shrink only
+opencode-db shrink lean                    # + strip the reasoning parts (recommended)
+opencode-db shrink quiet                   # prune + vacuum only, keep the full text
 opencode-db shrink --keep 5 --dry-run      # only report what would be pruned
+opencode-db shrink --keep-all              # keep every session (just prune orphans + vacuum)
+opencode-db shrink --older-than 30         # keep sessions updated in the last 30 days
 opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
 opencode-db shrink --keep-sessions ses_aaaaaa     # keep ONLY the listed ids + their parents/subagents
 opencode-db shrink --discard-sessions ses_bbbbbb  # keep everything EXCEPT the ids + their subagents
                                                # (hints to export memory --sessions <ids> first)
+opencode-db shrink lean --keep 30          # raw flags compose over a recipe (30 most recent, still strips)
 opencode-db shrink lean --swap             # build the copy AND replace the live DB (safe: --yes to skip the prompt)
 ```
 
-The named recipes are presets, like the export recipes: `lean` = `--keep 10 --strip-reasoning`, `recent` = `--older-than 90`, `full` = keep everything + strip reasoning (pure space reclamation), `bare` = `--keep 10` without stripping. Raw flags compose over a recipe (`shrink lean --keep 30` keeps 30 and still strips reasoning). The built-ins always exist; a **shrink presets file** (`OCED_SHRINK_PRESETS`, default `~/.config/opencode-db/shrink-presets.json`, auto-created from `shrink-presets.json.example`) extends/overrides them with exactly one keep rule each — see [`generated/shrink.schema.json`](generated/shrink.schema.json) and `shrink --list-presets`. `--keep-sessions`/`--discard-sessions` are exact-id selections (comma-separated). `shrink --help` lists everything.
+A shrink has two independent parts, and they are split on purpose:
+
+- **Which sessions survive** = a **selection flag** (exactly one: `--keep N` = default
+  10, `--older-than DAYS`, `--since DATE`, `--keep-all`, `--keep-sessions`, `--discard-sessions`).
+- **What else happens to the copy** = the **operations**, and that is all a named recipe
+  may carry: `lean` = strip the reasoning parts, `quiet` = nothing (prune + vacuum only).
+
+So `shrink lean` means "the default selection, plus strip reasoning", and
+`shrink lean --keep 30` keeps 30 and still strips. A keep rule inside a recipe is
+rejected (it points at the flag to use instead). The built-ins always exist; a **shrink
+recipes file** (`OCED_SHRINK_PRESETS`, default `~/.config/opencode-db/shrink-presets.json`,
+auto-created from `shrink-presets.json.example`) extends/overrides them with operations
+only — see [`generated/shrink.schema.json`](generated/shrink.schema.json) and
+`shrink --list-presets`. `--keep-sessions`/`--discard-sessions` are exact-id selections
+(comma-separated). `shrink --help` lists everything.
 
 The kept set is **closed**: parents and subagents of a kept session are kept too (no orphan links), and the sessions-bound tables (message, part, todo, session_message, session_share, session_context_epoch, session_input) plus the `event`/`event_sequence` aggregates of the deleted sessions are pruned — orphans are never shipped. Output is written to `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (profile/criteria, counts, per-table removed rows, sizes, `integrity_check` and `foreign_key_check`). The copy is verified (`PRAGMA integrity_check` = ok, `PRAGMA foreign_key_check` = 0 rows) before being stored. If the swap is fine, replace the DB yourself:
 
@@ -380,9 +406,9 @@ modules/
   view.sh          status / list / info / compactions (+ digests)
   backup.sh        consistent snapshots + sha256 + manifest.json
   export.sh        bash -> python bridge
-  export.py        entry shim for the exportlib package
   exportlib/       Python renderer package (products transcript/memory/compactions,
-                   subagents, presets, --json/--sanitize, index.md, metadata)
+                   subagents, presets, --json/--sanitize, index.md, metadata;
+                   cli.py is the self-bootstrapping CLI entry)
   exports.sh       list/remove/prune of past export runs
   shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
                    + the shrinks manager (list/view/remove/prune of produced copies)
