@@ -295,12 +295,12 @@ reset
 export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 confirm_action() { :; return 0; }
-qset "ses_A0001"
+qset "__NONE__" "ses_A0001" "__MAKE__"
 oc_preset_run "notes" "product transcript" >/dev/null
-grep -qx "export notes --filter ses_A0001" "$CALLS" && ok "preset run overrides the selection with the session filter" || bad "preset session: $(cat "$CALLS")"
+grep -qx "export notes --sessions ses_A0001" "$CALLS" && ok "preset run overrides the selection with the session filter" || bad "preset session: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "notes" "product transcript" >/dev/null
 grep -qx "export notes" "$CALLS" && ok "preset ALL runs as configured (no override)" || bad "preset ALL: $(cat "$CALLS")"
 
@@ -322,7 +322,7 @@ export OCED_PRESETS="$TMP/presets.json"
 CONFIRME="$TMP/confirm.txt"
 confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
 before=$(count_meta transcript)
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "notes" "x" >/dev/null
 after=$(count_meta transcript)
 [ -s "$CONFIRME" ] && grep -q "Start this export" "$CONFIRME" && ok "confirmation asked with the plan" || bad "no confirmation asked"
@@ -333,19 +333,19 @@ reset
 export OCED_PRESETS="$TMP/presets.json"
 confirm_action() { return 0; }
 before=$(count_meta transcript)
-qset "ses_A0001"
+qset "__NONE__" "ses_A0001" "__MAKE__"
 oc_preset_run "notes" "x" >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "preset flow exports the transcript" || bad "preset flow export transcript missing"
 ME=$(newest_meta transcript)
-jq -e '.filter == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
+jq -e '.sessions_selected[0] == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "notes" "x" >/dev/null
 MA=$(newest_meta transcript)
-jq -e '.filter == null' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
+jq -e '.sessions_selected == null' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
 jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
 
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "rag" "x" >/dev/null
 MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
 [ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
@@ -358,7 +358,7 @@ export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 [ "$(oc_plan_py snapshot snappy 2>/dev/null)" = "fresh" ] && ok "plan.py snapshot exposes the snapshot flag" || bad "plan snapshot"
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "snappy" "product transcript" >/dev/null
 grep -qx "backup" "$CALLS" && ok "snapshot preset offers a fresh backup (no backups yet)" || bad "snap backup offer: $(cat "$CALLS")"
 grep -qx "export snappy" "$CALLS" && ok "snapshot preset exports after the fresh backup" || bad "snap export: $(cat "$CALLS")"
@@ -371,7 +371,7 @@ SESSES=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM session" 2>/dev/null
 MSGS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM message" 2>/dev/null)
 MUTS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT max(time_updated) FROM session" 2>/dev/null)
 printf '{"backups": [{"sessions": %s, "messages": %s, "max_updated": %s}]}' "$SESSES" "$MSGS" "$MUTS" > "$ALIGNED/manifest.json"
-qset "__ALL__"
+qset "__ALL__" "__MAKE__"
 oc_preset_run "snappy" "product transcript" >/dev/null
 grep -qx "backup" "$CALLS" && bad "aligned snapshot preset re-offered a backup" || ok "aligned snapshot preset does NOT re-offer a backup"
 export OCED_PRESETS="$TMP/no-presets.json"
@@ -443,7 +443,7 @@ qempty
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-grep -q 'shrink — order: newest first' "$TMP/sessions_rows.txt" \
+grep -q 'order: newest first' "$TMP/sessions_rows.txt" \
     && ok "the order row advertises the current mode (newest first)" || bad "order row missing"
 grep -q 'switch to oldest first' "$TMP/sessions_rows.txt" \
     && ok "the order row offers the reverse sort" || bad "order row label missing"
