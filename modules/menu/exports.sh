@@ -5,8 +5,8 @@ oc_exports_rows() {
     local mode="$1"
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
-        printf '__DELETE_ALL__\t[delete ALL export runs]\n'
-        printf '__KEEP_NEWEST__\t[delete all except the newest]\n'
+        printf '__DELETE_ALL__\tdelete ALL export runs\n'
+        printf '__KEEP_NEWEST__\tdelete all but the newest\n'
     fi
     [ -d "$OCED_OUT" ] || { printf '__NONE__\t(no export runs yet)\n'; return 0; }
     local run
@@ -83,10 +83,7 @@ oc_exports_picker() {
     local mode="view" sel key
     while true; do
         local header
-        header="Manage exports — mode: $mode"$'\n'"$(
-            if [ "$mode" = view ]; then printf 'view: show the report of an export run';
-            else printf 'remove: delete a run (with confirmation)'; fi
-        )"
+        header="Export runs — mode: $mode"
         sel=$(oc_exports_rows "$mode" | oc_fzf_sel "exports ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in

@@ -40,6 +40,50 @@ def truncate(text: str, limit: int) -> str:
     return text[:limit] + f"\n[… truncated: {len(text) - limit} bytes more …]"
 
 
+# The ONE selection rule of a run (filter | sessions | last | since | all) is
+# described in exactly two shapes, both derived here so the metadata, the
+# per-product index and the "matched nothing" error can never disagree.
+SELECTION_LABELS = {
+    "filter": "filter {value}",
+    "sessions": "{n} explicit session id(s)",
+    "last": "last {value} session(s) by last update",
+    "since": "updated on or after {value}",
+    "all": "ALL sessions",
+}
+
+
+def selection_rule(args) -> tuple[str, object]:
+    """(rule, value) for the effective selection of this run, in the fixed
+    precedence the CLI mutex already enforces."""
+    if getattr(args, "filter", None) is not None:
+        return "filter", args.filter
+    if getattr(args, "sessions", None):
+        return "sessions", list(args.sessions)
+    if getattr(args, "last", None) is not None:
+        return "last", args.last
+    if getattr(args, "since", None) is not None:
+        return "since", args.since
+    return "all", None
+
+
+def selection_label(args) -> str:
+    """Human phrase for the effective rule (bundle index, error messages)."""
+    rule, value = selection_rule(args)
+    n = len(value) if rule == "sessions" else 0
+    return SELECTION_LABELS[rule].format(value=value, n=n)
+
+
+def selection_meta(args) -> dict:
+    """Machine provenance for metadata.json: the rule that produced the run.
+    Stable keys per rule, so a consumer never has to guess what `value` means."""
+    rule, value = selection_rule(args)
+    if rule == "sessions":
+        return {"rule": rule, "ids": value}
+    if rule == "all":
+        return {"rule": rule}
+    return {"rule": rule, "value": value}
+
+
 def model_str(model) -> str:
     """Normalize a model value to a single plain-id string.
 

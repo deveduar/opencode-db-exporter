@@ -74,30 +74,33 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
 - **status** — the full report (DB, backups alignment, version/schema, dependencies) + pause.
   The header counts (DB/sessions/WAL/backups/exports) are recomputed on every root loop, so
   they are never stale after an action.
-- **backups** picker (single mode) — rows: `[create backup]`, `[delete ALL backups]`,
-  `[delete olds (keep newest)]` and one row per backup (date/size/sessions/msgs/sha).
+- **backups** picker (single mode) — rows: `create backup (consistent snapshot)`,
+  `delete ALL backups`, `delete the olds (keep the newest)` and one row per backup
+  (date/size/sessions/msgs/sha).
   Selecting a row removes it with confirmation. Shrink creation lives in its own **shrinks**
   picker. Verify stays in the CLI (`backups verify <file>`), for after-copy or before
   `--from-backup` checks.
 - **sessions** picker (details only) — one row per session; selecting one shows the full
   info + compaction digests.
-- **shrinks** picker (create + manage) — rows: `[create shrink copy…]` (a 3-step wizard
-  from the LIVE DB, own snapshot), `[>] swap into the LIVE DB` (destructive, requires
-  typing `confirm` — the copy is checked for staleness first), a `view`/`remove` toggle
-  (remove mode adds `[delete ALL]` / `[delete old (keep newest)]` and one row per
+- **shrinks** picker (create + manage) — rows: `create shrink copy` (a 3-step wizard
+  from the LIVE DB, own snapshot), `[>] swap a copy into the LIVE DB` (destructive,
+  requires typing `confirm` — the copy is checked for staleness first), `verify`,
+  a `view`/`remove` toggle (remove mode adds `delete ALL shrink copies` /
+  `delete all but the newest` and one row per
   produced copy). Creating a copy asks, in order: **(1) sessions** — one row per ROOT
-  session with a `(N sub)` badge, `[x]` = survive (default all marked; bulk `ALL` /
-  `NONE` / last-N / oldest-N / last-N-days; `make` continues), sorted **newest used
-  first** with a row to flip to oldest first (re-sorting keeps your marks),
+  session with a `(N sub)` badge, `[x]` = survive (default all marked; `mark all` /
+  `unmark all`; `continue` moves on), sorted **newest used first** with a row to flip
+  to oldest first (re-sorting keeps your marks),
   **(2) the recipe** — `lean` (strip reasoning) or `quiet` (prune + vacuum), and nothing
   else: picking one goes straight to **(3) the plan** — the exact read-only counts
   (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
   before the y/N gate; discarding offers `export memory --sessions <ids>` first, and
   declining goes back to the recipes.
 - **export** picker (preset-only) — **(1) sessions** first: one row per session, all
-  marked by default (`[ ]` unmark, bulk `ALL`/`NONE`/last-N/oldest-N/last-N-days),
-  sorted **newest used first** with a row to flip to oldest (re-sorting keeps your
-  marks) and a `(N sub)` badge per root. A second switch row, `subagents: shown ⇄ hidden`,
+  marked by default (`[ ]` unmark, `mark all`/`unmark all`), sorted **newest used
+  first** with a row to flip to oldest (re-sorting keeps your marks) and a `(N sub)`
+  badge per root. The header is one line of live state (`3/6 marked · newest first`),
+  plus a caveat line when a switch has a consequence the rows cannot show. A second switch row, `subagents: shown ⇄ hidden`,
   hides the subagent rows: while hidden they are not shown and never exported, so
   un-marking a session takes its subagents with it and the run pins `--no-subagents`
   (a session whose parent is gone is a root, so it is never hidden). While *shown*, each
@@ -107,12 +110,19 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
   — one row per named plan in the presets file (bundle plans render
   `[transcript+memory]`) — and then the confirmation. Marking every session runs the
   preset as configured; a partial selection runs it with `--sessions <ids>`.
+  The confirmation states the **effective** selection in one `Sessions:` line, so a
+  preset that pins its own `filter`/`sessions` can never look like your marks won:
+  with everything marked you get `filter "%…%" (from the preset) — your 6 marks are not
+  used`, and with a partial selection the menu says it overrides the preset. A
+  `Menu adds:` line names only what the menu itself contributes (currently
+  `--no-subagents`), and a `Note:` line warns about consequences the rows cannot show.
   Without a presets file the export entry prints the setup guidance
   (`cp presets.json.example …`) and points at the raw CLI — there is no manual
   session→product picker anymore.
-- **Manage exports** picker (mode `view` / `remove`) — rows: toggle,
-  `[delete ALL export runs]`, `[delete all except the newest]`, one row per run
-  (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
+- **Export runs** picker (mode `view` / `remove`) — rows: the `[>] view → remove`
+  toggle, then in remove mode `delete ALL export runs` / `delete all but the newest`,
+  then one row per run (date/profiles/roots/messages/size). `view` shows the run,
+  `remove` deletes it.
 
 Export flow: session selection → plan → confirmation (`Will produce:` block per product,
 with the effective flags) → run. Mark sessions in the picker (`[x]` = include), then pick
@@ -203,7 +213,17 @@ opencode-db export rag --cap 3000        # same, per-run
 opencode-db export transcript --json     # product keywords always mean the product (raw flags unchanged)
 opencode-db export archive               # bundle: transcript + memory under ONE stamp
 opencode-db export archive --sessions ses_abc   # one CLI flag overrides the whole selection
+opencode-db export transcript --last 5         # the 5 most recently used roots (+ their subagents)
+opencode-db export transcript --since 2026-09-01   # every session updated on/after that date
 ```
+
+**One selection rule per run**: `--filter`, `--sessions`, `--last` and `--since` are
+mutually exclusive. `--last N` counts ROOT sessions by last use and keeps every session
+that follows them (the same closure as `shrink --keep N`); `--since DATE`
+(`YYYY-MM-DD`, UTC) is a plain window, so a subagent is kept when it matches on its own.
+Both are **CLI-only, never preset keys**: the set they select changes every time they
+run, so a plan that pinned one would not be reproducible. The rule that ran is recorded
+in `metadata.json` (`.selection`) and in the `Selection` row of `index.md`.
 
 - `export <name>` resolves to a preset; `export transcript|memory|compactions|full` always
   mean the product. An unknown name fails listing the known presets.

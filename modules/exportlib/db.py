@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 
-from exportlib.util import ts_iso
+from exportlib.util import die, ts_iso
 
 
 # ---- token backfill -----------------------------------------------------------
@@ -53,17 +53,52 @@ def backfill_session_tokens(con: sqlite3.Connection, sessions: dict) -> int:
     return n
 
 
-def load_sessions(con: sqlite3.Connection, filt: str | None, ids: list[str] | None = None):
-    q = """
-        SELECT s.id, s.title, s.slug, s.project_id, s.parent_id, s.directory, s.agent, s.model,
+_SESSION_COLS = """s.id, s.title, s.slug, s.project_id, s.parent_id, s.directory, s.agent, s.model,
                s.time_created, s.time_updated, s.cost,
                s.tokens_input, s.tokens_output, s.tokens_reasoning,
                s.tokens_cache_read, s.tokens_cache_write,
                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id
-                    AND json_extract(pt.data,'$.type')='compaction') AS compactions
-        FROM session s
+                    AND json_extract(pt.data,'$.type')='compaction') AS compactions"""
+
+# What `list --root` means (see view.sh): no parent, an empty parent, or a parent
+# row that is gone — the last case is an ORPHAN, a root for every purpose.
+_ROOT_PREDICATE = ("(s.parent_id IS NULL OR s.parent_id = '' OR "
+                   "(SELECT count(*) FROM session p WHERE p.id = s.parent_id) = 0)")
+
+
+def load_sessions(con: sqlite3.Connection, filt: str | None, ids: list[str] | None = None,
+                  last: int | None = None, since: str | None = None):
+    """The matched set, per the ONE selection rule of this run (filter | ids |
+    last | since — mutually exclusive upstream).
+
+    `last` and `since` are CLI-only recency rules ordered by time_updated (the
+    axis users reason about). They differ in one deliberate way: `last` counts
+    ROOTS and closes the set over their descendants, so "the last 2 sessions I
+    used" never silently drops the subagents of the sessions it picked (the same
+    rule `shrink --keep N` uses). `since` is a plain window over every session,
+    so a subagent can be matched without its parent — that is what
+    --no-orphan-subagents is for.
     """
-    params: list[str] = []
+    if last is not None:
+        q = f"""
+        WITH RECURSIVE keep(id) AS (
+            SELECT id FROM (
+                SELECT s.id AS id FROM session s
+                WHERE {_ROOT_PREDICATE}
+                ORDER BY s.time_updated DESC, s.time_created DESC
+                LIMIT {int(last)}
+            )
+            UNION
+            SELECT c.id FROM session c JOIN keep k ON c.parent_id = k.id
+        )
+        SELECT {_SESSION_COLS} FROM session s JOIN keep ON keep.id = s.id
+        ORDER BY s.time_created
+        """
+        rows = con.execute(q).fetchall()
+        return {r["id"]: dict(r) for r in rows}
+
+    q = f"SELECT {_SESSION_COLS} FROM session s"
+    params: list = []
     where = ""
     if ids:
         ph = ",".join("?" * len(ids))
@@ -72,9 +107,30 @@ def load_sessions(con: sqlite3.Connection, filt: str | None, ids: list[str] | No
     elif filt:
         where = " WHERE (s.id LIKE ? OR s.title LIKE ?)"
         params = [filt, filt]
+    elif since:
+        ms = since_ms(since)
+        if ms is None:
+            die(f"--since {since!r} is not a date (YYYY-MM-DD, UTC)")
+        where = " WHERE s.time_updated >= ?"
+        params = [ms]
     q += where + " ORDER BY s.time_created"
     rows = con.execute(q, params).fetchall()
     return {r["id"]: dict(r) for r in rows}
+
+
+def since_ms(date_str: str) -> int | None:
+    """'YYYY-MM-DD' (UTC) -> epoch ms, or None when unparseable. Stricter than
+    strptime's leniency on purpose: a typo'd date must not silently select
+    everything."""
+    from datetime import datetime, timezone
+
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str.strip()):
+        return None
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(dt.timestamp() * 1000)
 
 
 def all_session_ids(con: sqlite3.Connection) -> set[str]:

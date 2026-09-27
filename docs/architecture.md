@@ -213,7 +213,26 @@ filter the preset happened to carry". The selection is **run-time state**, not p
 the plan identity, so it is asked first and simply applied: every session marked runs
 the preset as configured (no `--sessions`), a partial one runs
 `export <name> --sessions <csv>` (CLI-wins, and identical for a bundle, whose selection
-is shared). A hidden-subagent run additionally pins `--no-subagents` (see §3). Product
+is shared). A hidden-subagent run additionally pins `--no-subagents` (see §3).
+
+**The confirmation states the effective selection, not the intent.** "All marked" and
+"the preset pins a filter" are two different outcomes, and only one of them is what the
+user just did on screen. `oc_preset_run` therefore asks `plan.py selection <name>` and
+`plan.py subagents <name>` (python stays the SSoT for preset text) and prints three
+lines that cannot lie: `Sessions:` (all marked + no pinned selection → `all N sessions
+in the DB`; all marked + a pinned one → `filter "%…%" (from the preset) — your N marks
+are not used`; partial → `the N sessions you marked (the menu overrides the preset: …)`),
+`Menu adds:` (only what the menu itself contributes — currently just
+`--no-subagents`), and an optional `Note:` (subagents that will be exported standalone,
+or a preset that already drops subagents, which the switch cannot widen). The old
+`Filter: (preset as configured)` / duplicated `Spec:` CSV is gone: the per-product
+`Will produce:` block already carries the descriptions. The recency rules that used to
+be mark-only rows are now CLI flags (`--last N` counts roots and closes over their
+subagents, `--since DATE` is a plain window; both CLI-only via `CLI_ONLY_KEYS`, so a
+preset can never pin a non-reproducible set), and the rule that ran is recorded in
+`metadata.json` as `.selection` plus the `Selection` row of `index.md`.
+
+Product
 rows still come straight from `exportlib/plan.py products` but only as the CLI/test API
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
@@ -285,9 +304,11 @@ shrinks picker), and it is the only way to create a shrink from the menu:
 1. `oc_shrink_sessions_pick` — **root sessions only** (`list --root`): a subagent always
    follows its root, so it never needs a row, and an orphan whose parent is gone *is* a
    root. `[x]` = survives in the copy, default ALL marked; a `(N sub)` badge (recursive)
-   shows what each root drags along. Bulk rows `__ALL__`/`__NONE__`/`__LAST__ <N>`/
-   `__OLDEST__ <N>`/`__DAYS__ <N>` (the age ones **rest**: unmark all, then mark the
-   matching ones). `__MAKE__` is **continue**, not "build": all marked → `--keep-all`,
+   shows what each root drags along. The only bulk rows are `mark all` / `unmark all`:
+   a recency rule re-evaluates on every run, so it is a *selection* (a CLI rule), not
+   something a row can "mark" — `--keep N` / `--older-than` / `--since` already own that
+   on the engine side, and `export --last N` is the export-side mirror. `__MAKE__` is
+   **continue**, not "build": all marked → `--keep-all`,
    unmarked roots → `--discard-sessions <csv>`, nothing marked → refused ("the copy
    would be an EMPTY database"). Rows are **sorted by `time_updated` (newest first)**
    and an `__TOGGLE__` row flips to oldest-first: the rows are re-read on every render

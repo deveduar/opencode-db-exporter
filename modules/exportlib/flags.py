@@ -99,6 +99,30 @@ FLAGS: list[Flag] = [
         description="Exact session ids to export (repeatable)",
         cli_help="Exact session ids to export (repeatable)"
     ),
+    # Recency selection rules. CLI-ONLY (never a preset key, like `out`): a
+    # recency rule is not reproducible — the same command tomorrow yields a
+    # different set — so it does not belong in a plan, which is meant to be a
+    # repeatable recipe (see snapshot: fresh for the archive counterpart).
+    # One selection rule per run: filter | sessions | last | since.
+    Flag(
+        name="last",
+        flag_type="int",
+        products=["*"],
+        default=None,
+        min_value=1,
+        description=("Keep the N most recently updated ROOT sessions, with every session that "
+                     "follows them (CLI-only, not a preset key)"),
+        cli_help="N most recently updated root sessions, with their subagents (CLI-only)",
+    ),
+    Flag(
+        name="since",
+        flag_type="string",
+        products=["*"],
+        default=None,
+        description=("Keep every session updated on or after DATE (YYYY-MM-DD, UTC), subagents "
+                     "included as they match (CLI-only, not a preset key)"),
+        cli_help="every session updated on or after DATE, subagents included (CLI-only)",
+    ),
     Flag(
         name="out",
         flag_type="string",
@@ -288,6 +312,16 @@ FLAG_HELP: Dict[str, str] = {
         "                     overrides --filter / the preset selection"
     ),
     "out": "  --out DIR          output root (default $OCED_OUT)",
+    "last": (
+        "  --last N           the N most recently updated ROOT sessions, with every\n"
+        "                     session that follows them (like shrink --keep N). CLI-only:\n"
+        "                     the set is recomputed at run time, so it is not a preset key"
+    ),
+    "since": (
+        "  --since DATE       sessions updated on or after DATE, YYYY-MM-DD UTC (CLI-only,\n"
+        "                     same caveat as --last). One selection rule per run: this,\n"
+        "                     --last, --filter or --sessions"
+    ),
     "no_subagents": (
         "  --no-subagents     exclude every subagent session (all products): only root\n"
         "                     sessions are exported. A session whose parent is gone\n"
@@ -373,11 +407,20 @@ def get_flags_for_product(product: str) -> list[Flag]:
 # `snapshot` is a workflow flag: valid at the SINGLE preset's top level but NEVER
 # per-product (bundle) — a snapshot decision is one decision, not per product.
 SINGLE_ONLY_KEYS: tuple[str, ...] = ("snapshot",)
+
+# Selection rules that exist ONLY on the CLI. They are deliberately not preset
+# keys: `out` is an environment/output concern a plan must never pin, and
+# `last`/`since` are recency rules, whose set changes every time they run (a plan
+# is a repeatable recipe). Mirrors shrink's KEEP_RULE_KEYS split.
+CLI_ONLY_KEYS: tuple[str, ...] = ("out", "last", "since")
+
 PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
     p: [
         f.name
         for f in FLAGS
-        if (p in f.products or f.products == ["*"]) and f.name not in SINGLE_ONLY_KEYS
+        if (p in f.products or f.products == ["*"])
+        and f.name not in SINGLE_ONLY_KEYS
+        and f.name not in CLI_ONLY_KEYS
     ]
     for p in ("transcript", "memory", "compactions")
 }
@@ -388,10 +431,9 @@ BUNDLE_PRODUCT_KEYS = {k: v for k, v in PRODUCT_FLAG_KEYS.items() if k != "full"
 # Selection keys (shared across all products in a bundle)
 SELECTION_KEYS = ["filter", "sessions"]
 
-# Single preset keys (product + all flags + selection). `out` is a CLI-only
-# flag (not a preset key — presets never override the output root).
+# Single preset keys (product + all flags + selection).
 SINGLE_PRESET_KEYS = sorted(set(
-    ["product"] + [f.name for f in FLAGS if f.name != "out"]
+    ["product"] + [f.name for f in FLAGS if f.name not in CLI_ONLY_KEYS]
     + ["filter", "sessions", "products"]
 ))
 

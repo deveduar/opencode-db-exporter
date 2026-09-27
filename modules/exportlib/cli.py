@@ -24,24 +24,57 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir, default_db, default_out
-from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions
+from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions, since_ms
 from exportlib.faithful import write_session_json
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile
 from exportlib.render import Renderer
 from exportlib.transcript import append_transcript_inline, write_transcript
-from exportlib.util import die, safe_filename, sha256_file
+from exportlib.util import die, safe_filename, selection_label, selection_meta, sha256_file
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
 from exportlib.flags import FLAGS
 
 
-def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
+def _pos_int(v: str) -> int:
+    """argparse type for --last: a plain positive number, so 'abc' and '0'
+    fail at the command line instead of silently selecting everything."""
+    try:
+        n = int(v.strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{v!r} is not a number")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1 (got {n})")
+    return n
+
+
+def _iso_date(v: str) -> str:
+    """argparse type for --since: YYYY-MM-DD, UTC. Same parser the engine
+    queries with, so the CLI and the SELECT can never disagree."""
+    s = v.strip()
+    if since_ms(s) is None:
+        raise argparse.ArgumentTypeError(f"{v!r} is not a date (YYYY-MM-DD, UTC)")
+    return s
+
+
+def selection_label(args) -> str:
+    """One human phrase for the SELECTION that produced this run (the filter /
+    sessions / last / since rule, or 'ALL sessions'). Single source for the
+    bundle index and the metadata, so they can never describe a run differently.
+    A recency rule is named explicitly because its set is recomputed at run time.
+    """
     if args.sessions:
-        sel = ", ".join(args.sessions)
-    elif args.filter:
-        sel = f"filter: {args.filter}"
-    else:
-        sel = "ALL sessions"
+        return f"{len(args.sessions)} session(s): " + ", ".join(args.sessions)
+    if args.filter:
+        return f"filter: {args.filter}"
+    if getattr(args, "last", None):
+        return f"last {args.last} session(s) by last update"
+    if getattr(args, "since", None):
+        return f"updated on or after {args.since}"
+    return "ALL sessions"
+
+
+def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
+    sel = selection_label(args)
     lines = [
         "# opencode-db export bundle",
         "",
@@ -107,8 +140,9 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("profile", nargs="?", default="transcript",
                     help="product or named preset: transcript | memory | compactions | full | <preset from the presets file>")
 
-    # Selection + output root come from FLAGS (single source of truth): --filter
-    # and --sessions are mutually exclusive; --out is CLI-only (never a preset key).
+    # Selection + output root come from FLAGS (single source of truth): exactly
+    # ONE selection rule per run (--filter | --sessions | --last | --since, all in
+    # one mutex group); --out/--last/--since are CLI-only (never preset keys).
     sel_group = ap.add_mutually_exclusive_group()
     for flag in FLAGS:
         if flag.name == "filter":
@@ -116,6 +150,13 @@ def build_argparser() -> argparse.ArgumentParser:
         elif flag.name == "sessions":
             sel_group.add_argument(f"--{flag.cli_name}", action="append", metavar="SESSION_ID",
                                    help=flag.cli_help)
+        elif flag.name in ("last", "since"):
+            if flag.name == "last":
+                sel_group.add_argument(f"--{flag.cli_name}", metavar="N", type=_pos_int,
+                                       help=flag.cli_help)
+            else:
+                sel_group.add_argument(f"--{flag.cli_name}", metavar="DATE", type=_iso_date,
+                                       help=flag.cli_help)
         elif flag.name == "out":
             ap.add_argument(f"--{flag.cli_name}", help=flag.cli_help)
         else:
@@ -207,9 +248,10 @@ def main() -> None:
     except sqlite3.Error as e:
         die(f"Could not open the DB read-only: {e}")
 
-    sessions = load_sessions(con, args.filter, args.sessions)
+    sessions = load_sessions(con, args.filter, args.sessions,
+                             getattr(args, "last", None), getattr(args, "since", None))
     if not sessions:
-        die("No sessions to export (check --filter/--sessions/preset selection).")
+        die(f"No sessions to export ({selection_label(args)} matched nothing).")
 
     # ------- subagent inclusion (BEFORE the hierarchy) -------
     # `load_sessions` returns exactly what the selection matched, so a subagent is
@@ -332,6 +374,7 @@ def main() -> None:
         "db_sha256": meta_sha,
         "filter": args.filter,
         "sessions_selected": args.sessions,
+        "selection": selection_meta(args),
         "profile": args.profile,
         "preset": args.preset,
         "sub": args.sub,

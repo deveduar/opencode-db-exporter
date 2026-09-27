@@ -54,28 +54,6 @@ confirm_action() {
     [[ "$answer" =~ ^[yYsS]$ ]]
 }
 
-# oc_read_int <label> -> reads a positive integer. ESC cancels IMMEDIATELY
-# (no Enter needed); empty or non-numeric input cancels too (rc=1).
-# Prompt/feedback go to stderr so the value is clean on stdout (capture-safe).
-oc_read_int() {
-    local label="$1" c rest v
-    printf '%s (number · ESC/empty = cancel): ' "$label" >&2
-    IFS= read -r -s -n1 c >&2 || { echo >&2; return 1; }
-    case "$c" in
-        "" ) echo "   cancelled." >&2; return 1 ;;
-        $'\e' ) echo "   cancelled." >&2; return 1 ;;
-        $'\n' ) echo "   cancelled." >&2; return 1 ;;  # Enter alone = cancel (destructive)
-    esac
-    printf '%s' "$c" >&2
-    IFS= read -r rest || true
-    v="$c${rest:-}"
-    echo >&2
-    case "$v" in
-        *[!0-9]*) echo "   (cancelled: '$v' is not a number)" >&2; return 1 ;;
-    esac
-    printf '%s\n' "$v"
-}
-
 # oc_confirm_typed <word> -> hard confirmation gate for destructive actions (swap):
 # the action only continues when the user types <word> exactly (Enter alone or a
 # mismatch cancels). Return 0 = accepted, 1 = cancelled.
@@ -270,12 +248,13 @@ oc_fzf_sel() {
 
 oc_sel_key() { printf '%s\n' "$1" | cut -f1; }
 
-# The mode-switch row. Selecting it flips the picker mode and reloads the list.
-# The key defaults to __TOGGLE__ (a picker has ONE such row unless it passes an
-# explicit key for a second switch, e.g. the subagent visibility row).
+# The mode-switch row: '[>] <current>  →  <other>'. The caller passes the label it
+# wants to see (a picker has ONE such row unless it passes an explicit key for a
+# second switch, e.g. the subagent visibility row). No "[mode: ...]" wrapper: the
+# caller already names the mode, and prefixing it duplicated the word.
 oc_toggle_row() {
     local mode="$1" other="$2" key="${3:-__TOGGLE__}"
-    printf '%s\t[mode: %s]  switch to %s\n' "$key" "$mode" "$other"
+    printf '%s\t[>] %s  →  %s\n' "$key" "$mode" "$other"
 }
 
 #-----------------------------------------------------------------------
@@ -296,6 +275,8 @@ oc_toggle_row() {
 #                           hidden subagent is not rendered and never reaches the
 #                           CSV, so unmarking a session takes its subagents with
 #                           it). Without it (shrink) there is no such row.
+#   header           str   — optional lead-in for the one-line status bar
+#                           ("<header> · N/M marked · <order> · …").
 #
 # Marks live in a local assoc array (1/0, never unset): new IDs default to 1
 # so existing unmarks survive re-renders, order toggles and bulk ops.
@@ -305,7 +286,8 @@ oc_toggle_row() {
 #              any other rc            -> return that rc
 # __TOGGLE__ -> flip order updated-desc <-> updated-asc
 # __SUBS__   -> flip subagent visibility (only when get_sub_ids is set)
-# __ALL__ / __NONE__ / __LAST__ N / __OLDEST__ N / __DAYS__ N -> bulk mark ops
+# __ALL__ / __NONE__ -> bulk mark ops (the ONLY ones: recency is a selection,
+#                 not a marking, so it lives on the CLI as --last/--since)
 # session row -> toggle 0 <-> 1
 # ESC in fzf  -> return 0 (caller climbs one level)
 #-----------------------------------------------------------------------
@@ -372,42 +354,46 @@ oc_session_picker() {
         local toggle_other
         [ "$ord_mode" = "newest first" ] && toggle_other="oldest first" || toggle_other="newest first"
 
-        # Recomputed every render so the header always matches the toggle state.
-        subs_note=""
-        if [ -n "$get_sub_ids" ]; then
-            if [ "$hide_subs" = "1" ]; then
-                subs_note=$'\n'"Subagents: HIDDEN — not shown, never exported (they follow their session's mark)"
-            else
-                # The two modes differ exactly here, so the header must not lie:
-                # a shown subagent is an ordinary row with its OWN mark, and that
-                # mark is all that counts. Unmarking its parent does not drop it.
-                subs_note=$'\n'"Subagents: shown — each subagent is its own row: unmark it to drop it."$'\n'"Unmarking its session does not drop it: it is exported standalone."
-            fi
+        # One line of essential state, recomputed every render: how many are
+        # marked, in which order, and which modes are active. A caveat line only
+        # when a mode has a consequence the rows do not show on their own.
+        local marked_n=0 unmarked_n=0
+        for id in "${ids[@]}"; do
+            if [ "${marks[$id]:-0}" = 1 ]; then marked_n=$((marked_n + 1)); else unmarked_n=$((unmarked_n + 1)); fi
+        done
+        # The active modes, on ONE line. A caveat line follows only when a mode
+        # has a consequence the rows cannot show on their own.
+        subs_note="$marked_n/${#ids[@]} marked · $ord_mode"
+        [ -n "$header" ] && subs_note="$header · $subs_note"
+        if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "1" ]; then
+            subs_note+=" · subagents hidden, never exported"
+        fi
+        subs_note+=" · ESC: back"
+        if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "0" ]; then
+            # The one rule a row cannot show: a shown subagent is marked on its
+            # own, so un-marking its session does not take it along.
+            subs_note+=$'\n'"subagents keep their own mark: un-marking a session does not remove them"
         fi
 
         sel=$( {
                  printf '__MAKE__\t%s\n' "$make_label"
-                 oc_toggle_row "order: $ord_mode" "$toggle_other"
+                 oc_toggle_row "$ord_mode" "$toggle_other"
                  if [ -n "$get_sub_ids" ]; then
                      if [ "$hide_subs" = "0" ]; then
-                         oc_toggle_row "subagents: shown" "hidden (roots only)" "__SUBS__"
+                         oc_toggle_row "subagents: shown" "subagents: hidden" "__SUBS__"
                      else
-                         oc_toggle_row "subagents: hidden" "shown" "__SUBS__"
+                         oc_toggle_row "subagents: hidden" "subagents: shown" "__SUBS__"
                      fi
                  fi
-                 printf '__ALL__\t[mark ALL sessions]\n'
-                 printf '__NONE__\t[unmark ALL]\n'
-                 printf '__LAST__\t[mark only the N most recent sessions]\n'
-                 printf '__OLDEST__\t[mark only the N oldest sessions]\n'
-                 printf '__DAYS__\t[mark only sessions updated in the last N days]\n'
+                 printf '__ALL__\tmark all\n'
+                 printf '__NONE__\tunmark all\n'
                  for id in "${ids[@]}"; do
                      [ "${marks[$id]:-0}" = 1 ] && mark='[x]' || mark='[ ]'
                      local badge=''
                      [ -n "${sub_n[$id]:-}" ] && badge=" (${sub_n[$id]} sub)"
                      printf '%s\t%s %s%s\n' "$id" "$mark" "${local_disp[$id]:-}" "$badge"
                  done
-               } | oc_fzf_sel "$title" \
-                   "$(printf '%s%s\nSorted: %s. ESC: back' "$header" "$subs_note" "$ord_mode")") || return $?
+               } | oc_fzf_sel "$title" "$subs_note") || return $?
 
         key=$(oc_sel_key "$sel")
         case "$key" in
@@ -450,25 +436,6 @@ oc_session_picker() {
                 ;;
             __ALL__)   for id in "${ids[@]}"; do marks[$id]=1; done ;;
             __NONE__)  for id in "${ids[@]}"; do marks[$id]=0; done ;;
-            __LAST__ | __OLDEST__ | __DAYS__)
-                case "$key" in
-                    __LAST__)   label="Mark only the N most recent — N"; order_dir="DESC" ;;
-                    __OLDEST__) label="Mark only the N oldest — N";      order_dir="ASC"  ;;
-                    __DAYS__)   label="Mark only sessions updated in the last N days — N"; order_dir="DAYS" ;;
-                esac
-                n=$(oc_read_int "$label") || continue
-                for id in "${ids[@]}"; do marks[$id]=0; done
-                all_ids=$(oc_shrink_sql_ids "$(IFS=','; echo "${ids[*]}")") || all_ids=""
-                if [ -z "$all_ids" ]; then continue; fi
-                if [ "$order_dir" = "DAYS" ]; then
-                    mapfile -t top < <(o_q "SELECT s.id FROM session s WHERE s.id IN ($all_ids) AND s.time_updated >= (strftime('%s','now') - $n * 86400) * 1000 ORDER BY s.time_updated DESC, s.time_created DESC;" 2>/dev/null)
-                    [ "${#top[@]}" -eq 0 ] && echo "   (no session updated in the last $n day(s) — everything unmarked)"
-                else
-                    mapfile -t top < <(o_q "SELECT s.id FROM session s WHERE s.id IN ($all_ids) ORDER BY s.time_updated $order_dir, s.time_created $order_dir LIMIT $n;" 2>/dev/null)
-                    [ "${#top[@]}" -eq 0 ] && echo "   (nothing to mark)"
-                fi
-                for id in "${top[@]}"; do marks[$id]=1; done
-                ;;
             *)
                 if [ -n "$key" ] && [ "$key" != "__NONE__" ]; then
                     [ "${marks[$key]:-0}" = 1 ] && marks[$key]=0 || marks[$key]=1

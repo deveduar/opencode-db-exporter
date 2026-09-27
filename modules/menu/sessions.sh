@@ -12,7 +12,7 @@ oc_sessions_picker() {
     local sel key
     while true; do
         local header
-        header=$'Sessions — select one to inspect (full info + compaction digests)'
+        header="Sessions — pick one to inspect it (info + compaction digests)"
         sel=$(oc_sessions_rows | oc_fzf_sel "sessions (details)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in

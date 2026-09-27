@@ -557,3 +557,54 @@ roots-only corpus.
   rendered/hidden toggle, the roots-only CSV, the pinned `--no-subagents`, the
   `subagents: hidden` confirm, marks surviving a toggle, and no regression of the
   roots-only shrink picker).
+
+## §22 Recency moves to the CLI, and the confirmation states the EFFECTIVE selection (current)
+
+Sections §17–§20 record the recency rows (`__LAST__`/`__OLDEST__`/`__DAYS__`) as they
+were designed. They are gone now, and the reason is worth keeping:
+
+- **A row that marks N most-recent sessions re-evaluated on every render is not a
+  marking, it is a selection.** The picker already owns "which sessions are in this
+  run"; a second mechanism that silently re-computes "the N newest" at run time makes
+  the screen lie about what is selected (the count changes while you look at it) and
+  duplicates a rule the engine already has. So the rows left both pickers (export and
+  shrink, since `oc_session_picker` is shared) and the *only* bulk rows left are
+  `mark all` / `unmark all`. The now-dead `oc_read_int` helper went with them.
+- **Recency becomes a CLI selection rule, and it is not a preset key.** `export` gains
+  `--last N` and `--since DATE` in the same mutex group as `--filter`/`--sessions`, with
+  argparse validation (`--last 0` and `--last abc` are refused instead of silently
+  meaning "everything"). They are listed in `CLI_ONLY_KEYS`, so `presets.schema.json`
+  rejects them: the set they select changes every time they run, and a plan that pinned
+  one would not be reproducible — the same argument that already keeps `out` out of a
+  preset. `flags.py` remains the SSoT (one help line, the generated tables, `--help`).
+- **`--last` counts ROOTS and closes the set, `--since` does not.** Ranking raw sessions
+  would let `--last 2` return two subagents and drop the root they belong to, and would
+  drop the subagents *of* the two roots it did pick. The first one is the `__LAST__` row's
+  own semantic (it marked N rows of a roots-only list) and matches `shrink --keep N`, so
+  `--last` ranks roots by `time_updated` and pulls in every descendant through a
+  recursive CTE. `--since` stays a plain window over all sessions: a subagent inside the
+  window is a legitimate hit, and a subagent whose parent is outside it is exactly the
+  case `--no-orphan-subagents` exists for.
+- **The bug this surfaced**: a bundle re-executes itself per product, and
+  `bundle_child_argv` only forwarded the selection it knew about — so `--last 2` on a
+  bundle printed "last 2 sessions" in the stamp index while both children exported
+  everything. CLI-only selection flags have to be forwarded explicitly, like `--out`.
+- **Provenance**: the effective rule is now recorded as `metadata.json` `.selection`
+  (`{"rule": "all"|"filter"|"sessions"|"last"|"since", …}`), the per-product `index.md`
+  grew a single `Selection` row, and the "matched nothing" error names the rule and its
+  value. Three shapes of the same fact, all derived from `util.selection_rule()`.
+- **The confirmation stopped being decorative.** `Filter: (preset as configured)` was
+  true only when the preset had no selection of its own — the exact case the shipped
+  `presets.json.example` does not contain (`this_week` pins a `filter`, `one_session`
+  pins `sessions`), so a user who marked everything and picked `this_week` got a plan
+  that said "ALL sessions" and a run that was neither. `oc_preset_run` now asks
+  `plan.py selection` / `plan.py subagents` and prints `Sessions:` (who wins, and that
+  the marks are ignored), `Menu adds:` (only the menu's own flags) and `Note:`
+  (consequences a row cannot show). The duplicated `Spec:` CSV/descriptions are gone.
+- **Copy pass**: one line of live state per render (`N/M marked · order · ESC: back`),
+  a caveat line only when a switch has a hidden consequence, `[>] current → other` for
+  every toggle row, short root entries (`Export — pick sessions, then a preset`), and
+  empty picker headers where the status line already says everything.
+- **Verified** — `tests/export_smoke.sh` `240 OK`, `tests/menu_flow.sh` `195 OK`
+  (the recency rules, their validation, `.selection` provenance, the `Selection` row, the
+  bundle forwarding, and the four effective-selection cases of the confirmation).

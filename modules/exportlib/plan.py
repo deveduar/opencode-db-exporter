@@ -16,6 +16,10 @@
 #   resolve <profile>    JSON plan for a product keyword or preset name
 #   plan <profile>       multi-line "Will produce:" block for the confirm
 #   snapshot <name>      "fresh" when the preset pins snapshot: fresh, else ""
+#   selection <name>     the selection the preset PINS, as a human phrase, or ""
+#   subagents <name>     "no_subagents" | "no_orphan_subagents" | "both" | ""
+#                        (the menu's confirmation needs both to state the
+#                        effective selection instead of the intent)
 from __future__ import annotations
 
 import json
@@ -243,6 +247,50 @@ def preset_descr(name: str, pdata: dict | None = None) -> str:
     return f"{sel} · {pw} {p} · config {config}"
 
 
+def preset_selection(name: str, pdata: dict | None = None) -> str:
+    """The selection this preset PINS, as a human phrase for the menu's
+    confirmation: 'filter "x"' | 'its N pinned session ids' | '' (empty = it
+    pins none). Empty output is the normal case and the reason the menu has to
+    be explicit: with no selection pinned, "everything marked" really does
+    export everything. `last`/`since` cannot appear here — they are CLI-only
+    (CLI_ONLY_KEYS), so a preset can never be non-reproducible.
+    """
+    if pdata is None:
+        pdata = load_presets().get(name, {})
+    if "filter" in pdata:
+        return 'filter "' + _jq_tostring(pdata["filter"]) + '"'
+    if "sessions" in pdata:
+        n = len(pdata["sessions"])
+        return f"its {n} pinned session id{'s' if n != 1 else ''}"
+    return ""
+
+
+def preset_subagents(name: str, pdata: dict | None = None) -> str:
+    """Which subagent-inclusion keys this preset sets, as a short token for the
+    menu's confirmation: 'no_subagents' | 'no_orphan_subagents' | 'both' | ''.
+    Read across every product of a bundle, because the menu's switch is a
+    whole-run decision: if ANY product drops subagents, the user should know
+    before the gate.
+    """
+    if pdata is None:
+        pdata = load_presets().get(name, {})
+    cfgs: list[dict] = []
+    bundle = _bundle_cfg(pdata)
+    if bundle:
+        cfgs = [v for v in bundle.values() if isinstance(v, dict)]
+    else:
+        cfgs = [pdata]
+    drops_all = any(c.get("no_subagents") is True for c in cfgs)
+    drops_orphan = any(c.get("no_orphan_subagents") is True for c in cfgs)
+    if drops_all and drops_orphan:
+        return "both"
+    if drops_all:
+        return "no_subagents"
+    if drops_orphan:
+        return "no_orphan_subagents"
+    return ""
+
+
 def preset_rows(presets: dict | None = None) -> list[str]:
     """TSV picker rows for every preset, replicating oc_preset_rows (jq logic:
     purpose tag from product combo / transcript tool_output / sel + selection)."""
@@ -363,6 +411,22 @@ def _cli() -> int:
             if pdata is None:
                 return 1
             print("fresh" if pdata.get("snapshot") == "fresh" else "")
+            return 0
+        if cmd == "selection":
+            if len(args) < 2:
+                return 1
+            presets = load_presets()
+            if args[1] not in presets:
+                return 1
+            print(preset_selection(args[1], presets[args[1]]))
+            return 0
+        if cmd == "subagents":
+            if len(args) < 2:
+                return 1
+            presets = load_presets()
+            if args[1] not in presets:
+                return 1
+            print(preset_subagents(args[1], presets[args[1]]))
             return 0
         if cmd == "resolve":
             if len(args) < 2:

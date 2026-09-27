@@ -170,6 +170,10 @@ def bundle_child_argv(args, product: str) -> list[str]:
         argv += [f"--sessions={s}" for s in args.sessions]
     elif args.filter is not None:
         argv += ["--filter", args.filter]
+    elif args.last is not None:
+        argv += [f"--last={args.last}"]
+    elif args.since is not None:
+        argv += [f"--since={args.since}"]
     for k in _PRESET_KEYS_CHOICES:
         if flag_in_argv("--" + _flag(k)):
             argv.append(f"--{_flag(k)}={getattr(args, k)}")

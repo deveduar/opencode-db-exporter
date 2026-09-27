@@ -12,7 +12,12 @@ import json
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "modules"))
-from exportlib.flags import FLAGS, PRODUCT_KEYWORDS, get_flags_for_product
+from exportlib.flags import (
+    CLI_ONLY_KEYS,
+    FLAGS,
+    PRODUCT_KEYWORDS,
+    get_flags_for_product,
+)
 from shrinklib.flags import SHRINK_FLAGS, OPERATION_KEYS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +30,7 @@ SHRINK_FLAGS_TABLE_PATH = os.path.join(GENERATED, "shrink-flags-table.md")
 # Flags present at a single preset's top level but NEVER per-product (bundle) nor
 # in the product flag groups. Kept in sync with exportlib.flags.SINGLE_ONLY_KEYS.
 _SINGLE_ONLY = ("snapshot",)
+_PRESET_EXCLUDED = ("filter", "sessions") + CLI_ONLY_KEYS
 
 
 def generate_schema() -> dict:
@@ -49,7 +55,7 @@ def generate_schema() -> dict:
     for prod in PRODUCT_KEYWORDS:
         product_flag_props[prod] = {}
         for f in get_flags_for_product(prod):
-            if f.name not in ["filter", "sessions", "out"] + list(_SINGLE_ONLY):
+            if f.name not in _PRESET_EXCLUDED + _SINGLE_ONLY:
                 product_flag_props[prod][f.name] = {"$ref": f"#/definitions/flag{f.name.capitalize()}"}
 
     # Bundle product flag groups
@@ -114,7 +120,7 @@ def generate_schema() -> dict:
                         "required": ["product"],
                         "properties": {
                             "product": {"type": "string", "enum": list(PRODUCT_KEYWORDS), "description": "full is a CLI alias, not a preset product."},
-                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in ["filter", "sessions", "out"]},
+                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in _PRESET_EXCLUDED},
                             "filter": {"$ref": "#/definitions/filter"},
                             "sessions": {"$ref": "#/definitions/sessions"}
                         },
@@ -136,7 +142,7 @@ def generate_schema() -> dict:
                                         "description": "Per-product flags; the selection (top level) is shared by every product.",
                                         "additionalProperties": False,
                                         "properties": {
-                                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in ["filter", "sessions", "out"] + list(_SINGLE_ONLY)}
+                                            **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in _PRESET_EXCLUDED + _SINGLE_ONLY}
                                         }
                                     }
                                 }
@@ -194,14 +200,16 @@ def flags_table() -> str:
             applies = "selection (shared; exclusive, `not` both)"
         elif f.name == "sessions":
             continue  # rendered together with `filter`
-        elif f.name == "out":
-            continue  # rendered on its own row below (CLI-only)
+        elif f.name in CLI_ONLY_KEYS:
+            continue  # rendered on its own rows below (CLI-only)
         else:
             applies = _flag_applies(f)
         rows.append(f"| {name} | {typ} | {allowed} | {applies} |")
-    rows.append(
-        "| `out` | string | — | any — CLI-only (never a preset key) |"
-    )
+    for name, typ in (("out", "string"), ("last", "int ≥ 1"), ("since", "date YYYY-MM-DD")):
+        rows.append(
+            f"| `{name}` | {typ} | — | any — CLI-only (never a preset key: "
+            f"{'output root' if name == 'out' else 'a recency rule, recomputed at run time'}) |"
+        )
     return "\n".join(rows)
 
 

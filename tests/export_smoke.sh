@@ -229,6 +229,58 @@ ME=$(last_meta transcript)
 jq -e '.filter == "Project Beta"' "$ME" >/dev/null && ok "filter applied in metadata" || bad "filter metadata"
 jq -e '.sessions.roots == 1' "$ME" >/dev/null && ok "filter counts in metadata" || bad "filter counts"
 
+echo "== recency selection: --last N / --since DATE (CLI-only) =="
+# the fake DB's time_updated order is ORPHAN01 > B0001 > B0002 > A0001 > A0003 > A0002
+run export transcript --last 2 >/dev/null
+ME=$(last_meta transcript)
+jq -e '.selection == {"rule":"last","value":2}' "$ME" >/dev/null \
+    && ok "--last N is recorded as the selection rule" || bad "--last metadata: $(jq -c .selection "$ME")"
+jq -e '.sessions.roots == 2 and .sessions.subagents == 1 and .sessions.total == 3' "$ME" >/dev/null \
+    && ok "--last 2 = 2 newest roots + the subagent that follows one" || bad "--last counts: $(jq -c .sessions "$ME")"
+grep -q '^| Selection | last 2 session(s) by last update |' "$(dirname "$ME")/index.md" \
+    && ok "index.md states the --last rule" || bad "--last index row: $(grep '^| Selection' "$(dirname "$ME")/index.md")"
+# --last counts ROOTS and closes the set over their subagents (like shrink --keep N)
+run export transcript --last 1 >/dev/null
+jq -e '.sessions.roots == 1 and .sessions.subagents == 0' "$(last_meta transcript)" >/dev/null \
+    && ok "--last 1 = the newest root, nothing dragged in" || bad "--last 1 counts: $(jq -c .sessions "$(last_meta transcript)")"
+run export transcript --last 4 >/dev/null
+jq -e '.sessions.roots == 3 and .sessions.total == 6' "$(last_meta transcript)" >/dev/null \
+    && ok "--last 4 (more than the 3 roots) still yields every session" || bad "--last 4 counts: $(jq -c .sessions "$(last_meta transcript)")"
+
+run export transcript --since 2026-08-01 >/dev/null
+ME=$(last_meta transcript)
+jq -e '.selection == {"rule":"since","value":"2026-08-01"}' "$ME" >/dev/null \
+    && ok "--since is recorded as the selection rule" || bad "--since metadata: $(jq -c .selection "$ME")"
+jq -e '.sessions.roots == 3 and .sessions.total == 6' "$ME" >/dev/null \
+    && ok "--since on a wide window keeps every session" || bad "--since counts: $(jq -c .sessions "$ME")"
+run export transcript --since 2030-01-01 >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--since with no match exits non-zero" || bad "--since future was accepted"
+grep_run "updated on or after 2030-01-01 matched nothing" export transcript --since 2030-01-01 \
+    && ok "the empty-match error names the rule and its value" || bad "no-match error text"
+
+# one rule per run, and the values are validated at the command line
+run export transcript --last 2 --sessions ses_A0001 >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--last and --sessions are mutually exclusive" || bad "two selection rules were accepted"
+run export transcript --last 0 >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--last 0 is rejected (0 would silently mean all)" || bad "--last 0 was accepted"
+run export transcript --last abc >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--last abc is rejected" || bad "--last abc was accepted"
+run export transcript --since 2026-13-99 >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--since with an impossible date is rejected" || bad "--since 2026-13-99 was accepted"
+run export transcript --since 2026-1-1 >/dev/null 2>&1
+[ $? -ne 0 ] && ok "--since insists on YYYY-MM-DD" || bad "--since 2026-1-1 was accepted"
+
+# a run with no rule says so instead of leaving the reader guessing
+run export transcript >/dev/null
+jq -e '.selection == {"rule":"all"}' "$(last_meta transcript)" >/dev/null \
+    && ok "no rule = selection {\"rule\":\"all\"}" || bad "default selection: $(jq -c .selection "$(last_meta transcript)")"
+run export transcript --filter 'Project Beta' >/dev/null
+jq -e '.selection == {"rule":"filter","value":"Project Beta"}' "$(last_meta transcript)" >/dev/null \
+    && ok "the filter is the selection rule" || bad "filter selection: $(jq -c .selection "$(last_meta transcript)")"
+run export transcript --sessions ses_A0001,ses_B0001 >/dev/null
+jq -e '.selection.ids == ["ses_A0001","ses_B0001"]' "$(last_meta transcript)" >/dev/null \
+    && ok "explicit ids are the selection rule" || bad "sessions selection: $(jq -c .selection "$(last_meta transcript)")"
+
 echo "== sub inline / omit / separate =="
 run export transcript --sub inline >/dev/null
 INL=$(last_transcript transcript 'Project Alpha')

@@ -117,19 +117,37 @@ opencode-db menu  →  Export
 ```
 
 1. **Session picker** — if the presets file exists, you see the session picker first.
-   Sessions are listed with `[x]` marks (default: all marked). You can:
+   Sessions are listed with `[x]` marks (default: all marked). The header is one line of
+   live state — `3/6 marked · newest first · ESC: back` — plus a caveat line when a
+   switch has a consequence the rows cannot show. You can:
    - Toggle individual sessions with Enter
-   - Use bulk rows: `[mark ALL sessions]`, `[unmark ALL]`, `[mark only the N most recent]`, `[mark only the N oldest]`, `[mark only sessions updated in the last N days]`
-   - Toggle sort order with the `order: newest first` / `order: oldest first` row
-   - Press `[>] select preset (recipe) for CURRENT selection` to continue
+   - Use the two bulk rows: `mark all`, `unmark all`
+   - Flip the sort with the `[>] newest first → oldest first` row (re-sorting keeps your marks)
+   - Flip `subagents: shown → hidden` (hidden rows are not rendered, so they can never be marked nor exported)
+   - Press `[>] choose the preset` to continue
+
+   There are **no recency rows** (`last N`, `oldest N`, `last N days`): marking rows is
+   for picking sessions, and a rule that re-evaluates on every run is a selection, not a
+   marking. Ask for it on the CLI instead — `export transcript --last 5` (the N most
+   recently used roots, plus their subagents) or `--since 2026-09-01` (every session
+   updated on or after that date). Both are CLI-only and never preset keys.
 
    Without a presets file, it prints setup guidance and falls back to the raw CLI.
 
 2. **Preset picker** — shows your named plans (each with its purpose tag). Pick one.
 
-3. **Plan confirmation** — shows Source / Sessions / Profile / Spec / Output.
-   - If all sessions were marked: runs the preset as configured (no filter).
-   - If some sessions were unmarked: runs the preset with `--sessions CSV` for the marked sessions.
+3. **Plan confirmation** — shows Source / Preset / Sessions / Menu adds / Note / Output,
+   then a `Will produce:` block per product. The point of the `Sessions:` line is that
+   it can never lie about what will be selected:
+   - all marked + a preset that pins no selection → `all 6 sessions in the DB`
+   - all marked + a preset that pins one (`filter`/`sessions`) → `filter "%…%" (from the
+     preset) — your 6 marks are not used`, and the run is the plain `export <name>`
+   - some unmarked → `the 2 sessions you marked (the menu overrides the preset: …)` and
+     the run is `export <name> --sessions CSV`
+   `Menu adds:` names only what the menu itself contributes (`--no-subagents` when the
+   subagents switch is hidden), never the preset's own config. `Note:` appears when a row
+   cannot show the consequence: subagents that will be exported standalone, or a preset
+   that already drops subagents (the switch cannot widen it).
    Accept to run, or ESC to go back and change sessions/preset.
 
 4. The run lands in `~/.local/share/opencode-db-exporter/exports/<stamp>/` with one

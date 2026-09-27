@@ -83,40 +83,69 @@ oc_preset_run() {
     local -a _arr
     IFS=',' read -r -a _arr <<< "$csv"
     marked_count="${#_arr[@]}"
+    local all_marked=0
+    [ "$marked_count" -eq "$total_sess" ] && all_marked=1
 
-    # A hidden-subagent selection is never "all sessions" unless the DB has no
-    # subagents at all, so the exact-id CSV is what makes the guarantee hold.
+    # What the PRESET pins, straight from plan.py (python is the SSoT for preset
+    # text). Empty = it pins no selection, which is the case where "everything
+    # marked" really does mean everything.
+    local psel psub
+    psel=$(oc_plan_py selection "$name" 2>/dev/null) || psel=""
+    psub=$(oc_plan_py subagents "$name" 2>/dev/null) || psub=""
+
+    # ONE line saying what will actually be selected, and — when the preset pins
+    # a selection that the marks cannot express — who wins and what is ignored.
+    local sess_line
+    if [ "$all_marked" = 1 ]; then
+        if [ -n "$psel" ]; then
+            sess_line="$psel (from the preset) — your $marked_count marks are not used"
+        else
+            sess_line="all $total_sess sessions in the DB"
+        fi
+    else
+        sess_line="the $marked_count sessions you marked"
+        [ -n "$psel" ] && sess_line+=" (the menu overrides the preset: $psel)"
+    fi
+
+    # Only what the MENU adds beyond the preset, so it is never mistaken for the
+    # preset's own config.
+    local menu_adds="nothing"
     local -a extra=()
-    [ "$hide" = "1" ] && extra=(--no-subagents)
+    if [ "$hide" = "1" ]; then
+        menu_adds="--no-subagents (subagents are not exported)"
+        extra=(--no-subagents)
+    fi
 
-    # In "shown" mode a subagent is an ordinary row with its own mark, so
-    # un-marking its session leaves it selected and the engine exports it
-    # standalone, as a root. The CSV line is the only hint otherwise, and it
-    # reads like a bug — so name it before the gate, with the flag that would
-    # change the outcome. Hidden mode cannot produce any (no subagent ever
-    # reaches the CSV), and "all marked" cannot either (every parent is in it).
-    local stand_note=""
+    # Consequences the two lines above do not show. In "shown" mode a subagent is
+    # an ordinary row with its own mark, so un-marking its session leaves it
+    # selected and the engine exports it standalone, as a root.
+    local note=""
     if [ "$hide" != "1" ]; then
         local n_stand
         n_stand=$(oc_export_standalone_subs "$csv")
         if [ "$n_stand" -gt 0 ]; then
-            stand_note=" · $n_stand subagent(s) will be exported standalone"
-            stand_note+=" (their session is not selected; --no-orphan-subagents would drop them)"
+            if [ "$psub" = "no_orphan_subagents" ] || [ "$psub" = "both" ]; then
+                note="$n_stand subagent(s) are marked but their session is not: the preset's"
+                note+=" --no-orphan-subagents WILL DROP them"
+            else
+                note="$n_stand subagent(s) will be exported standalone"
+                note+=" (their session is not selected; --no-orphan-subagents would drop them)"
+            fi
         fi
     fi
+    # A preset that already drops subagents cannot be widened by the switch.
+    if [ -n "$psub" ] && [ "$hide" = "0" ] && [ -z "$note" ]; then
+        case "$psub" in
+            no_subagents|both) note="the preset drops every subagent; the subagents switch cannot bring them back" ;;
+            no_orphan_subagents) note="the preset keeps only subagents whose parent is exported" ;;
+        esac
+    fi
 
-    if [ "$marked_count" -eq "$total_sess" ]; then
-        # All sessions — run as configured (no filter).
-        local spec="preset '$name' (${descr:-see the presets file})"
-        [ "$hide" = "1" ] && spec+=" · subagents: hidden"
-        spec+="$stand_note"
-        oc_export_confirm "preset: $name" "(preset as configured)" "$spec" || return 1
+    if [ "$all_marked" = 1 ]; then
+        oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
         run_oced_tool export "$name" "${extra[@]}"
     else
-        local spec="preset '$name' (${descr:-see the presets file}) · sessions: $csv"
-        [ "$hide" = "1" ] && spec+=" · subagents: hidden"
-        spec+="$stand_note"
-        oc_export_confirm "preset: $name" "sessions: $csv" "$spec" || return 1
+        oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
         run_oced_tool export "$name" --sessions "$csv" "${extra[@]}"
     fi
     return 0
@@ -131,14 +160,13 @@ oc_export_sessions_pick() {
 
     local -A _cfg=(
         [roots_only]=0
-        [title]="export — sessions (marked = include)"
-        [header]="Mark [x] sessions to export. Default: all marked. Switch 'subagents' to hide them:
-their rows disappear and they are never exported (they follow their session)."
+        [title]="export — mark the sessions to include"
+        [header]=""
         [order]=updated-desc
         [order_mode]="newest first"
-        [make_label]="[>] select preset (recipe) for CURRENT selection"
+        [make_label]="[>] choose the preset"
         [make_action]=_oc_export_make_action
-        [empty_guard_msg]="Nothing is marked — at least one session must be selected."
+        [empty_guard_msg]="Nothing marked — an export needs at least one session."
         [get_sub_count]=oc_export_sub_counts
         [get_sub_ids]=oc_export_sub_ids
     )
@@ -266,27 +294,26 @@ oc_export_plan() {
     oc_plan_py plan "$1"
 }
 
-# oc_export_confirm <profile-label> <filter-or-empty> <spec> -> print the plan + ask.
-# profile-label can be "preset: <name>" or a product keyword (transcript|memory|compactions).
+# oc_export_confirm <preset> <sessions-line> [menu-adds] [note]
+# One honest block: what will be selected, what the menu adds on top of the
+# preset, and the consequences the rows cannot show. The "Will produce:" block
+# below already carries the per-product descriptions, so nothing is repeated.
 oc_export_confirm() {
-    local profile="$1" selid="$2" spec="$3"
-    local db_est=0 plan_name="$profile"
+    local name="$1" sess="$2" menu_adds="${3:-nothing}" note="${4:-}"
+    local db_est=0
     [ -f "$OPENCODE_DB-wal" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-wal"))) || true
     [ -f "$OPENCODE_DB-shm" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-shm"))) || true
     db_est=$((db_est + $(stat -c %s "$OPENCODE_DB")))
-    case "$profile" in
-        preset:\ *) plan_name="${profile#preset: }" ;;
-    esac
     echo ""
     echo "-> Export plan"
     printf '   %-9s %s\n' "Source:" "$OPENCODE_DB"
-    printf '   %-9s %s\n' "Filter:" "${selid:-ALL sessions (no filter)}"
-    printf '   %-9s %s\n' "Profile:" "$profile"
-    printf '   %-9s %s\n' "Spec:" "$spec"
+    printf '   %-9s %s\n' "Preset:" "$name"
+    printf '   %-9s %s\n' "Sessions:" "$sess"
+    printf '   %-9s %s\n' "Menu adds:" "$menu_adds"
+    [ -n "$note" ] && printf '   %-9s %s\n' "Note:" "$note"
     printf '   %-9s %s\n' "Output:" "$OCED_OUT/<timestamp>"
-    # Dynamic "Will produce:" block with uniform 2-space indent
     printf '   Will produce:\n'
-    oc_export_plan "$plan_name" | sed 's/^/  /'
+    oc_export_plan "$name" | sed 's/^/  /'
     echo ""
     if [ "$db_est" -ge 1073741824 ]; then
         confirm_action "Start this export? The DB is ~$(o_human_size "$db_est") — may take a while." || { echo "   cancelled."; return 1; }
@@ -295,4 +322,3 @@ oc_export_confirm() {
     fi
     return 0
 }
-

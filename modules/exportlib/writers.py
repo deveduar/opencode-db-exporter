@@ -5,7 +5,7 @@ from pathlib import Path
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir
-from exportlib.util import safe_filename
+from exportlib.util import safe_filename, selection_label
 
 
 def make_outdir_final(base, profile: str, stamp: str | None = None):
@@ -26,10 +26,10 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         f.write(f"| Product | `{args.profile}` |\n")
         f.write(f"| Date | {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} |\n")
         f.write(f"| Source DB | `{db_path}` |\n")
-        if args.sessions:
-            f.write(f"| Sessions | `{', '.join(args.sessions)}` |\n")
-        elif args.filter:
-            f.write(f"| Filter | `{args.filter}` |\n")
+        # One row for the effective selection, whatever rule produced it
+        # (filter / ids / last N / since DATE / all) — the same phrase as
+        # metadata.json's `selection` and the "matched nothing" error.
+        f.write(f"| Selection | {selection_label(args)} |\n")
         f.write(f"| Sessions (roots/subagents/total) | {len(written)} / {sum(len(s[1]) for s in written)} / {len(sessions)} |\n")
         # Subagent inclusion: only surfaced when a flag narrowed the set (the
         # default run keeps the historical rows untouched).

@@ -117,6 +117,7 @@ list`/`view`, menu), so old run dirs keep aggregating.
   "db": "/…/opencode.db", "db_sha256": "…",
   "filter": null,                       // or SQL LIKE pattern
   "sessions_selected": null,            // or ["ses_…", …]
+  "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
   "profile": "transcript",              // product keyword: transcript | memory | compactions (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
   "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
@@ -132,6 +133,22 @@ list`/`view`, menu), so old run dirs keep aggregating.
   "files": ["transcript/index.md", "transcript/ses_….json"]
 }
 ```
+
+`selection` records which of the four mutually exclusive selection rules ran, so a
+run is self-describing even when `filter`/`sessions_selected` are both `null`:
+
+| `rule` | shape | meaning |
+|---|---|---|
+| `all` | `{"rule": "all"}` | no rule: every session in the source |
+| `filter` | `{"rule": "filter", "value": "Project Beta"}` | SQL LIKE on id or title |
+| `sessions` | `{"rule": "sessions", "ids": ["ses_a", …]}` | explicit ids |
+| `last` | `{"rule": "last", "value": 5}` | the N most recently updated **roots**, plus every session that follows them |
+| `since` | `{"rule": "since", "value": "2026-09-01"}` | every session updated on/after that UTC date, subagents included as they match |
+
+`last`/`since` are CLI-only (never preset keys, see `CLI_ONLY_KEYS`): the set they
+select changes every time they run. The same phrase appears as the `Selection` row of
+`index.md` and in the error when a rule matches nothing
+(`error: No sessions to export (last 5 session(s) by last update matched nothing).`).
 
 A **subagent** is a session with a non-empty `parent_id` **whose parent row still
 exists**; a session whose parent is gone is an *orphan* and counts as a root

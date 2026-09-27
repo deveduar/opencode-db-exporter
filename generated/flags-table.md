@@ -18,4 +18,6 @@
 | `snapshot` | string | `fresh` | any |
 | `cap` | int | 0 = unlimited (≥ 0) | memory |
 | `files` | bool | — | memory (touched files) |
-| `out` | string | — | any — CLI-only (never a preset key) |
+| `out` | string | — | any — CLI-only (never a preset key: output root) |
+| `last` | int ≥ 1 | — | any — CLI-only (never a preset key: a recency rule, recomputed at run time) |
+| `since` | date YYYY-MM-DD | — | any — CLI-only (never a preset key: a recency rule, recomputed at run time) |

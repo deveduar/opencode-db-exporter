@@ -77,7 +77,9 @@ printf '%s' "$ROWS" | grep -q '^ses_' && ok "session rows present" || bad "sessi
 echo "== small helpers =="
 reset
 [ "$(oc_sel_key $'keyX\tlabel')" = "keyX" ] && ok "oc_sel_key extracts the hidden key" || bad "oc_sel_key"
-[ "$(oc_toggle_row verify delete)" = "__TOGGLE__	[mode: verify]  switch to delete" ] && ok "oc_toggle_row builds the toggle row" || bad "oc_toggle_row"
+ARROW=$'\u2192'
+[ "$(oc_toggle_row verify delete)" = "__TOGGLE__"$'\t'"[>] verify  ${ARROW}  delete" ] && ok "oc_toggle_row builds the toggle row" || bad "oc_toggle_row: $(oc_toggle_row verify delete)"
+[ "$(oc_toggle_row 'subagents: shown' 'subagents: hidden' __SUBS__ | cut -f1)" = "__SUBS__" ] && ok "oc_toggle_row takes an optional key" || bad "oc_toggle_row key"
 [ "$(oc_stamp_human '2026-09-21_08-30')" = "2026-09-21 08:30 UTC" ] && ok "oc_stamp_human formats a stamp" || bad "oc_stamp_human"
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
@@ -102,13 +104,6 @@ printf '%s' "$HELPEXPORTS" | grep -q "^export products (default: transcript):" &
 for cli in filter sessions out sub tool-output patch mark-compactions no-reasoning summary-diffs role json sanitize cap; do
     printf '%s' "$HELPEXPORTS" | grep -q -- "--$cli" && ok "help block covers --$cli" || bad "help block missing --$cli"
 done
-
-echo "== oc_read_int (interactive integer input) =="
-reset
-V=$(printf '5\n' | oc_read_int "Count" 2>/dev/null); [ "$V" = "5" ] && ok "oc_read_int reads a number" || bad "oc_read_int number: '$V'"
-printf '\n' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int cancel on Enter alone" || bad "oc_read_int Enter"
-printf '\033' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int cancels on ESC" || bad "oc_read_int ESC"
-printf 'ab\n' | oc_read_int "Count" >/dev/null 2>&1; [ $? -ne 0 ] && ok "oc_read_int rejects non-numeric" || bad "oc_read_int non-numeric"
 
 echo "== root status header =="
 reset
@@ -219,7 +214,8 @@ cat > "$OCED_PRESETS" <<'EOF'
    "rag": {"product": "memory"},
    "digest": {"product": "compactions"},
    "snappy": {"product": "transcript", "snapshot": "fresh"},
-   "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true}
+   "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true},
+   "nosub": {"product": "transcript", "no_subagents": true}
 }}
 EOF
 reset
@@ -393,10 +389,10 @@ grep -q 'subagents: hidden' "$XROWS.2" && ok "selecting the row flips it to hidd
 [ "$(grep -c '^ses_' "$XROWS.2")" = "3" ] && ok "hidden: only the 3 root sessions keep a row" || bad "rows hidden: $(grep -c '^ses_' "$XROWS.2")"
 [ "$(rows_n 2)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
     && ok "hidden rows are exactly the roots (the orphan stays a root)" || bad "hidden rows: $(rows_n 2)"
-grep -q 'Subagents: HIDDEN' "$XHEAD.2" && ok "the header states the subagents are not exported" || bad "header: $(cat "$XHEAD.2")"
+grep -q 'subagents hidden, never exported' "$XHEAD.2" && ok "the status line states the subagents are not exported" || bad "header: $(cat "$XHEAD.2")"
 # The shown header must NOT promise the hidden mode's cascade: a shown subagent
 # has its own mark, so unmarking its session does not drop it.
-grep -q 'does not drop it' "$XHEAD.1" && ok "the shown header warns unmarking a session keeps its subagents" \
+grep -q 'does not remove them' "$XHEAD.1" && ok "the shown status line warns unmarking a session keeps its subagents" \
     || bad "shown header: $(cat "$XHEAD.1")"
 # Flip back: the rows (and their marks) are restored.
 reset; call_log; confirm_action() { return 0; }
@@ -441,9 +437,9 @@ qset "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
 grep -q "2 subagent(s) will be exported standalone" "$TMP/conf.txt" \
     && ok "the confirm names the 2 subagents that export standalone" \
-    || bad "no standalone note: $(grep -i 'Spec:' "$TMP/conf.txt")"
+    || bad "no standalone note: $(grep -i 'Note:' "$TMP/conf.txt")"
 grep -q -- "--no-orphan-subagents would drop them" "$TMP/conf.txt" \
-    && ok "the note points at the flag that would drop them" || bad "no hint: $(grep -i 'Spec:' "$TMP/conf.txt")"
+    && ok "the note points at the flag that would drop them" || bad "no hint: $(grep -i 'Note:' "$TMP/conf.txt")"
 # The ORPHAN is a root, not a standalone subagent: marked alone it exports as
 # itself, so the note must stay silent. Catches a missing EXISTS guard.
 reset; call_log; confirm_action() { return 0; }
@@ -495,7 +491,43 @@ reset; confirm_action() { return 0; }
 XOUT="$TMP/xconfirm.txt"
 qset "__SUBS__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$XOUT" 2>&1
-grep -q "subagents: hidden" "$XOUT" && ok "the plan says the subagents are hidden" || bad "plan note: $(grep -c . "$XOUT")"
+grep -q 'Menu adds:.*--no-subagents' "$XOUT" \
+    && ok "the plan names the flag the menu itself adds" || bad "plan menu-adds row: $(grep 'Menu adds' "$XOUT")"
+grep -qE '^   Sessions: +the 3 sessions you marked' "$XOUT" \
+    && ok "the plan says which sessions are selected" || bad "plan sessions row: $(grep 'Sessions:' "$XOUT")"
+grep -q 'Will produce:' "$XOUT" && ok "the plan still lists what will be produced" || bad "will-produce block missing"
+
+echo "== the confirmation is honest about the EFFECTIVE selection =="
+# 'clean' pins filter "Project Beta"; 'notes' pins no selection at all.
+ALL_IDS="ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01"
+# 1) everything marked + a preset that pins a filter -> the filter wins and the
+#    confirmation says the marks are ignored (no silent surprise).
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+oc_preset_run clean "" "$ALL_IDS" 0 > "$TMP/c1.txt" 2>&1
+grep -qE '^   Sessions: +filter "Project Beta" \(from the preset\) — your 6 marks are not used' "$TMP/c1.txt" \
+    && ok "all marked + pinned filter: the preset wins and says so" || bad "c1: $(grep 'Sessions:' "$TMP/c1.txt")"
+grep -qx 'export clean' "$CALLS" && ok "all marked passes no --sessions (the preset selection applies)" || bad "c1 cmd: $(cat "$CALLS")"
+# 2) a partial selection always overrides the preset, and says it does.
+: > "$CALLS"
+oc_preset_run clean "" "ses_A0001,ses_B0001" 0 > "$TMP/c2.txt" 2>&1
+grep -qE '^   Sessions: +the 2 sessions you marked \(the menu overrides the preset: filter "Project Beta"\)' "$TMP/c2.txt" \
+    && ok "partial marks override the preset filter, and the plan says so" || bad "c2: $(grep 'Sessions:' "$TMP/c2.txt")"
+grep -qx 'export clean --sessions ses_A0001,ses_B0001' "$CALLS" && ok "partial marks pass --sessions" || bad "c2 cmd: $(cat "$CALLS")"
+# 3) everything marked + a preset that pins nothing -> the marks really are all.
+: > "$CALLS"
+oc_preset_run notes "" "$ALL_IDS" 0 > "$TMP/c3.txt" 2>&1
+grep -qE '^   Sessions: +all 6 sessions in the DB' "$TMP/c3.txt" \
+    && ok "all marked + no pinned selection = every session" || bad "c3: $(grep 'Sessions:' "$TMP/c3.txt")"
+grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is marked" || bad "c3 cmd: $(cat "$CALLS")"
+# 4) a preset that already drops subagents: the switch cannot widen it, and the
+#    plan says that instead of letting the user toggle in vain.
+: > "$CALLS"
+oc_preset_run nosub "" "ses_A0001,ses_B0001,ses_ORPHAN01" 0 > "$TMP/c4.txt" 2>&1
+grep -q 'the preset drops every subagent' "$TMP/c4.txt" \
+    && ok "a subagent-dropping preset is called out in the plan" || bad "c4: $(grep 'Note:' "$TMP/c4.txt")"
+grep -qE '^   Menu adds: +nothing' "$TMP/c4.txt" \
+    && ok "the menu claims no flag when it adds none" || bad "c4 menu-adds: $(grep 'Menu adds' "$TMP/c4.txt")"
 # The shrink picker is roots-only: it must NOT grow the visibility row.
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
@@ -582,8 +614,8 @@ oced_out list --order nope >/dev/null 2>&1 && bad "an invalid --order was accept
 : > "$CALLS"
 qset "__TOGGLE__" "__NONE__" "ses_A0001" "__TOGGLE__" "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink > "$TMP/order.txt"
-grep -q 'Sorted: newest first' "$FZF_HIST" && ok "the sessions picker opens sorted newest first" || bad "order mode: $(grep -o 'Sorted: [a-z ]*' "$FZF_HIST" | head -2 | tr '\n' '/')"
-grep -q 'Sorted: oldest first' "$FZF_HIST" && ok "the order row switches to oldest first (header follows)" || bad "order toggle label missing"
+grep -q 'newest first' "$FZF_HIST" && ok "the sessions picker opens sorted newest first" || bad "order mode: $(grep -o '[0-9]*/[0-9]* marked . [a-z ]*' "$FZF_HIST" | head -2 | tr '\n' '/')"
+grep -q 'oldest first' "$FZF_HIST" && ok "the order row switches to oldest first (status follows)" || bad "order toggle label missing"
 [ "$(grep -c '^-> shrink plan' "$TMP/order.txt")" = "1" ] && ok "re-ordering keeps the picker usable (one plan)" || bad "plan count after re-order"
 grep -qx "shrink --discard-sessions ses_ORPHAN01,ses_B0001" "$CALLS" \
     && ok "the marks survive the order switch (2nd __TOGGLE__ did not reset them)" || bad "marks after re-order: $(cat "$CALLS")"
@@ -597,10 +629,8 @@ qempty
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-grep -q 'order: newest first' "$TMP/sessions_rows.txt" \
-    && ok "the order row advertises the current mode (newest first)" || bad "order row missing"
-grep -q 'switch to oldest first' "$TMP/sessions_rows.txt" \
-    && ok "the order row offers the reverse sort" || bad "order row label missing"
+grep -q '^__TOGGLE__.*\[>\] newest first  →  oldest first$' "$TMP/sessions_rows.txt" \
+    && ok "the order row advertises the current mode and the reverse sort" || bad "order row missing"
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink >/dev/null
@@ -627,17 +657,19 @@ grep -qE "Recipe: +quiet - prune \+ vacuum only" "$TMP/plan.txt" \
 grep -qE "Command: +shrink --discard-sessions" "$TMP/plan.txt" \
     && ok "the plan shows the effective command the engine will run" || bad "plan command line missing"
 
-: > "$CALLS"
-qset "__LAST__" "__MAKE__" "__PRESET_quiet"
-printf '2\n' | oc_pick_shrink >/dev/null
-grep -q '^shrink --discard-sessions ' "$CALLS" && ok "sessions picker: LAST-N keeps only the N most recent" || bad "sessions LAST: $(cat "$CALLS")"
-[ "$(grep '^shrink --discard-sessions ' "$CALLS" | tail -1 | grep -o ',' | wc -l)" = "0" ] \
-    && ok "sessions LAST-2: 1 of 3 roots unmarked -> no comma" || bad "sessions LAST-2 csv count"
-
-: > "$CALLS"
-qset "__DAYS__" "__MAKE__" "__PRESET_quiet"
-printf '3650\n' | oc_pick_shrink >/dev/null
-grep -qx "shrink --keep-all" "$CALLS" && ok "sessions DAYS-N (a wide window) marks every root" || bad "sessions DAYS: $(cat "$CALLS")"
+# the recency "mark-only" rows are gone (recency lives on the CLI/preset layer)
+: > "$TMP/nobulk.txt"
+qempty
+( oc_fzf_sel() { tee -a "$TMP/nobulk.txt" | fzf "$@"; }
+  oc_shrink_sessions_pick >/dev/null )
+reset
+for row in __LAST__ __OLDEST__ __DAYS__; do
+    grep -q "^$row	" "$TMP/nobulk.txt" && bad "the sessions picker still offers $row" \
+        || ok "the sessions picker dropped the $row row"
+done
+# what remains is only the two state rows (no recency, no counts)
+[ "$(cut -f2 "$TMP/nobulk.txt" | grep -cE '^(mark|unmark) all$')" = "2" ] \
+    && ok "the only bulk rows left are mark all / unmark all" || bad "bulk rows: $(cut -f2 "$TMP/nobulk.txt" | grep -E '^(mark|unmark) all$' | tr '\n' '/')"
 
 : > "$CALLS"
 qset "__NONE__" "__MAKE__"

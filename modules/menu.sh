@@ -9,14 +9,14 @@ done
 # Root
 #-----------------------------------------------------------------------
 oc_root=(
-    "status|Status report (DB · backups · deps · version/schema)|fn:oc_show_status"
-    "backups|Backups (snapshots picker)|fn:oc_backups_picker"
-    "shrinks|Shrink copies (create + manage picker)|fn:oc_shrinks_picker"
-    "sessions|Sessions (details picker)|fn:oc_sessions_picker"
-    "export|Export sessions (named plans picker)|fn:oc_export_picker"
-    "exports|Manage exports (view / remove picker)|fn:oc_exports_picker"
-    "guide|Guided workflow (inspect -> backup -> export memory -> shrink)|tool:guide|pause"
-    "help|Show help|tool:help|pause"
+    "status|Status — DB, backups, deps, version|fn:oc_show_status"
+    "backups|Backups — verify, remove, create|fn:oc_backups_picker"
+    "shrinks|Shrink copies — create, view, swap|fn:oc_shrinks_picker"
+    "sessions|Sessions — info, compactions|fn:oc_sessions_picker"
+    "export|Export — pick sessions, then a preset|fn:oc_export_picker"
+    "exports|Exports — view, remove|fn:oc_exports_picker"
+    "guide|Guide — inspect, backup, export, shrink|tool:guide|pause"
+    "help|Help|tool:help|pause"
 )
 
 # oc_root_status -> builds ACTION_STATUS for the root menu header

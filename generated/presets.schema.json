@@ -47,6 +47,15 @@
       "type": "string",
       "description": "Exact session ids to export (repeatable)"
     },
+    "flagLast": {
+      "type": "integer",
+      "description": "Keep the N most recently updated ROOT sessions, with every session that follows them (CLI-only, not a preset key)",
+      "minimum": 1
+    },
+    "flagSince": {
+      "type": "string",
+      "description": "Keep every session updated on or after DATE (YYYY-MM-DD, UTC), subagents included as they match (CLI-only, not a preset key)"
+    },
     "flagOut": {
       "type": "string",
       "description": "Output root directory"
@@ -149,6 +158,12 @@
         },
         "sessions": {
           "$ref": "#/definitions/flagSessions"
+        },
+        "last": {
+          "$ref": "#/definitions/flagLast"
+        },
+        "since": {
+          "$ref": "#/definitions/flagSince"
         },
         "out": {
           "$ref": "#/definitions/flagOut"

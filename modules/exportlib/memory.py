@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from exportlib import TOOL_VERSION
 from exportlib.db import digests_for, load_messages, load_todos, touched_files
 from exportlib.sanitize import sanitize
-from exportlib.util import model_str, sha256_file, ts_iso
+from exportlib.util import model_str, selection_meta, sha256_file, ts_iso
 from exportlib.writers import last_backup_info
 
 
@@ -158,6 +158,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "db_sha256": sha256_file(db_path),
         "filter": args.filter,
         "sessions_selected": args.sessions,
+        "selection": selection_meta(args),
         "profile": "memory",
         "preset": args.preset,
         "sub": args.sub,

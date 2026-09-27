@@ -178,8 +178,8 @@ oc_shrink_confirm_run() {
 oc_shrink_ops_pick() {
     local selargs="$1" sel key line name runargs strip rc
     while true; do
-        sel=$(oc_shrink_rows | oc_fzf_sel "shrink — recipe (what to do with the survivors)" \
-                 $'The sessions are already selected. Pick what the copy should DO with the ones that survive.'$'\n'$'Every row goes straight to the read-only plan (y/N). ESC: back to sessions') || return 130
+        sel=$(oc_shrink_rows | oc_fzf_sel "shrink — recipe" \
+                 "Sessions are marked. Pick what the copy should DO with the survivors · every row goes to the read-only plan · ESC: back") || return 130
         key=$(oc_sel_key "$sel")
         case "$key" in
             __PRESET_*) ;;
@@ -225,13 +225,13 @@ oc_shrink_sessions_pick() {
 
     local -A _shr_cfg=(
         [roots_only]=1
-        [title]="shrink — sessions (marked = survive)"
-        [header]="Marked [x] ROOT sessions survive in the copy (their subagents follow)."
+        [title]="shrink — mark the ROOT sessions that survive"
+        [header]="a marked session keeps its subagents"
         [order]=updated-desc
         [order_mode]="newest first"
-        [make_label]="[>] continue with the CURRENT selection -> recipe"
+        [make_label]="[>] continue"
         [make_action]=_shr_make_action
-        [empty_guard_msg]="Nothing is selected — the copy would be an EMPTY database. Mark at least one session (or [mark ALL]) before continuing."
+        [empty_guard_msg]="Nothing marked — the copy would be an EMPTY database."
         [get_sub_count]=oc_shrink_sub_counts
     )
     oc_session_picker _shr_cfg
@@ -250,13 +250,13 @@ oc_pick_shrink() {
 # --------------------------------------------------------------------
 oc_shrinks_rows() {
     local mode="$1" run
-    printf '__CREATE__\t[create shrink copy (pruned + VACUUMed from the LIVE DB)...]\n'
-    printf '__SWAP__\t[>] swap a copy into the LIVE DB (destructive — type "confirm")\n'
-    printf '__VERIFY__\t[verify: check for orphan dirs, old pre-shrinks, stale shrinks]\n'
+    printf '__CREATE__\tcreate shrink copy (pruned + VACUUMed from the LIVE DB)\n'
+    printf '__SWAP__\t[>] swap a copy into the LIVE DB (type "confirm")\n'
+    printf '__VERIFY__\tverify (orphan dirs, old pre-shrinks, stale copies)\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
-        printf '__DELETE_ALL__\t[delete ALL shrink copies]\n'
-        printf '__KEEP_NEWEST__\t[delete all except the newest]\n'
+        printf '__DELETE_ALL__\tdelete ALL shrink copies\n'
+        printf '__KEEP_NEWEST__\tdelete all but the newest\n'
     fi
     local -a runs=()
     mapfile -t runs < <(shrinks_runs_find)
@@ -333,10 +333,7 @@ oc_shrinks_picker() {
     local mode="view" sel key
     while true; do
         local header
-        header="Shrink copies — mode: $mode"$'\n'"$(
-            if [ "$mode" = view ]; then printf 'view: show the shrink.json of a run — create new copies via the first row';
-            else printf 'remove: delete a run (with confirmation)'; fi
-        )"
+        header="Shrink copies — mode: $mode"
         sel=$(oc_shrinks_rows "$mode" | oc_fzf_sel "shrinks ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
