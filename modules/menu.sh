@@ -10,7 +10,7 @@ done
 #-----------------------------------------------------------------------
 oc_root=(
     "status|Status — DB, backups, deps, version|fn:oc_show_status"
-    "backups|Backups — verify, remove, create|fn:oc_backups_picker"
+    "backups|Backups — create, details, remove|fn:oc_backups_picker"
     "shrinks|Shrink copies — create, view, swap|fn:oc_shrinks_picker"
     "sessions|Sessions — info, compactions|fn:oc_sessions_picker"
     "export|Export — pick sessions, then a preset|fn:oc_export_picker"

@@ -36,6 +36,7 @@ Usage: opencode-db.sh [command]
                        shows the plan (source/target/estimated size) and asks to
                        confirm before starting (--yes skips the confirmation)
   backups list         list stored backups
+  backups view <file>  a backup's details + its sha256 check vs the live DB
   backups verify <file>   check sha256 of a backup against the manifest
   backups remove <file> [--yes]   delete a backup file
   backups prune <N>    keep only the N most recent backups

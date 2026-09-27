@@ -248,13 +248,15 @@ oc_fzf_sel() {
 
 oc_sel_key() { printf '%s\n' "$1" | cut -f1; }
 
-# The mode-switch row: '[>] <current>  →  <other>'. The caller passes the label it
-# wants to see (a picker has ONE such row unless it passes an explicit key for a
-# second switch, e.g. the subagent visibility row). No "[mode: ...]" wrapper: the
-# caller already names the mode, and prefixing it duplicated the word.
+# The mode-switch row: '[*] <current>  →  <other>'. ONE symbol for every toggle
+# in the menu (view/remove, sort order, subagent visibility) — the bracket token
+# says what the row does, so the words only have to name the two states. `[>]` is
+# reserved for rows that OPEN A FLOW (create, swap, choose preset). The caller
+# passes the label it wants to see (a picker has ONE such row unless it passes an
+# explicit key for a second switch, e.g. the subagent visibility row).
 oc_toggle_row() {
     local mode="$1" other="$2" key="${3:-__TOGGLE__}"
-    printf '%s\t[>] %s  →  %s\n' "$key" "$mode" "$other"
+    printf '%s\t[*] %s  →  %s\n' "$key" "$mode" "$other"
 }
 
 #-----------------------------------------------------------------------
@@ -286,8 +288,8 @@ oc_toggle_row() {
 #              any other rc            -> return that rc
 # __TOGGLE__ -> flip order updated-desc <-> updated-asc
 # __SUBS__   -> flip subagent visibility (only when get_sub_ids is set)
-# __ALL__ / __NONE__ -> bulk mark ops (the ONLY ones: recency is a selection,
-#                 not a marking, so it lives on the CLI as --last/--since)
+# __ALL__ / __NONE__ -> the only bulk rows (recency is a selection, not a
+#                 marking, so it lives on the CLI as --last/--since)
 # session row -> toggle 0 <-> 1
 # ESC in fzf  -> return 0 (caller climbs one level)
 #-----------------------------------------------------------------------
@@ -352,7 +354,7 @@ oc_session_picker() {
         for id in "${ids[@]}"; do [ -n "${marks[$id]+set}" ] || marks[$id]=1; done
 
         local toggle_other
-        [ "$ord_mode" = "newest first" ] && toggle_other="oldest first" || toggle_other="newest first"
+        [ "$ord_mode" = "newest first" ] && toggle_other="old first" || toggle_other="newest first"
 
         # One line of essential state, recomputed every render: how many are
         # marked, in which order, and which modes are active. A caveat line only
@@ -380,13 +382,13 @@ oc_session_picker() {
                  oc_toggle_row "$ord_mode" "$toggle_other"
                  if [ -n "$get_sub_ids" ]; then
                      if [ "$hide_subs" = "0" ]; then
-                         oc_toggle_row "subagents: shown" "subagents: hidden" "__SUBS__"
+                         oc_toggle_row "subagents: shown" "hidden" "__SUBS__"
                      else
-                         oc_toggle_row "subagents: hidden" "subagents: shown" "__SUBS__"
+                         oc_toggle_row "subagents: hidden" "shown" "__SUBS__"
                      fi
                  fi
-                 printf '__ALL__\tmark all\n'
-                 printf '__NONE__\tunmark all\n'
+                 printf '__ALL__\t[mark all]\n'
+                 printf '__NONE__\t[unmark all]\n'
                  for id in "${ids[@]}"; do
                      [ "${marks[$id]:-0}" = 1 ] && mark='[x]' || mark='[ ]'
                      local badge=''
@@ -426,7 +428,7 @@ oc_session_picker() {
                 ;;
             __TOGGLE__)
                 if [ "$ord_mode" = "newest first" ]; then
-                    ord=updated-asc; ord_mode="oldest first"
+                    ord=updated-asc; ord_mode="old first"
                 else
                     ord=updated-desc; ord_mode="newest first"
                 fi

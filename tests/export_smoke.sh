@@ -97,6 +97,34 @@ printf "%s" "$B" | grep -q "Target:" && ok "backup shows target dir" || bad "bac
 grep_run "opencode-" backups list && ok "backups list" || bad "backups list"
 FNAME=$(run backups list | grep -oE 'opencode-[0-9-]+\.db\.gz' | head -1)
 grep_run "OK" backups verify "$FNAME" && ok "backups verify" || bad "backups verify"
+
+# backups view: the manifest record + the sha256 check + how it compares to live
+V=$(run backups view "$FNAME")
+printf '%s' "$V" | grep -q "== Backup: $FNAME ==" && ok "backups view names the backup" || bad "backups view header"
+printf '%s' "$V" | grep -q "Created:  " && ok "backups view shows when it was made" || bad "backups view date"
+printf '%s' "$V" | grep -q "before gzip" && ok "backups view shows the raw size next to the stored one" || bad "backups view size"
+printf '%s' "$V" | grep -qE "Content: +[0-9]+ sessions · [0-9]+ messages · [0-9]+ parts" && ok "backups view shows the recorded counts" || bad "backups view counts: $V"
+printf '%s' "$V" | grep -q "Newest:  " && ok "backups view shows the newest session timestamp" || bad "backups view newest"
+printf '%s' "$V" | grep -q "Source DB:" && ok "backups view names the source DB" || bad "backups view source"
+printf '%s' "$V" | grep -qE "sha256: +[0-9a-f]{12}…[0-9a-f]{4}" && ok "backups view shows the manifest sha256 (abbreviated)" || bad "backups view sha"
+printf '%s' "$V" | grep -q "\[OK\].*matches the manifest" && ok "backups view RUNS the sha256 check" || bad "backups view check"
+printf '%s' "$V" | grep -q "vs live DB:" && ok "backups view compares the copy with the live DB" || bad "backups view live"
+printf '%s' "$V" | grep -q -- "--from-backup $FNAME" && ok "backups view shows how to use the copy" || bad "backups view restore hint"
+grep_run "Usage: opencode-db backups view" backups view && ok "backups view without a file prints the usage" || bad "backups view usage"
+grep_run "Not in the manifest" backups view nope.db && ok "backups view refuses an unknown file" || bad "backups view unknown"
+
+# A byte flipped on disk must NOT pass as the manifest copy.
+TDIR="$TMP/tampered"
+cp -r "$BK" "$TDIR"
+printf 'X' | dd of="$TDIR/$FNAME" bs=1 seek=64 conv=notrunc status=none
+T=$(OCED_BACKUP_DIR="$TDIR" run backups view "$FNAME")
+printf '%s' "$T" | grep -q "MISMATCH" && ok "backups view reports a tampered backup as MISMATCH" || bad "backups view tamper"
+printf '%s' "$T" | grep -qE "manifest: [0-9a-f]{64}" && ok "backups view prints both hashes on a mismatch" || bad "backups view tamper hashes"
+OCED_BACKUP_DIR="$TDIR" grep_run "MISMATCH" backups verify "$FNAME" && ok "verify agrees with view on the tamper" || bad "verify tamper"
+rm -f "$TDIR/$FNAME"
+M=$(OCED_BACKUP_DIR="$TDIR" run backups view "$FNAME")
+printf '%s' "$M" | grep -q "MISSING" && ok "backups view reports a deleted file as MISSING" || bad "backups view missing"
+OCED_BACKUP_DIR="$TDIR" grep_run "File not found" backups verify "$FNAME" && ok "verify agrees with view on the missing file" || bad "verify missing"
 grep_run "Aligned" status && ok "status aligned after backup" || bad "alignment"
 
 echo "== activity log (opt-in OCED_LOG) =="

@@ -5,8 +5,8 @@ oc_exports_rows() {
     local mode="$1"
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
-        printf '__DELETE_ALL__\tdelete ALL export runs\n'
-        printf '__KEEP_NEWEST__\tdelete all but the newest\n'
+        printf '__DELETE_ALL__\t[delete all]\n'
+        printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
     [ -d "$OCED_OUT" ] || { printf '__NONE__\t(no export runs yet)\n'; return 0; }
     local run

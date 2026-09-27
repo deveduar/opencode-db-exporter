@@ -78,8 +78,8 @@ echo "== small helpers =="
 reset
 [ "$(oc_sel_key $'keyX\tlabel')" = "keyX" ] && ok "oc_sel_key extracts the hidden key" || bad "oc_sel_key"
 ARROW=$'\u2192'
-[ "$(oc_toggle_row verify delete)" = "__TOGGLE__"$'\t'"[>] verify  ${ARROW}  delete" ] && ok "oc_toggle_row builds the toggle row" || bad "oc_toggle_row: $(oc_toggle_row verify delete)"
-[ "$(oc_toggle_row 'subagents: shown' 'subagents: hidden' __SUBS__ | cut -f1)" = "__SUBS__" ] && ok "oc_toggle_row takes an optional key" || bad "oc_toggle_row key"
+[ "$(oc_toggle_row view remove)" = "__TOGGLE__"$'\t'"[*] view  ${ARROW}  remove" ] && ok "oc_toggle_row builds the [*] toggle row" || bad "oc_toggle_row: $(oc_toggle_row view remove)"
+[ "$(oc_toggle_row 'subagents: shown' hidden __SUBS__ | cut -f1)" = "__SUBS__" ] && ok "oc_toggle_row takes an optional key" || bad "oc_toggle_row key"
 [ "$(oc_stamp_human '2026-09-21_08-30')" = "2026-09-21 08:30 UTC" ] && ok "oc_stamp_human formats a stamp" || bad "oc_stamp_human"
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
@@ -134,7 +134,7 @@ run_menu --cat "test" --entries oc_test_entries >/dev/null
 qempty
 run_menu --cat "test" --entries oc_test_entries >/dev/null; [ $? -eq 2 ] && ok "run_menu ESC climbs a level (rc 2)" || bad "run_menu ESC climb"
 
-echo "== backups picker (single mode: create / shrink / bulk / per-file delete) =="
+echo "== backups picker (create / view-remove toggle / bulk / per-file) =="
 reset
 mkdir -p "$OCED_BACKUP_DIR"
 jq -n '{backups: [
@@ -146,17 +146,37 @@ jq -n '{backups: [
 ]}' > "$OCED_BACKUP_DIR/manifest.json"
 confirm_action() { return 0; }
 
+# view mode: a listed backup shows its details (the CLI also runs the sha check)
 : > "$CALLS"; call_log
 qset "fake-2.db"
 oc_backups_picker >/dev/null
-grep -qx "backups remove fake-2.db --yes" "$CALLS" && ok "selecting a backup row deletes it (confirmed)" || bad "backups delete: $(cat "$CALLS")"
+grep -qx "backups view fake-2.db" "$CALLS" && ok "selecting a backup row shows its details" || bad "backups view: $(cat "$CALLS")"
+grep -q "backups (view)" "$FZF_HIST" && ok "backups picker opens in view mode" || bad "backups initial mode"
 
-echo "== backups rows: create first, bulk rows, no mode toggle, no shrink =="
+# remove mode: the same row deletes it, behind the confirmation
+: > "$CALLS"
+qset "__TOGGLE__" "fake-2.db"
+oc_backups_picker >/dev/null
+grep -qx "backups remove fake-2.db --yes" "$CALLS" && ok "in remove mode a backup row deletes it (confirmed)" || bad "backups delete: $(cat "$CALLS")"
+grep -q "backups (remove)" "$FZF_HIST" && ok "the toggle reaches remove mode" || bad "backups remove mode not reached"
+
+echo "== backups rows: [>] create first, [*] toggle, destructive rows only in remove =="
 reset
-ROWS=$(oc_backups_rows)
-printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "create backup is the first row" || bad "create not first"
-printf '%s\n' "$ROWS" | grep -q '__SHRINK__' && bad "shrink row leaked into backups" || ok "backups rows have NO shrink row (dedicated shrinks entry)"
-printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && bad "mode toggle leaked into backups" || ok "backups picker has a single mode (no toggle)"
+VROWS=$(oc_backups_rows view)
+RROWS=$(oc_backups_rows remove)
+TAB=$(printf '\t')
+printf '%s\n' "$VROWS" | head -1 | grep -qxF "__CREATE__${TAB}[>] create backup" \
+    && ok "create backup is the first row" || bad "create not first: $(printf '%s\n' "$VROWS" | head -1)"
+printf '%s\n' "$VROWS" | grep -q '__SHRINK__' && bad "shrink row leaked into backups" || ok "backups rows have NO shrink row (dedicated shrinks entry)"
+printf '%s\n' "$VROWS" | grep -qxF "__TOGGLE__${TAB}[*] view  ${ARROW}  remove" \
+    && ok "view mode has the [*] view -> remove toggle" || bad "toggle row: $(printf '%s\n' "$VROWS" | grep __TOGGLE__)"
+printf '%s\n' "$RROWS" | grep -qxF "__TOGGLE__${TAB}[*] remove  ${ARROW}  view" \
+    && ok "the toggle follows the mode" || bad "remove toggle: $(printf '%s\n' "$RROWS" | grep __TOGGLE__)"
+printf '%s\n' "$VROWS" | grep -q '__DELETE_ALL__\|__KEEP_NEWEST__' && bad "view mode offers destructive rows" || ok "view mode has NO delete rows"
+printf '%s\n' "$RROWS" | grep -qxF "__DELETE_ALL__${TAB}[delete all]" \
+    && ok "remove mode has [delete all]" || bad "delete all row: $(printf '%s\n' "$RROWS" | grep __DELETE_ALL__)"
+printf '%s\n' "$RROWS" | grep -qxF "__KEEP_NEWEST__${TAB}[delete olds]" \
+    && ok "remove mode has [delete olds]" || bad "delete olds row: $(printf '%s\n' "$RROWS" | grep __KEEP_NEWEST__)"
 
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
@@ -165,18 +185,18 @@ oc_backups_picker >/dev/null
 grep -qx "backup" "$CALLS" && ok "backups picker offers create backup" || bad "backups create: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "__DELETE_ALL__"
+qset "__TOGGLE__" "__DELETE_ALL__"
 oc_backups_picker >/dev/null
 grep -qx "backups remove fake-0.db --yes" "$CALLS" && grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups delete-all removes every backup (confirmed)" || bad "backups delete-all: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "__KEEP_NEWEST__"
+qset "__TOGGLE__" "__KEEP_NEWEST__"
 oc_backups_picker >/dev/null
-grep -qx "backups remove fake-3.db --yes" "$CALLS" && ! grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups keep-newest removes all but the newest" || bad "backups keep-newest: $(cat "$CALLS")"
+grep -qx "backups remove fake-3.db --yes" "$CALLS" && ! grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups delete olds removes all but the newest" || bad "backups keep-newest: $(cat "$CALLS")"
 
 : > "$CALLS"
 confirm_action() { return 1; }
-qset "__DELETE_ALL__"
+qset "__TOGGLE__" "__DELETE_ALL__"
 oc_backups_picker >/dev/null
 [ ! -s "$CALLS" ] && ok "backups delete-all cancelled on 'n'" || bad "backups delete-all ran on 'n'"
 confirm_action() { return 0; }
@@ -402,23 +422,26 @@ oc_export_sessions_pick >/dev/null 2>&1
 grep -q 'subagents: shown' "$XROWS.3" && ok "the row flips back to shown" || bad "row not restored: $(grep '__SUBS__' "$XROWS.3")"
 [ "$(grep -c '^ses_' "$XROWS.3")" = "6" ] && ok "re-showing restores the 3 subagent rows" || bad "rows restored: $(grep -c '^ses_' "$XROWS.3")"
 
-# A hidden run: roots-only CSV + the --no-subagents guarantee.
+# A hidden run: CSV expanded to include ALL subagents of marked roots (cascade).
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
 qset "__SUBS__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
-grep -q -- "--no-subagents" "$CALLS" && ok "a hidden run pins --no-subagents" || bad "no --no-subagents: $(cat "$CALLS")"
+grep -q -- "--no-subagents" "$CALLS" && bad "a hidden run should NOT pin --no-subagents" || ok "a hidden run does NOT pin --no-subagents"
+# CSV should include roots + their subagents (A1,A2,A3,B1,B2,orphan)
 grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, - \
-    | grep -qx "ses_A0001,ses_B0001,ses_ORPHAN01" \
-    && ok "the CSV holds the 3 roots only" || bad "hidden csv: $(cat "$CALLS")"
+    | grep -qx "ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01" \
+    && ok "the CSV holds roots + their subagents (full cascade)" || bad "hidden csv: $(cat "$CALLS")"
 # The cascade: un-marking a root while hidden leaves its subagents out entirely.
 : > "$CALLS"
 qset "__SUBS__" "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
-grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_A0002\|ses_A0003" \
-    && bad "a subagent reached the CSV of an unmarked root" || ok "unmarked root: its subagents never reach the CSV"
-[ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2)" = "ses_A0001" ] \
-    && ok "the cascade leaves exactly the marked root" || bad "cascade csv: $(cat "$CALLS")"
+# Subagents of UNMARKED roots (B1, B2) should NOT appear.
+grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_B0002" \
+    && bad "a subagent of an unmarked root reached the CSV" || ok "unmarked root: its subagents never reach the CSV"
+# With hide=1, the marked root's subagents ARE expanded into the CSV.
+[ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, -)" = "ses_A0001,ses_A0002,ses_A0003" ] \
+    && ok "the cascade expands the marked root with its subagents" || bad "cascade csv: $(cat "$CALLS")"
 # A SHOWN run is explicit: un-marking ONE root keeps its subagents selected, and
 # the engine then exports them standalone — the case --no-orphan-subagents fixes.
 : > "$CALLS"
@@ -472,27 +495,28 @@ grep -q "standalone" "$TMP/conf.txt" && bad "an all-marked run warned about stan
 [ "$(oc_export_standalone_subs '')" = "0" ] && ok "helper: an empty CSV is 0" \
     || bad "helper empty: $(oc_export_standalone_subs '')"
 
-# A real hidden run (no tool logger): 3 roots, 0 subagents on disk.
+# A real hidden run (no tool logger): 3 roots + 3 subagents on disk.
 reset; confirm_action() { return 0; }
 before=$(count_meta transcript)
 qset "__SUBS__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "hidden run created exactly one export" || bad "hidden run count"
 MH=$(newest_meta transcript)
-# subagents_hidden is 0 here: the exact-id CSV never matched a subagent, so the
-# flag had nothing to drop (it is 3 for the same run driven by --filter/ALL).
-jq -e '.no_subagents == true and .subagents_hidden == 0 and .sessions.total == 3
-       and .sessions.subagents == 0' "$MH" >/dev/null \
-    && ok "real hidden run exports 3 roots, 0 subagents" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
+# Hidden mode now expands CSV to include all subagents of selected roots.
+# The flag --no-subagents is NOT used; all 6 sessions are exported.
+jq -e '.no_subagents == false and .sessions.total == 6
+       and .sessions.subagents == 3' "$MH" >/dev/null \
+    && ok "real hidden run exports 3 roots + 3 subagents (cascade)" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
 MH="${MH%/metadata.json}"
-[ -z "$(find "$MH" -type d -name subagents)" ] && ok "no subagents/ folder in a hidden run" || bad "subagents folder leaked"
-# The confirmation tells the user the subagents are excluded.
+# Subagents folder IS expected now (we export subagents in hidden mode).
+[ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run (cascade exported)" || bad "subagents folder missing"
+# The confirmation tells the user subagents are cascaded.
 reset; confirm_action() { return 0; }
 XOUT="$TMP/xconfirm.txt"
 qset "__SUBS__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$XOUT" 2>&1
-grep -q 'Menu adds:.*--no-subagents' "$XOUT" \
-    && ok "the plan names the flag the menu itself adds" || bad "plan menu-adds row: $(grep 'Menu adds' "$XOUT")"
+grep -q 'Menu adds: subagents cascaded from selected roots' "$XOUT" \
+    && ok "the plan says subagents are cascaded" || bad "plan menu-adds row: $(grep 'Menu adds' "$XOUT")"
 grep -qE '^   Sessions: +the 3 sessions you marked' "$XOUT" \
     && ok "the plan says which sessions are selected" || bad "plan sessions row: $(grep 'Sessions:' "$XOUT")"
 grep -q 'Will produce:' "$XOUT" && ok "the plan still lists what will be produced" || bad "will-produce block missing"
@@ -522,8 +546,9 @@ grep -qE '^   Sessions: +all 6 sessions in the DB' "$TMP/c3.txt" \
 grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is marked" || bad "c3 cmd: $(cat "$CALLS")"
 # 4) a preset that already drops subagents: the switch cannot widen it, and the
 #    plan says that instead of letting the user toggle in vain.
+#    Use ALL_IDS (roots + subagents) so "explicitly unmarked" doesn't trigger.
 : > "$CALLS"
-oc_preset_run nosub "" "ses_A0001,ses_B0001,ses_ORPHAN01" 0 > "$TMP/c4.txt" 2>&1
+oc_preset_run nosub "" "$ALL_IDS" 0 > "$TMP/c4.txt" 2>&1
 grep -q 'the preset drops every subagent' "$TMP/c4.txt" \
     && ok "a subagent-dropping preset is called out in the plan" || bad "c4: $(grep 'Note:' "$TMP/c4.txt")"
 grep -qE '^   Menu adds: +nothing' "$TMP/c4.txt" \
@@ -615,7 +640,8 @@ oced_out list --order nope >/dev/null 2>&1 && bad "an invalid --order was accept
 qset "__TOGGLE__" "__NONE__" "ses_A0001" "__TOGGLE__" "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink > "$TMP/order.txt"
 grep -q 'newest first' "$FZF_HIST" && ok "the sessions picker opens sorted newest first" || bad "order mode: $(grep -o '[0-9]*/[0-9]* marked . [a-z ]*' "$FZF_HIST" | head -2 | tr '\n' '/')"
-grep -q 'oldest first' "$FZF_HIST" && ok "the order row switches to oldest first (status follows)" || bad "order toggle label missing"
+grep -q 'old first' "$FZF_HIST" && ok "the order row switches to old first (status follows)" || bad "order toggle label missing"
+grep -q 'oldest first' "$FZF_HIST" && bad "the long 'oldest first' label is back" || ok "the order states are short in both the row and the status"
 [ "$(grep -c '^-> shrink plan' "$TMP/order.txt")" = "1" ] && ok "re-ordering keeps the picker usable (one plan)" || bad "plan count after re-order"
 grep -qx "shrink --discard-sessions ses_ORPHAN01,ses_B0001" "$CALLS" \
     && ok "the marks survive the order switch (2nd __TOGGLE__ did not reset them)" || bad "marks after re-order: $(cat "$CALLS")"
@@ -629,7 +655,7 @@ qempty
 reset
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-grep -q '^__TOGGLE__.*\[>\] newest first  →  oldest first$' "$TMP/sessions_rows.txt" \
+grep -q '^__TOGGLE__.*\[\*\] newest first  →  old first$' "$TMP/sessions_rows.txt" \
     && ok "the order row advertises the current mode and the reverse sort" || bad "order row missing"
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
@@ -668,8 +694,39 @@ for row in __LAST__ __OLDEST__ __DAYS__; do
         || ok "the sessions picker dropped the $row row"
 done
 # what remains is only the two state rows (no recency, no counts)
-[ "$(cut -f2 "$TMP/nobulk.txt" | grep -cE '^(mark|unmark) all$')" = "2" ] \
-    && ok "the only bulk rows left are mark all / unmark all" || bad "bulk rows: $(cut -f2 "$TMP/nobulk.txt" | grep -E '^(mark|unmark) all$' | tr '\n' '/')"
+[ "$(cut -f2 "$TMP/nobulk.txt" | grep -cE '^\[(un)?mark all\]$')" = "2" ] \
+    && ok "the only bulk rows left are [mark all] / [unmark all]" || bad "bulk rows: $(cut -f2 "$TMP/nobulk.txt" | grep -E '^\[(un)?mark all\]$' | tr '\n' '/')"
+
+# The symbol system is a CONTRACT, not a style: one bracket, and the token says
+# what the row does. Guarded here so a new row cannot invent its own marker.
+echo "== symbol system: [>] flow · [?] inspect · [*] toggle · [word] bulk =="
+reset
+: > "$TMP/symbols.txt"
+( oc_fzf_sel() { tee -a "$TMP/symbols.txt" | fzf "$@"; }
+  qempty
+  # the *pickers* pipe their rows through oc_fzf_sel (captured by the stub);
+  # the row producers are called directly, so their stdout IS the capture.
+  { oc_backups_rows view; oc_backups_rows remove;
+    oc_exports_rows view; oc_exports_rows remove;
+    oc_shrinks_rows view; oc_shrinks_rows remove; } >> "$TMP/symbols.txt" 2>/dev/null
+  oc_export_sessions_pick >/dev/null 2>&1
+  oc_shrink_sessions_pick >/dev/null 2>&1 )
+reset
+ALLOWED='\[>\]|\[\?\]|\[\*\]|\[delete all\]|\[delete olds\]|\[mark all\]|\[unmark all\]|\[x\]|\[ \]'
+SEEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' ')
+for tok in '[>]' '[?]' '[*]' '[delete all]' '[delete olds]' '[mark all]' '[x]'; do
+    case "$SEEN" in *"$tok"*) ;; *) bad "the symbol sample never rendered a $tok row" ;; esac
+done
+ok "the symbol sample covers $SEEN"
+BADTOKEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | grep -vxE "$ALLOWED")
+[ -z "$BADTOKEN" ] && ok "no invented bracket tokens ($(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' '))" \
+    || bad "unknown bracket tokens: $BADTOKEN"
+BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__')
+[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset)" || bad "[>] leaked onto: $BADFLOW"
+BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__')
+[ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify)" || bad "[?] leaked onto: $BADINSPECT"
+NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
+[ "$NOTOGGLE" = "0" ] && ok "every toggle row carries [*]" || bad "toggle rows without [*]: $NOTOGGLE"
 
 : > "$CALLS"
 qset "__NONE__" "__MAKE__"

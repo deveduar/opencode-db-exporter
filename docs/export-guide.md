@@ -122,7 +122,7 @@ opencode-db menu  →  Export
    switch has a consequence the rows cannot show. You can:
    - Toggle individual sessions with Enter
    - Use the two bulk rows: `mark all`, `unmark all`
-   - Flip the sort with the `[>] newest first → oldest first` row (re-sorting keeps your marks)
+   - Flip the sort with the `[*] newest first  →  old first` row (re-sorting keeps your marks)
    - Flip `subagents: shown → hidden` (hidden rows are not rendered, so they can never be marked nor exported)
    - Press `[>] choose the preset` to continue
 

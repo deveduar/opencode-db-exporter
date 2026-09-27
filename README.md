@@ -49,7 +49,7 @@ opencode-db info <session_id>         # tokens, cost, compactions, counts
 opencode-db compactions <session_id> [show [last|N|all]]
                                       # compaction points; 'show' prints the digest
 opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
-opencode-db backups [list|verify <file>|prune <N>]
+opencode-db backups [list|view <file>|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | compactions
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
@@ -68,29 +68,41 @@ opencode-db help
 
 The interactive menu is **picker-driven**: the main pickers are real fzf lists, not nested
 menus. There is **no TAB multi-select** — mode switching and bulk operations are their own
-rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
-**single-mode**; the export picker is **preset-only** (it needs a presets file).
+rows. The `backups`, `exports` and `shrinks` pickers have a `view`/`remove` toggle; the
+`sessions` picker is details-only and the export picker is **preset-only** (it needs a
+presets file).
+
+Every row carries one marker that says what it does:
+
+| Marker | What the row does | Examples |
+| --- | --- | --- |
+| `[>]` | opens a flow (create / swap / continue) | `[>] create backup`, `[>] swap a copy into the LIVE DB`, `[>] choose the preset` |
+| `[?]` | inspects something | `[?] verify` |
+| `[*]` | flips a mode and re-renders (shows both states) | `[*] view  →  remove`, `[*] newest first  →  old first`, `[*] subagents: shown  →  hidden` |
+| `[word]` | bulk action | `[mark all]`, `[unmark all]`, `[delete all]`, `[delete olds]` |
+| `[x]` / `[ ]` | whether a session is included | `[x] My session (2 sub)` |
 
 - **status** — the full report (DB, backups alignment, version/schema, dependencies) + pause.
   The header counts (DB/sessions/WAL/backups/exports) are recomputed on every root loop, so
   they are never stale after an action.
-- **backups** picker (single mode) — rows: `create backup (consistent snapshot)`,
-  `delete ALL backups`, `delete the olds (keep the newest)` and one row per backup
-  (date/size/sessions/msgs/sha).
-  Selecting a row removes it with confirmation. Shrink creation lives in its own **shrinks**
-  picker. Verify stays in the CLI (`backups verify <file>`), for after-copy or before
-  `--from-backup` checks.
+- **backups** picker (create + manage) — rows: `[>] create backup`, then the
+  `[*] view  →  remove` toggle, then in remove mode `[delete all]` / `[delete olds]`, then one
+  row per backup (date/size/sessions/msgs/sha).
+  In **view** mode a row shows that backup's details — `backups view <file>` prints the
+  manifest record, **runs the sha256 check** (`[OK]` / `[FAIL]` with both hashes /
+  `[MISSING]`), how it compares to the live DB and how to use it with `--from-backup`; in
+  **remove** mode the same row deletes it with confirmation. Shrink creation lives in its
+  own **shrinks** picker.
 - **sessions** picker (details only) — one row per session; selecting one shows the full
   info + compaction digests.
-- **shrinks** picker (create + manage) — rows: `create shrink copy` (a 3-step wizard
+- **shrinks** picker (create + manage) — rows: `[>] create shrink copy` (a 3-step wizard
   from the LIVE DB, own snapshot), `[>] swap a copy into the LIVE DB` (destructive,
-  requires typing `confirm` — the copy is checked for staleness first), `verify`,
-  a `view`/`remove` toggle (remove mode adds `delete ALL shrink copies` /
-  `delete all but the newest` and one row per
-  produced copy). Creating a copy asks, in order: **(1) sessions** — one row per ROOT
+  requires typing `confirm` — the copy is checked for staleness first), `[?] verify`,
+  a `[*] view  →  remove` toggle (remove mode adds `[delete all]` / `[delete olds]` and one
+  row per produced copy). Creating a copy asks, in order: **(1) sessions** — one row per ROOT
   session with a `(N sub)` badge, `[x]` = survive (default all marked; `mark all` /
   `unmark all`; `continue` moves on), sorted **newest used first** with a row to flip
-  to oldest first (re-sorting keeps your marks),
+  to old first (re-sorting keeps your marks),
   **(2) the recipe** — `lean` (strip reasoning) or `quiet` (prune + vacuum), and nothing
   else: picking one goes straight to **(3) the plan** — the exact read-only counts
   (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
@@ -101,12 +113,12 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
   first** with a row to flip to oldest (re-sorting keeps your marks) and a `(N sub)`
   badge per root. The header is one line of live state (`3/6 marked · newest first`),
   plus a caveat line when a switch has a consequence the rows cannot show. A second switch row, `subagents: shown ⇄ hidden`,
-  hides the subagent rows: while hidden they are not shown and never exported, so
-  un-marking a session takes its subagents with it and the run pins `--no-subagents`
-  (a session whose parent is gone is a root, so it is never hidden). While *shown*, each
-  subagent is its own row with its own mark — un-marking it drops it, and un-marking its
-  session does **not**: it still exports, standalone, and the confirmation says how many
-  will before you start. **(2) the preset**
+  toggles subagent visibility: while **hidden** they are not shown and the run exports
+  the full cascade of subagents for every marked root (no `--no-subagents` flag);
+  while **shown**, each subagent is its own row with its own mark — un-marking it drops
+  it, and the confirmation reports how many were explicitly unmarked. Un-marking its
+  session does **not** drop the subagent: it still exports, standalone, and the
+  confirmation says how many will before you start. **(2) the preset**
   — one row per named plan in the presets file (bundle plans render
   `[transcript+memory]`) — and then the confirmation. Marking every session runs the
   preset as configured; a partial selection runs it with `--sessions <ids>`.
@@ -114,15 +126,14 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
   preset that pins its own `filter`/`sessions` can never look like your marks won:
   with everything marked you get `filter "%…%" (from the preset) — your 6 marks are not
   used`, and with a partial selection the menu says it overrides the preset. A
-  `Menu adds:` line names only what the menu itself contributes (currently
-  `--no-subagents`), and a `Note:` line warns about consequences the rows cannot show.
-  Without a presets file the export entry prints the setup guidance
+  `Menu adds:` line names only what the menu itself contributes (subagent cascade in
+  hidden mode, nothing in shown mode), and a `Note:` line warns about consequences
+  the rows cannot show. Without a presets file the export entry prints the setup guidance
   (`cp presets.json.example …`) and points at the raw CLI — there is no manual
   session→product picker anymore.
-- **Export runs** picker (mode `view` / `remove`) — rows: the `[>] view → remove`
-  toggle, then in remove mode `delete ALL export runs` / `delete all but the newest`,
-  then one row per run (date/profiles/roots/messages/size). `view` shows the run,
-  `remove` deletes it.
+- **Export runs** picker (mode `view` / `remove`) — rows: the `[*] view  →  remove`
+  toggle, then in remove mode `[delete all]` / `[delete olds]`, then one row per run
+  (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
 
 Export flow: session selection → plan → confirmation (`Will produce:` block per product,
 with the effective flags) → run. Mark sessions in the picker (`[x]` = include), then pick

@@ -602,9 +602,63 @@ were designed. They are gone now, and the reason is worth keeping:
   the marks are ignored), `Menu adds:` (only the menu's own flags) and `Note:`
   (consequences a row cannot show). The duplicated `Spec:` CSV/descriptions are gone.
 - **Copy pass**: one line of live state per render (`N/M marked · order · ESC: back`),
-  a caveat line only when a switch has a hidden consequence, `[>] current → other` for
-  every toggle row, short root entries (`Export — pick sessions, then a preset`), and
+  a caveat line only when a switch has a hidden consequence, a `current → other` toggle
+  row (the marker was still `[>]` here; §23 moves toggles to `[*]`), short root entries (`Export — pick sessions, then a preset`), and
   empty picker headers where the status line already says everything.
 - **Verified** — `tests/export_smoke.sh` `240 OK`, `tests/menu_flow.sh` `195 OK`
   (the recency rules, their validation, `.selection` provenance, the `Selection` row, the
   bundle forwarding, and the four effective-selection cases of the confirmation).
+
+## §23 One marker grammar, and a backups picker you can read (current)
+
+Two complaints started this round, and they turned out to be the same complaint: the
+rows did not say what they did. `backups` offered `verify` in the root entry while the
+picker underneath could only delete, and a selected row jumped straight to a
+confirmation — so the only way to learn what a backup contained was the CLI. Meanwhile
+the same action wore different labels in different pickers (`view`/`remove`,
+`newest first`/`oldest first`, `mark all`, `delete the olds (keep the newest)`), and the
+one marker that did carry meaning (`[>]`, "this opens a flow") was also being used for
+plain toggles.
+
+**Decisions**
+
+- **A marker is a verb, and there is one per class.** `[>]` flow (`__CREATE__`,
+  `__SWAP__`, `__MAKE__`), `[?]` inspect (`__VERIFY__`), `[*]` toggle, `[<word>]` bulk
+  action, `[x]`/`[ ]` per session. Reusing `[>]` for a toggle was the actual defect: the
+  marker was decorative, so it carried no information.
+- **A toggle row shows both states**: `[*] view  →  remove`, `[*] newest first  →  old
+  first`, `[*] subagents: shown  →  hidden`. The current state is what a row is *for*, so
+  it comes first, and the alternative has to be visible before you press it.
+- **Flow rows lost their parenthetical.** `create backup (consistent snapshot)` and
+  `create shrink copy (3-step wizard…)` explained themselves because the row was long, but
+  the sub-picker header and the command output already say it. A row is a row.
+- **`oldest first` became `old first`**: with the arrow in front of it, the long name
+  pushed the destination off the edge.
+- **The grammar is a contract, so it is a test.** `tests/menu_flow.sh` collects the rows of
+  every picker (row producers *and* the pickers themselves, so a `[@@]` cannot hide in a
+  function that never reaches `oc_fzf_sel`) and fails on: a token outside the allow-list,
+  `[>]` on a non-flow row, `[?]` on a non-inspect row, a `__TOGGLE__`/`__SUBS__` row
+  without `[*]`, and a sample that failed to render all eight tokens. The last check is
+  the one that matters: without it a broken capture makes every other assertion pass
+  vacuously. It was verified to fail on a deliberately invented `[@@]` token.
+- **`backups` became `view`/`remove`, and `view` verifies.** Three shapes were on the
+  table: a separate `verify` row, keep both, or fold the check into the details. The check
+  is not optional information about a backup, so a details screen that omitted it would be
+  a trap; a dedicated row would have meant the details were still reachable without it.
+  Hence `backups view <file>` prints the manifest record, runs the sha256 check
+  (`[OK]` / `[FAIL]` with both hashes / `[MISSING]`), shows how the copy compares to the
+  live DB and ends with the `--from-backup` line. `backups verify <file>` stays in the CLI
+  for scripting, and both share `oc_backup_sha_state` so the two can never disagree.
+- **`o_backup_aligned` took an optional file.** It previously answered "is the *last*
+  backup aligned?", which is right for `status` and for the `snapshot: fresh` warning. The
+  view of an *older* copy is only correct if the same helper can be pointed at that copy,
+  so `[file] [-v]` was added: no argument keeps the old default, a file makes the
+  comparison specific.
+- **The rows a mode must not show are gone from that mode.** `[delete all]` /
+  `[delete olds]` appear only in `remove`, mirroring exports and shrinks; a view-mode
+  picker that offers a delete row is a picker one keystroke from a destructive action.
+- **Verified** — `tests/export_smoke.sh` `257 OK` (17 new: the whole `backups view`
+  record, the embedded check, the live-DB line, the restore hint, usage, an unknown file,
+  a tampered copy → `MISMATCH` with both hashes and a deleted one → `MISSING`, plus
+  `verify` agreeing with `view` on both), `tests/menu_flow.sh` `207 OK` (12 new: the
+  view/remove matrix, the exact row copy of both modes, and the symbol guard).

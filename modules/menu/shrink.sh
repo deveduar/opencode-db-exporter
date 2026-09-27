@@ -250,13 +250,13 @@ oc_pick_shrink() {
 # --------------------------------------------------------------------
 oc_shrinks_rows() {
     local mode="$1" run
-    printf '__CREATE__\tcreate shrink copy (pruned + VACUUMed from the LIVE DB)\n'
-    printf '__SWAP__\t[>] swap a copy into the LIVE DB (type "confirm")\n'
-    printf '__VERIFY__\tverify (orphan dirs, old pre-shrinks, stale copies)\n'
+    printf '__CREATE__\t[>] create shrink copy\n'
+    printf '__SWAP__\t[>] swap a copy into the LIVE DB\n'
+    printf '__VERIFY__\t[?] verify\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
-        printf '__DELETE_ALL__\tdelete ALL shrink copies\n'
-        printf '__KEEP_NEWEST__\tdelete all but the newest\n'
+        printf '__DELETE_ALL__\t[delete all]\n'
+        printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
     local -a runs=()
     mapfile -t runs < <(shrinks_runs_find)

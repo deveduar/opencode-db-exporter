@@ -131,25 +131,55 @@ o_db_uri() { printf 'file:%s?mode=ro' "$(o_effective_db)"; }
 
 o_q() { sqlite3 "$(o_db_uri)" "$@"; }
 
-# o_backup_aligned -> checks if the last backup is aligned with current live DB.
+# o_backup_aligned [file] [-v] -> is a backup aligned with the current live DB?
+#   (no file) : the LAST manifest entry — what every caller wants by default
+#   file      : that specific entry, so `backups view <file>` can say how a copy
+#               that is NOT the newest compares to the live DB
+#   -v        : print the counts too, not just the verdict
 # Prints "aligned" or "out of sync" and returns 0 if aligned, 1 if not.
 o_backup_aligned() {
+    local want="" verbose=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -v) verbose=1 ;;
+            *)  want="$1" ;;
+        esac
+        shift
+    done
     local manifest="$OCED_BACKUP_DIR/manifest.json"
     [ -f "$manifest" ] || { echo "no backups"; return 1; }
-    local last_idx msess mmess mu tsess tmess tu
-    last_idx=$(jq -r '.backups | length - 1' "$manifest" 2>/dev/null || echo -1)
-    [ "$last_idx" -ge 0 ] || { echo "no backups"; return 1; }
-    msess=$(jq -r --argjson i "$last_idx" '.backups[$i].sessions' "$manifest" 2>/dev/null || echo 0)
-    mmess=$(jq -r --argjson i "$last_idx" '.backups[$i].messages' "$manifest" 2>/dev/null || echo 0)
-    mu=$(jq -r --argjson i "$last_idx" '.backups[$i].max_updated' "$manifest" 2>/dev/null || echo 0)
+    # One entry, resolved either by name or as the newest — never both, so the
+    # default path keeps its meaning: "is my LAST backup aligned?".
+    local entry=""
+    if [ -n "$want" ]; then
+        entry=$(jq -r --arg f "$want" '.backups[]? | select(.file == $f)' "$manifest" 2>/dev/null) || entry=""
+        # Not in the manifest = nothing to compare against; answer the safe way.
+        [ -n "$entry" ] || { echo "out of sync"; return 1; }
+    else
+        entry=$(jq -r '.backups[-1] // empty' "$manifest" 2>/dev/null) || entry=""
+    fi
+    [ -n "$entry" ] || { echo "no backups"; return 1; }
+    local msess mmess mu tsess tmess tu
+    msess=$(printf '%s' "$entry" | jq -r '.sessions // 0')
+    mmess=$(printf '%s' "$entry" | jq -r '.messages // 0')
+    mu=$(printf '%s' "$entry" | jq -r '.max_updated // 0')
     tsess=$(o_q "SELECT count(*) FROM session" 2>/dev/null || echo 0)
     tmess=$(o_q "SELECT count(*) FROM message" 2>/dev/null || echo 0)
     tu=$(o_q "SELECT max(time_updated) FROM session" 2>/dev/null || echo 0)
     if [ "$msess" = "$tsess" ] && [ "$mmess" = "$tmess" ] && [ "$mu" = "$tu" ]; then
-        echo "aligned"
+        if [ "$verbose" -eq 1 ]; then
+            printf 'aligned (this: %s sess/%s msg)\n' "$msess" "$mmess"
+        else
+            printf 'aligned\n'
+        fi
         return 0
     else
-        echo "out of sync"
+        if [ "$verbose" -eq 1 ]; then
+            printf 'out of sync (this: %s sess/%s msg · live: %s sess/%s msg)\n' \
+                "$msess" "$mmess" "$tsess" "$tmess"
+        else
+            printf 'out of sync\n'
+        fi
         return 1
     fi
 }
@@ -157,6 +187,25 @@ o_backup_aligned() {
 o_human_size() {
     local bytes="$1"
     if [ -n "$bytes" ]; then numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || printf '%s' "$bytes"; fi
+}
+
+# o_human_iso <ISO-8601 UTC> -> "YYYY-MM-DD HH:MM:SS UTC"; passthrough if unparsable.
+o_human_iso() {
+    local d="$1" out=""
+    [ -n "$d" ] || { printf '%s' "-"; return 0; }
+    out=$(date -u -d "$d" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null) || out=""
+    printf '%s' "${out:-$d}"
+}
+
+# o_human_ms <epoch ms> -> "YYYY-MM-DD HH:MM:SS UTC"; 0/absent/garbage -> "-".
+o_human_ms() {
+    local ms="$1" out=""
+    case "$ms" in
+        '' | *[!0-9]*) printf '%s' "${ms:--}"; return 0 ;;
+    esac
+    [ "$ms" -gt 0 ] 2>/dev/null || { printf '%s' "-"; return 0; }
+    out=$(date -u -d "@$((ms / 1000))" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null) || out=""
+    printf '%s' "${out:--}"
 }
 
 o_check_deps() {

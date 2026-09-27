@@ -25,6 +25,75 @@ manifest_write() {
     mv -f "$t" "$m"
 }
 
+# oc_backup_sha_state <record-json> -> "state<TAB>manifest-sha<TAB>file-sha" on
+# stdout, with state = OK | MISMATCH | MISSING (the hashes are "-" when they
+# could not be read). `verify` and `view` share it so a backup can never be
+# described one way in the details and another way by the check.
+oc_backup_sha_state() {
+    local rec="$1" f expect actual path
+    f=$(printf '%s' "$rec" | jq -r '.file // ""')
+    expect=$(printf '%s' "$rec" | jq -r '.sha256 // "-"')
+    path="$OCED_BACKUP_DIR/$f"
+    if [ ! -f "$path" ]; then
+        printf 'MISSING\t%s\t-\n' "$expect"
+        return 2
+    fi
+    actual=$(sha256sum "$path" | cut -d' ' -f1)
+    if [ "$actual" = "$expect" ]; then
+        printf 'OK\t%s\t%s\n' "$expect" "$actual"
+        return 0
+    fi
+    printf 'MISMATCH\t%s\t%s\n' "$expect" "$actual"
+    return 1
+}
+
+# oced_backups_view <file> -> what the manifest recorded for a backup, whether
+# the file on disk still matches it, and how it compares to the live DB.
+# The sha check lives HERE (not in a separate `verify` row) so a details view
+# can never show a backup nobody has ever validated.
+oced_backups_view() {
+    local f="${1:-}" rec
+    [ -n "$f" ] || { echo "Usage: opencode-db backups view <backup-file>"; return 1; }
+    rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$(manifest_path)")
+    [ -n "$rec" ] || { echo "Not in the manifest: $f"; echo "Try: opencode-db backups list"; return 1; }
+
+    local date size size_raw sess msgs parts mu src stored_line align
+    date=$(printf '%s' "$rec" | jq -r '.date // "-"')
+    size=$(printf '%s' "$rec" | jq -r '.size // 0')
+    size_raw=$(printf '%s' "$rec" | jq -r '.size_raw // 0')
+    sess=$(printf '%s' "$rec" | jq -r '.sessions // 0')
+    msgs=$(printf '%s' "$rec" | jq -r '.messages // 0')
+    parts=$(printf '%s' "$rec" | jq -r '.parts // 0')
+    mu=$(printf '%s' "$rec" | jq -r '.max_updated // 0')
+    src=$(printf '%s' "$rec" | jq -r '.source // "-"')
+
+    stored_line="$(o_human_size "$size") on disk"
+    [ "$size" != "$size_raw" ] && stored_line+=" · $(o_human_size "$size_raw") before gzip"
+    case "$f" in *.gz) stored_line+=" (gzipped)" ;; esac
+
+    echo "== Backup: $f =="
+    printf '  %-12s %s\n' "Created:" "$(o_human_iso "$date")"
+    printf '  %-12s %s\n' "Size:" "$stored_line"
+    printf '  %-12s %s sessions · %s messages · %s parts\n' "Content:" "$sess" "$msgs" "$parts"
+    printf '  %-12s %s\n' "Newest:" "$(o_human_ms "$mu")"
+    printf '  %-12s %s\n' "Source DB:" "$src"
+
+    local state expect actual
+    IFS=$'\t' read -r state expect actual < <(oc_backup_sha_state "$rec")
+    printf '  %-12s %s…%s (manifest)\n' "sha256:" "${expect:0:12}" "${expect: -4}"
+    case "$state" in
+        OK)       echo "  [OK]         the file matches the manifest" ;;
+        MISMATCH) echo "  [FAIL]       sha256 MISMATCH"
+                   echo "                 manifest: $expect"
+                   echo "                 file:     $actual" ;;
+        *)        echo "  [MISSING]    $OCED_BACKUP_DIR/$f" ;;
+    esac
+
+    align=$(o_backup_aligned "$f" -v 2>/dev/null || true)
+    printf '  %-12s %s\n' "vs live DB:" "${align:-$f is not in the manifest}"
+    echo "  Restore:     opencode-db --from-backup $f <command>"
+}
+
 oced_backup() {
     o_check_deps
     o_db_exists
@@ -127,30 +196,31 @@ oced_backups() {
             echo "== Backups ($n) =="
             jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + (.value.date | sub("T"; "_") | sub("Z$"; "")) + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
             echo ""
-            echo "  verify <file>  ·  prune <N>"
+            echo "  view <file>  ·  verify <file>  ·  prune <N>"
             ;;
+        view)   shift; oced_backups_view "$@" ;;
         verify)
-            local f="${2:-}"
+            shift
+            local f="${1:-}" rec state expect actual
             [ -n "$f" ] || { echo "Usage: opencode-db backups verify <backup-file>"; return 1; }
-            local rec
-            rec=$(jq -r --arg f "$f" '.backups[] | select(.file == $f)' "$manifest")
+            rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$manifest")
             [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
-            local expect actual
-            expect=$(printf '%s' "$rec" | jq -r '.sha256')
-            if [ -f "$OCED_BACKUP_DIR/$f" ]; then
-                actual=$(sha256sum "$OCED_BACKUP_DIR/$f" | cut -d' ' -f1)
-                [ "$actual" = "$expect" ] && echo "[OK]   $f  sha256 matches" \
-                    || { echo "[FAIL] $f  sha256 MISMATCH"; echo "   manifest: $expect"; echo "   file:     $actual"; }
-            else
-                echo "File not found: $OCED_BACKUP_DIR/$f"
-            fi
+            IFS=$'\t' read -r state expect actual < <(oc_backup_sha_state "$rec")
+            case "$state" in
+                OK)       echo "[OK]   $f  sha256 matches" ;;
+                MISMATCH) echo "[FAIL] $f  sha256 MISMATCH"
+                           echo "   manifest: $expect"
+                           echo "   file:     $actual" ;;
+                *)        echo "File not found: $OCED_BACKUP_DIR/$f" ;;
+            esac
             ;;
         remove)
-            local f="${2:-}" yes=0
+            shift
+            local f="${1:-}" yes=0
             [ -n "$f" ] || { echo "Usage: opencode-db backups remove <backup-file> [--yes]"; return 1; }
-            [ "${3:-}" = "--yes" ] && yes=1
+            [ "${2:-}" = "--yes" ] && yes=1
             local rec
-            rec=$(jq -r --arg f "$f" '.backups[] | select(.file == $f)' "$manifest")
+            rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$manifest")
             [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
             if [ "$yes" -eq 0 ]; then
                 local ans
@@ -166,7 +236,8 @@ oced_backups() {
             echo "Removed: $f"
             ;;
         prune)
-            local keep="${2:-}"
+            shift
+            local keep="${1:-}"
             case "$keep" in
                 ''|*[!0-9]*) echo "Usage: opencode-db backups prune <N>  (N = how many to keep)"; return 1 ;;
             esac
@@ -188,6 +259,6 @@ oced_backups() {
             o_log "backups prune keep=$keep removed=$removed"
             echo "Prune: removed $removed file(s); keeping $keep."
             ;;
-        *) echo "Usage: opencode-db backups [list|verify <file>|remove <file> [--yes]|prune <N>]"; return 1 ;;
+        *) echo "Usage: opencode-db backups [list|view <file>|verify <file>|remove <file> [--yes]|prune <N>]"; return 1 ;;
     esac
 }

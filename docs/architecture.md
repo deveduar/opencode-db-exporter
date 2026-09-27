@@ -128,9 +128,11 @@ explanatory message instead of writing an empty artifact.
 
 In the menu this is the sessions picker's `subagents: shown ⇄ hidden` row
 (`get_sub_ids` in the generic picker): a hidden subagent is not rendered, so it cannot
-be marked and never reaches the `--sessions` CSV — the cascade the user asked for is
-structural, not a rule that could drift. A hidden run also pins `--no-subagents` so the
-guarantee survives the "every session marked → run as configured" path.
+be marked and never reaches the CSV — the CSV is expanded **after** the picker to include
+the full recursive cascade of subagents for every marked root. No `--no-subagents` flag
+is used; the expansion is structural, so the guarantee does not depend on a CLI flag.
+In shown mode, each subagent is its own row with its own mark, and the confirm reports
+how many were explicitly unmarked.
 
 ### Faithful JSON (`--json`)
 
@@ -185,6 +187,21 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 
 Picker-driven with real fzf: TSV rows `key<TAB>display` (`--with-nth=2..`), **no
 TAB multi-select** — mode switches and bulk operations are their own rows.
+
+**One marker grammar, not per-picker decoration.** Every row opens with at most one
+bracket and the token states what the row *does*, so the pickers can be read without
+memorising their layout: `[>]` opens a flow (`__CREATE__`/`__SWAP__`/`__MAKE__`),
+`[?]` inspects (`__VERIFY__`), `[*]` toggles and always renders both states
+(`[*] view  →  remove`), `[<word>]` is a bulk action (`[mark all]`, `[unmark all]`,
+`[delete all]`, `[delete olds]`) and `[x]`/`[ ]` stay the per-session marks.
+`oc_toggle_row` is the only implementation of a toggle row, so the mode, order and
+subagent switches cannot drift apart. Two consequences shaped the copy: a flow row no
+longer carries a parenthetical (what a backup copies, what a shrink does) because the
+marker plus the sub-picker header already say it, and `oldest first` became `old first`
+so the two order states are short enough to read in a toggle row.
+`tests/menu_flow.sh` guards the grammar: it collects the rows of every picker, fails on
+any token outside the allow-list, on `[>]` outside a flow row, on `[?]` outside an
+inspect row and on a toggle without `[*]`, and asserts the sample is non-vacuous.
 
 **`menu.sh` is a dispatcher, not a monolith.** It holds `run_menu`/`choose_action`/
 `oc_fzf_sel` and sources the per-domain flows from `modules/menu/`
@@ -248,14 +265,28 @@ rebuilds `ACTION_STATUS` (DB/sessions/WAL/backup/exports counts) after each acti
 pickered deletion is reflected immediately.
 
 **Create + manage in one picker.** Shrink lives in its own root entry: `oc_shrinks_picker`
-offers `[create shrink copy…]` (a **3-step wizard**: sessions → recipe → read-only
-plan, see §5; LIVE DB, own snapshot), a **`__SWAP__`** row that
-swaps the picked copy into the LIVE DB behind `oc_confirm_typed "confirm"` (staleness
-checked via `o_shrink_stale` first), plus a `view`/`remove` toggle with per-run rows and
-the `delete ALL` / `delete old (keep newest)` bulk rows. Rows come from the shrink.sh
-helpers (`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`,
+offers `[>] create shrink copy` (a **3-step wizard**: sessions → recipe → read-only
+plan, see §5; LIVE DB, own snapshot), a `[>] swap a copy into the LIVE DB` row
+(`__SWAP__`) that swaps the picked copy into the LIVE DB behind
+`oc_confirm_typed "confirm"` (staleness checked via `o_shrink_stale` first), a
+`[?] verify` row, plus a `[*] view  →  remove` toggle with per-run rows and the
+`[delete all]` / `[delete olds]` bulk rows. Rows come from the shrink.sh helpers
+(`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`,
 so the menu never re-aggregates jq. This removed the old `__SHRINK__` row from the backups
-picker, which is now just create/delete-all/keep-newest/delete-one.
+picker, which is now create + a `view`/`remove` toggle over the manifest rows.
+
+**A details screen must show something worth trusting.** The backups picker gained the
+same two modes as exports and shrinks (`__CREATE__`, the toggle, the destructive rows in
+remove mode, then one row per backup). In view mode a row runs `backups view <file>`,
+which prints the manifest record *and performs the sha256 check*, because a details screen
+that displays a backup nobody validated is a trap. `oc_backup_sha_state` is the one
+implementation of that check — it backs `backups view` and `backups verify` alike, in the
+same spirit as `o_shrink_stale` being the one staleness check for shrinks — and the view
+adds the `vs live DB` line from `o_backup_aligned <file> -v`. The alignment helper took an
+optional file for that: no argument keeps the "last backup" default every other caller
+wants, a file makes the view of a *non-newest* copy correct. The check is not a separate
+`[?] verify` row in the backups picker because it is not optional information; `verify`
+stays available in the CLI for scripted use.
 
 The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|compactions`). Usage and the decision matrix:

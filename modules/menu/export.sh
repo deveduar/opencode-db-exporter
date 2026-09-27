@@ -111,9 +111,12 @@ oc_preset_run() {
     # preset's own config.
     local menu_adds="nothing"
     local -a extra=()
+    local run_csv="$csv"
     if [ "$hide" = "1" ]; then
-        menu_adds="--no-subagents (subagents are not exported)"
-        extra=(--no-subagents)
+        # Hidden mode: picker only showed roots. Expand to full cascade so all
+        # subagents of selected roots are exported. No --no-subagents flag.
+        run_csv=$(oc_export_expand_subs "$csv")
+        menu_adds="subagents cascaded from selected roots"
     fi
 
     # Consequences the two lines above do not show. In "shown" mode a subagent is
@@ -132,6 +135,13 @@ oc_preset_run() {
                 note+=" (their session is not selected; --no-orphan-subagents would drop them)"
             fi
         fi
+        # Explicitly unmarked subagents in shown mode (user clicked [ ] on them).
+        local n_unmarked
+        n_unmarked=$(oc_export_unmarked_subs "$csv")
+        if [ "$n_unmarked" -gt 0 ]; then
+            if [ -n "$note" ]; then note+=$'\n'; fi
+            note+="$n_unmarked subagent(s) explicitly unmarked will be dropped"
+        fi
     fi
     # A preset that already drops subagents cannot be widened by the switch.
     if [ -n "$psub" ] && [ "$hide" = "0" ] && [ -z "$note" ]; then
@@ -146,7 +156,7 @@ oc_preset_run() {
         run_oced_tool export "$name" "${extra[@]}"
     else
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool export "$name" --sessions "$csv" "${extra[@]}"
+        run_oced_tool export "$name" --sessions "$run_csv" "${extra[@]}"
     fi
     return 0
 }
@@ -227,6 +237,41 @@ oc_export_sql_ids() {
         out="$out'$id'"
     done
     printf '%s' "$out"
+}
+
+# oc_export_expand_subs <csv> -> csv with all subagents (recursive) of the
+# given roots. Used in hidden mode: the picker only shows roots, so we expand
+# to the full cascade before passing to the export tool.
+oc_export_expand_subs() {
+    local inlist
+    inlist=$(oc_export_sql_ids "$1")
+    [ -n "$inlist" ] || { printf ''; return 0; }
+    o_q "WITH RECURSIVE subs(id) AS (
+              SELECT id FROM session WHERE id IN ($inlist)
+              UNION ALL
+              SELECT s.id FROM session s JOIN subs ON s.parent_id = subs.id
+          )
+          SELECT id FROM subs;" 2>/dev/null | paste -sd, -
+}
+
+# oc_export_unmarked_subs <csv> -> how many REAL subagents of the marked roots
+# are NOT in the CSV (i.e. explicitly unmarked by the user in shown mode).
+# Only counts subagents whose parent root IS in the CSV.
+oc_export_unmarked_subs() {
+    local inlist
+    inlist=$(oc_export_sql_ids "$1")
+    [ -n "$inlist" ] || { printf '0'; return 0; }
+    local n
+    n=$(o_q "WITH RECURSIVE subs(id) AS (
+                  SELECT id FROM session WHERE id IN ($inlist)
+                  UNION ALL
+                  SELECT s.id FROM session s JOIN subs ON s.parent_id = subs.id
+              )
+              SELECT count(*) FROM subs WHERE id NOT IN ($inlist);" 2>/dev/null) || n=""
+    case "${n:-0}" in
+        '' | *[!0-9]*) printf '0' ;;
+        *)             printf '%s' "$n" ;;
+    esac
 }
 
 # oc_export_standalone_subs <csv> -> how many REAL subagents of <csv> have their
