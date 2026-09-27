@@ -24,7 +24,7 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir, default_db, default_out
-from exportlib.db import backfill_session_tokens, load_sessions
+from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions
 from exportlib.faithful import write_session_json
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile
@@ -211,6 +211,47 @@ def main() -> None:
     if not sessions:
         die("No sessions to export (check --filter/--sessions/preset selection).")
 
+    # ------- subagent inclusion (BEFORE the hierarchy) -------
+    # `load_sessions` returns exactly what the selection matched, so a subagent is
+    # in the set only when it was selected (or matched a --filter) itself. A
+    # session is a REAL subagent when its parent_id is non-empty AND the parent
+    # row still exists; a session whose parent row is gone is an orphan, i.e. a
+    # root for every purpose here (its parent can never be exported, so there is
+    # nothing to hide it behind). Filtering here — not after the hierarchy — keeps
+    # the index, the metadata and the printed counts describing the SAME set.
+    db_ids = all_session_ids(con)
+
+    def _is_subagent(v: dict) -> bool:
+        p = v.get("parent_id") or ""
+        return bool(p) and p in db_ids
+
+    n_hidden = 0
+    if args.no_subagents:
+        before = len(sessions)
+        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
+        n_hidden = before - len(sessions)
+        if not sessions:
+            die("--no-subagents: every matched session is a subagent — nothing left to export.")
+    elif args.no_orphan_subagents:
+        # Closed set: a selected subagent survives only while its parent survives,
+        # so a nested chain collapses one level per pass (fixpoint).
+        before = len(sessions)
+        while True:
+            drop = {
+                k for k, v in sessions.items()
+                if _is_subagent(v) and v["parent_id"] not in sessions
+            }
+            if not drop:
+                break
+            for k in drop:
+                del sessions[k]
+        n_hidden = before - len(sessions)
+        if not sessions:
+            die(
+                "--no-orphan-subagents: every matched session is a subagent whose "
+                "parent is not exported — nothing left to export."
+            )
+
     n_backfilled = backfill_session_tokens(con, sessions)
     renderer = Renderer(args)
 
@@ -232,7 +273,7 @@ def main() -> None:
         children_of = {}
 
     if args.profile == "memory":
-        memory_export(con, sessions, roots, children_of, out_dir, args, db_path)
+        memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden=n_hidden)
         return
 
     # ------- write sessions -------
@@ -294,6 +335,9 @@ def main() -> None:
         "profile": args.profile,
         "preset": args.preset,
         "sub": args.sub,
+        "no_subagents": bool(args.no_subagents),
+        "no_orphan_subagents": bool(args.no_orphan_subagents),
+        "subagents_hidden": n_hidden,
         "tool_output": args.tool_output,
         "reasoning": renderer.reasoning,
         "summary_diffs": args.summary_diffs,
@@ -318,6 +362,9 @@ def main() -> None:
     print(f"[OK] Exported ({'preset ' + args.preset + ' → ' if args.preset else ''}{args.profile}) to: {out_dir}")
     print(f"   Root sessions : {len(written)}")
     print(f"   Subagents     : {sum(len(s[1]) for s in written)}")
+    if n_hidden:
+        flag = "--no-subagents" if args.no_subagents else "--no-orphan-subagents"
+        print(f"   Excluded      : {n_hidden} subagent(s) ({flag})")
     print(f"   Compactions   : {total_comp}")
     if n_backfilled:
         print(f"   Tokens        : {n_backfilled} session(s) backfilled from step-finish")

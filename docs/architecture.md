@@ -103,6 +103,35 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   the previous LIKE when only `--filter`, and the whole table when there is no selection.
 - Without a file (or no matches) there are no presets: the raw-flags path is unchanged.
 
+### Subagent inclusion (`--no-subagents`, `--no-orphan-subagents`)
+
+Two *inclusion* questions, deliberately separated from `--sub` (which only decides
+**where** a kept subagent is rendered, transcript only):
+
+1. **Is a subagent in the export at all?** `--no-subagents` says no, for **every**
+   product. It matters most for `memory` (the corpus folds subagents into their root's
+   line, so it empties the `subagents` array) and for any `--filter`/no-selection run,
+   where the matched set would otherwise pull the whole tree in.
+2. **What happens to a selected subagent whose parent is not exported?** By default it
+   is **promoted to a root** and exported standalone — the "I only want that one
+   subagent" case, which a `WHERE s.id IN (…)` selection makes possible by
+   construction. `--no-orphan-subagents` instead yields a **closed set**: the subagent is
+   dropped, iterating to a fixpoint so a nested chain collapses one level per pass.
+
+Both run on the selected set **before** the hierarchy is resolved, so `sessions` counts,
+`index.md`, `metadata.json` and the printed summary can never disagree about what was
+exported. A **subagent** is defined as a session with a non-empty `parent_id` **whose
+parent row still exists** (`all_session_ids()`); a session whose parent is gone is an
+*orphan*, i.e. a root for every purpose here — nothing to hide behind, and a parent that
+can never be exported. If the flags leave nothing to export, the run dies with an
+explanatory message instead of writing an empty artifact.
+
+In the menu this is the sessions picker's `subagents: shown ⇄ hidden` row
+(`get_sub_ids` in the generic picker): a hidden subagent is not rendered, so it cannot
+be marked and never reaches the `--sessions` CSV — the cascade the user asked for is
+structural, not a rule that could drift. A hidden run also pins `--no-subagents` so the
+guarantee survives the "every session marked → run as configured" path.
+
 ### Faithful JSON (`--json`)
 
 Each session writes a `.json` file next to its `.md` with the native shape
@@ -155,19 +184,38 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 ## 4. Menu design
 
 Picker-driven with real fzf: TSV rows `key<TAB>display` (`--with-nth=2..`), **no
-TAB multi-select** — mode switches and bulk operations are their own rows. The export
-picker is **preset-only**: if the presets file exists, it lists each preset as a direct
+TAB multi-select** — mode switches and bulk operations are their own rows.
+
+**`menu.sh` is a dispatcher, not a monolith.** It holds `run_menu`/`choose_action`/
+`oc_fzf_sel` and sources the per-domain flows from `modules/menu/`
+(`backups.sh`, `sessions.sh`, `export.sh`, `exports.sh`, `shrink.sh`), with the shared
+multi-mark picker in `modules/menu/core.sh`. That picker is **one generic function**
+(`oc_session_picker`) parameterised through a `cfg` nameref — `roots_only`, `title`,
+`header`, `order`, `order_mode`, `make_label`, `make_action`, `empty_guard_msg`,
+`get_sub_count` — so the sessions picker (read-only details) and the export/shrink
+selectors cannot drift apart. `make_action` receives a third argument, `hide_subs`,
+**only when the flow defines `get_sub_ids`**; that keeps the shrink callback at arity 2
+without a special case inside the shared code. The cfg is passed as a name, never
+copied into a local: a self-referential nameref would be a circular reference.
+
+**The export flow is sessions → preset → confirm.** The sessions picker comes first
+(all sessions marked, `(N sub)` badges, `subagents: shown ⇄ hidden`, recency-ordered with
+a flip row, marks in a 1/0 array so a re-sort or a bulk row cannot resurrect an
+unmarked session). Then the **preset-only** picker lists each named preset as a direct
 action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle presets render as
 `[transcript+memory]`); **without the file it prints setup guidance**
 (`cp presets.json.example …`) plus the raw CLI — **there is no manual session→product
-fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone;
-`oc_export_manual_rows` became `oc_selection_rows`, reused by `oc_preset_run`).
-Picking a preset asks next for **the selection** (`oc_preset_run`, reusing the
-session/ALL rows): **ALL** keeps the preset's embedded selection (runs as configured),
-**one session** runs `export <name> --filter <ses>` — selection is run-time state, not
-part of the plan identity, so a plan behaves ad-hoc just like raw flags (CLI-wins
-already implemented). Product rows still come straight from `exportlib/plan.py
-products` but only as the CLI/test API surface (no product-only menu flow). Menu labels
+fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone).
+Asking for the selection *after* the plan was the old order and it was wrong twice
+over: it forced a second, identical list of sessions after the plan was already
+chosen, and it made "all sessions" indistinguishable from "all sessions plus the
+filter the preset happened to carry". The selection is **run-time state**, not part of
+the plan identity, so it is asked first and simply applied: every session marked runs
+the preset as configured (no `--sessions`), a partial one runs
+`export <name> --sessions <csv>` (CLI-wins, and identical for a bundle, whose selection
+is shared). A hidden-subagent run additionally pins `--no-subagents` (see §3). Product
+rows still come straight from `exportlib/plan.py products` but only as the CLI/test API
+surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 `oc_preset_purpose` annotates the shipped plans
 (`archive`/`quick`/`share`/`notes`/`rag`/`digest`) with their intent (unknown names get

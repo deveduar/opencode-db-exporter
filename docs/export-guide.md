@@ -52,6 +52,31 @@ the same digests are already inside `transcript` (inline) and `memory`
 (`compaction_digests`); the standalone product is a convenient extract, not new
 information — it is redundant when you are exporting either of the others.
 
+## 1b. Subagents: include them or not (all products)
+
+A **subagent** is a session that opencode spawned from another one (`parent_id`
+set). Two things about them are independent:
+
+| | flag | effect |
+|---|---|---|
+| **which subagents are in the export** | `--no-subagents` | drops every subagent, for **all three** products. A session whose parent is gone is *not* a subagent for this purpose (it is an orphan = a root), so it survives |
+| **where a kept subagent is rendered** | `--sub separate\|inline\|omit` | transcript only: its own `subagents/` file, appended to the parent's file, or not rendered |
+
+So a "roots only" export is just `opencode-db export notes --no-subagents`, and the
+menu's **subagents switch** does it for you: while it reads `hidden`, the subagent
+rows disappear and un-marking a session takes its subagents with it. While it reads
+`shown`, a subagent is an ordinary row with its own mark, so un-marking its session
+leaves it in — the confirmation then warns how many will be exported **standalone**
+before you start, and points at `--no-orphan-subagents` to drop them instead.
+
+The default is deliberately permissive, because "export just that one subagent" is a
+real need: if you select a subagent **without** its parent, it is exported
+standalone, promoted to a root (that is what a selection of exact ids means — a
+subagent is only in the set if you asked for it). If you would rather have a *closed*
+set, where a subagent never travels without its parent, add
+`--no-orphan-subagents`: any selected subagent whose parent is not part of the export
+is dropped instead.
+
 ## 2. Manual run vs named plans
 
 Products run, by default, with their plain defaults:
@@ -59,7 +84,7 @@ Products run, by default, with their plain defaults:
 | | default |
 |---|---|
 | tool output | truncated (~500 chars) |
-| subagents | separate files |
+| subagents | included, in separate files |
 | patches / reasoning | included |
 | faithful `--json` | off |
 | sessions | **all** (or `--filter` / `--sessions` to narrow) |

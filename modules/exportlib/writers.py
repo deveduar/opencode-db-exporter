@@ -31,6 +31,12 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         elif args.filter:
             f.write(f"| Filter | `{args.filter}` |\n")
         f.write(f"| Sessions (roots/subagents/total) | {len(written)} / {sum(len(s[1]) for s in written)} / {len(sessions)} |\n")
+        # Subagent inclusion: only surfaced when a flag narrowed the set (the
+        # default run keeps the historical rows untouched).
+        if getattr(args, "no_subagents", False):
+            f.write("| Subagents | `excluded (--no-subagents)` |\n")
+        elif getattr(args, "no_orphan_subagents", False):
+            f.write("| Subagents | `only those whose parent is exported (--no-orphan-subagents)` |\n")
         f.write(f"| Messages | {total_msgs} |\n")
         f.write(f"| Compactions | {total_comp} |\n")
         f.write(f"| Tool output | `{args.tool_output}` |\n")

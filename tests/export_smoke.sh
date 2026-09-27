@@ -240,6 +240,96 @@ run export transcript --sub separate >/dev/null
 SEP=$(last_meta transcript)
 jq -e '.sessions.subagents == 3' "$SEP" >/dev/null && ok "sub separate = 3 subagents" || bad "sub separate: $(jq '.sessions.subagents' "$SEP")"
 
+echo "== subagent inclusion: --no-subagents (all products) =="
+# A subagent selected alone IS exported as a root (the historical behaviour the
+# "export only a subagent" use case needs) — pin it before changing it.
+run export transcript --sessions ses_A0002 >/dev/null
+ORPH=$(last_meta transcript)
+jq -e '.sessions.total == 1 and .sessions.roots == 1 and .no_orphan_subagents == false' "$ORPH" >/dev/null \
+    && ok "a lone subagent is exported standalone (default)" || bad "lone subagent: $(jq -c .sessions "$ORPH")"
+# --no-subagents drops every real subagent from ALL products; the orphan (its
+# parent row is gone) survives because it is a root.
+for prod in transcript memory compactions; do
+    run export "$prod" --no-subagents >/dev/null
+    M=$(last_meta "$prod")
+    jq -e '.no_subagents == true and .subagents_hidden == 3 and .sessions.subagents == 0
+           and .sessions.total == 3' "$M" >/dev/null \
+        && ok "--no-subagents: $prod keeps 3 roots, 0 subagents" \
+        || bad "--no-subagents $prod: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$M")"
+done
+grep_run "Excluded      : 3 subagent(s) (--no-subagents)" export transcript --no-subagents \
+    && ok "--no-subagents reports the excluded count" || bad "--no-subagents report"
+# The orphan is a root: it must NOT be hidden by --no-subagents.
+printf '%s' "$(run export transcript --no-subagents --sessions ses_ORPHAN01)" | grep -q "Root sessions : 1" \
+    && ok "--no-subagents keeps a session whose parent is gone" || bad "--no-subagents orphan"
+# index.md surfaces the narrowing only when a flag set it.
+run export transcript --no-subagents >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+grep -q "excluded (--no-subagents)" "$IDX" \
+    && ok "index.md records --no-subagents" || bad "index row: $(grep -c subagents "$IDX")"
+run export transcript >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+grep -q "excluded (" "$IDX" \
+    && bad "index row leaked into a default run" || ok "index.md unchanged for a default run"
+
+echo "== subagent inclusion: --no-orphan-subagents (closed set) =="
+run export transcript --sessions ses_A0001,ses_B0002 --no-orphan-subagents >/dev/null
+CLOSED=$(last_meta transcript)
+jq -e '.no_orphan_subagents == true and .subagents_hidden == 1 and .sessions.total == 1
+       and .sessions.subagents == 0' "$CLOSED" >/dev/null \
+    && ok "--no-orphan-subagents drops a subagent whose parent is absent" \
+    || bad "closed set: $(jq -c '{h:.subagents_hidden,s:.sessions}' "$CLOSED")"
+# Root + its own subagent: the pair survives (only orphans are dropped).
+run export transcript --sessions ses_A0001,ses_A0002 --no-orphan-subagents >/dev/null
+PAIR=$(last_meta transcript)
+jq -e '.subagents_hidden == 0 and .sessions.total == 2 and .sessions.subagents == 1' "$PAIR" >/dev/null \
+    && ok "--no-orphan-subagents keeps a subagent whose parent IS exported" \
+    || bad "pair: $(jq -c '{h:.subagents_hidden,s:.sessions}' "$PAIR")"
+# Everything is an orphan subagent -> refuse instead of writing an empty export.
+DRO=$(run export transcript --sessions ses_A0002 --no-orphan-subagents); rc=$?
+[ "$rc" -ne 0 ] && ok "--no-orphan-subagents exits non-zero when nothing survives" || bad "closed set rc"
+printf '%s' "$DRO" | grep -q "nothing left to export" \
+    && ok "--no-orphan-subagents explains the empty result" || bad "closed set msg: $(printf '%s' "$DRO" | tail -1)"
+# --no-subagents wins when both are given (it already drops every subagent).
+run export transcript --no-subagents --no-orphan-subagents >/dev/null
+BOTH=$(last_meta transcript)
+jq -e '.no_subagents == true and .sessions.total == 3' "$BOTH" >/dev/null \
+    && ok "both flags together = the --no-subagents set" || bad "both flags: $(jq -c .sessions "$BOTH")"
+# Preset key (all products) + CLI override.
+PRESETS="$TMP/presets-sub.json"
+cat > "$PRESETS" <<'JSON'
+{"presets": {
+  "roots-only": {"product": "transcript", "no_subagents": true},
+  "closed":    {"product": "transcript", "sessions": ["ses_A0002"], "no_orphan_subagents": true}
+}}
+JSON
+OCED_PRESETS="$PRESETS" run export roots-only >/dev/null
+RP=$(last_meta transcript)
+jq -e '.preset == "roots-only" and .no_subagents == true and .sessions.subagents == 0' "$RP" >/dev/null \
+    && ok "preset key no_subagents: true applies" || bad "preset no_subagents: $(jq -c .sessions "$RP")"
+OCED_PRESETS="$PRESETS" run export closed >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && ok "preset key no_orphan_subagents: true is validated + applied" || bad "preset no_orphan rc"
+OCED_PRESETS="$PRESETS" run export roots-only --sessions ses_A0001,ses_A0002 >/dev/null
+RO=$(last_meta transcript)
+# Documented precedence: a CLI selection clobbers the preset SELECTION only — the
+# preset's own config flags keep applying (so the subagent stays hidden here).
+jq -e '.sessions_selected == ["ses_A0001","ses_A0002"] and .no_subagents == true
+       and .sessions.total == 1' "$RO" >/dev/null \
+    && ok "CLI --sessions wins over the preset selection (preset flags still apply)" \
+    || bad "preset+cli: $(jq -c '{sel:.sessions_selected,s:.sessions}' "$RO")"
+# A preset may also hide subagents PER PRODUCT inside a bundle.
+BPRESETS="$TMP/presets-sub-bundle.json"
+cat > "$BPRESETS" <<'JSON'
+{"presets": {"mixed": {"products": {"transcript": {"no_subagents": true},
+                                      "memory": {"files": true}}}}}
+JSON
+OCED_PRESETS="$BPRESETS" run export mixed >/dev/null
+BM=$(last_meta transcript)
+jq -e '.sessions.subagents == 0' "$BM" >/dev/null \
+    && ok "bundle per-product no_subagents applies" || bad "bundle no_subagents: $(jq -c .sessions "$BM")"
+jq -e '.touched_files == true' "$(last_meta memory)" >/dev/null \
+    && ok "bundle sibling product keeps its own flags" || bad "bundle sibling flags"
+
 echo "== shrink (pruned + VACUUMed copy, never touches the live DB) =="
 GD=$(run shrink --keep 1 --dry-run)
 printf '%s' "$GD" | grep -Eq "Would delete:[[:space:]]+5" && ok "shrink dry-run plan" || bad "shrink dry-run"

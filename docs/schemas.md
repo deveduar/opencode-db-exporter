@@ -70,12 +70,14 @@ harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole
 preset selection; any explicit flag beats the preset value per product.
 
 **Selection is run-time state** (menu). A preset is a *plan*: its embedded
-`filter`/`sessions` makes it automatable, but in the menu the selection is asked
-*after* picking the plan — `ALL SESSIONS` runs it as configured, picking one session
-adds `--filter <ses>` (identical to the CLI override above, shared by every product of
-a bundle). `Manual…` is the ad-hoc raw-flags path with defaults. Therefore a plan
-never "owns" its selection: `setup_cli` clobbers it only when no explicit CLI/selection
-is given.
+`filter`/`sessions` makes it automatable, but in the menu the **sessions picker comes
+first** and the selection is applied to the plan that is picked afterwards — marking
+every session runs it as configured, a partial one adds `--sessions <csv>` (identical to
+the CLI override above, shared by every product of a bundle). A hidden-subagent run also
+pins `--no-subagents`. A selection that keeps a subagent whose session it dropped is
+named in the confirmation (`N subagent(s) will be exported standalone`), so the
+resulting `index.md`/`corpus.jsonl` is predictable. Therefore a plan never "owns" its selection: `setup_cli` clobbers
+it only when no explicit CLI/selection is given.
 
 **Bundle semantics.** `products` = `{product: {flags}}`; the selection is
 top-level and shared. `run_bundle()` computes one collision-free shared stamp
@@ -119,6 +121,10 @@ list`/`view`, menu), so old run dirs keep aggregating.
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
   "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
   "json": false, "sanitize": false, "role": "all",
+  "no_subagents": false,            // --no-subagents: subagents excluded from the set
+  "no_orphan_subagents": false,     // --no-orphan-subagents: closed set (a subagent whose parent is not exported was dropped)
+  "subagents_hidden": 0,            // how many subagents those two flags actually dropped from the MATCHED set
+                                   // (0 for an exact --sessions selection: a subagent that was never selected cannot be dropped)
   "tokens_backfilled": 0,               // number of sessions whose token/cost rows were summed from step-finish parts
   "sessions": {"total": 6, "roots": 1, "subagents": 5},
   "compactions": 2, "messages": 21,
@@ -127,13 +133,30 @@ list`/`view`, menu), so old run dirs keep aggregating.
 }
 ```
 
+A **subagent** is a session with a non-empty `parent_id` **whose parent row still
+exists**; a session whose parent is gone is an *orphan* and counts as a root
+everywhere (it has no parent to hide behind, and its parent can never be
+exported). The two inclusion flags are applied to the selected set BEFORE the
+hierarchy is resolved, so `sessions`, the index and the printed counts always
+describe the same set:
+
+| Flag | Effect |
+|---|---|
+| `--no-subagents` | every subagent is dropped (all products); orphans stay |
+| `--no-orphan-subagents` | a selected subagent survives only while its parent survives (fixpoint over nested chains), instead of being promoted to a root |
+| (neither, default) | a subagent selected without its parent is exported standalone, as a root |
+
 ### memory `metadata.json`
 
 Same header keys, then product-specific: `"profile": "memory"` always, plus
 `"cap"`, `"touched_files"` (bool; whether the `--files` key was requested for the
 corpus) and `"files": ["corpus.jsonl", "index.md"]` (the produced files — same
 shape as the transcript `files` list). No `sub`/`tool_output`/`reasoning`/
-`summary_diffs`/`json`.
+`summary_diffs`/`json`. The subagent inclusion keys (`no_subagents`,
+`no_orphan_subagents`, `subagents_hidden`) ARE present: memory folds each
+subagent into its root's corpus line, so `--no-subagents` empties the
+`subagents` array of every entry (`index.md` also carries a
+`Subagents excluded` row).
 
 ---
 

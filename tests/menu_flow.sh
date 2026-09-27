@@ -60,6 +60,10 @@ fzf() {
     printf '%s\n' "$item"
     return 0
 }
+# Pristine copy of the stub: a section that WRAPS fzf to record the renders (see
+# the hide-subagents toggle section) restores it from here with `. "$FZF_PRISTINE"`.
+FZF_PRISTINE="$TMP/fzf.pristine"
+declare -f fzf > "$FZF_PRISTINE"
 . "$MOD/menu.sh"
 # menu_pause with a real function but a non-TTY stdin returns immediately.
 # (Inside the picker tests menu_pause is neutralised by reset().)
@@ -351,6 +355,155 @@ oc_export_sessions_pick >/dev/null
 MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
 [ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
+export OCED_PRESETS="$TMP/no-presets.json"
+
+echo "== export sessions picker: hide-subagents toggle =="
+reset
+export OCED_PRESETS="$TMP/presets.json"
+XROWS="$TMP/xrows.tsv"; XHEAD="$TMP/xheader.txt"
+# Like the real stub (pops the queue, ESC on empty) but RECORDS every render in
+# its own file, so a test can assert on the rows/header of any render.
+xstub() {
+    printf '0' > "$TMP/xn"
+    fzf() {
+        local args="$*" item n h
+        n=$(( $(cat "$TMP/xn") + 1 )); printf '%s' "$n" > "$TMP/xn"
+        cat > "$XROWS.$n"
+        h="$args"; h="${h#*--header=}"; printf '%s\n' "$h" > "$XHEAD.$n"
+        if [ ! -s "$FZF_QUEUE_FILE" ]; then return 130; fi
+        IFS= read -r item < "$FZF_QUEUE_FILE"
+        tail -n +2 "$FZF_QUEUE_FILE" > "$FZF_QUEUE_FILE.tmp" && mv "$FZF_QUEUE_FILE.tmp" "$FZF_QUEUE_FILE"
+        printf '%s\n' "$item"
+        return 0
+    }
+}
+call_log; confirm_action() { return 0; }
+rows_n() { grep '^ses_' "$XROWS.$1" | cut -f1 | sort | paste -sd, -; }
+
+# Render 1 (nothing selected yet): the row exists, everything is shown.
+qset "__SUBS__"
+xstub
+oc_export_sessions_pick >/dev/null 2>&1
+grep -q 'subagents: shown' "$XROWS.1" && ok "the visibility row starts in the shown state" || bad "row state: $(grep '__SUBS__' "$XROWS.1")"
+[ "$(grep -c '^ses_' "$XROWS.1")" = "6" ] && ok "shown: all 6 sessions get a row" || bad "rows shown: $(grep -c '^ses_' "$XROWS.1")"
+[ "$(rows_n 1)" = "ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01" ] \
+    && ok "shown lists every session" || bad "shown ids: $(rows_n 1)"
+# Render 2 is the one after the __SUBS__ selection: subagents hidden.
+grep -q 'subagents: hidden' "$XROWS.2" && ok "selecting the row flips it to hidden" || bad "row not flipped: $(grep '__SUBS__' "$XROWS.2")"
+[ "$(grep -c '^ses_' "$XROWS.2")" = "3" ] && ok "hidden: only the 3 root sessions keep a row" || bad "rows hidden: $(grep -c '^ses_' "$XROWS.2")"
+[ "$(rows_n 2)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
+    && ok "hidden rows are exactly the roots (the orphan stays a root)" || bad "hidden rows: $(rows_n 2)"
+grep -q 'Subagents: HIDDEN' "$XHEAD.2" && ok "the header states the subagents are not exported" || bad "header: $(cat "$XHEAD.2")"
+# The shown header must NOT promise the hidden mode's cascade: a shown subagent
+# has its own mark, so unmarking its session does not drop it.
+grep -q 'does not drop it' "$XHEAD.1" && ok "the shown header warns unmarking a session keeps its subagents" \
+    || bad "shown header: $(cat "$XHEAD.1")"
+# Flip back: the rows (and their marks) are restored.
+reset; call_log; confirm_action() { return 0; }
+qset "__SUBS__" "__SUBS__"
+xstub
+oc_export_sessions_pick >/dev/null 2>&1
+grep -q 'subagents: shown' "$XROWS.3" && ok "the row flips back to shown" || bad "row not restored: $(grep '__SUBS__' "$XROWS.3")"
+[ "$(grep -c '^ses_' "$XROWS.3")" = "6" ] && ok "re-showing restores the 3 subagent rows" || bad "rows restored: $(grep -c '^ses_' "$XROWS.3")"
+
+# A hidden run: roots-only CSV + the --no-subagents guarantee.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
+grep -q -- "--no-subagents" "$CALLS" && ok "a hidden run pins --no-subagents" || bad "no --no-subagents: $(cat "$CALLS")"
+grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, - \
+    | grep -qx "ses_A0001,ses_B0001,ses_ORPHAN01" \
+    && ok "the CSV holds the 3 roots only" || bad "hidden csv: $(cat "$CALLS")"
+# The cascade: un-marking a root while hidden leaves its subagents out entirely.
+: > "$CALLS"
+qset "__SUBS__" "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
+grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_A0002\|ses_A0003" \
+    && bad "a subagent reached the CSV of an unmarked root" || ok "unmarked root: its subagents never reach the CSV"
+[ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2)" = "ses_A0001" ] \
+    && ok "the cascade leaves exactly the marked root" || bad "cascade csv: $(cat "$CALLS")"
+# A SHOWN run is explicit: un-marking ONE root keeps its subagents selected, and
+# the engine then exports them standalone — the case --no-orphan-subagents fixes.
+: > "$CALLS"
+qset "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
+grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_A0002" \
+    && ok "shown + unmarked root: its subagents stay selected (orphan export)" || bad "shown csv: $(cat "$CALLS")"
+grep -q -- "--no-subagents" "$CALLS" && bad "a shown run pinned --no-subagents" || ok "a shown run does NOT pin --no-subagents"
+
+# The confirm must NAME the standalone outcome before the gate, not just print a
+# CSV that looks like a bug. ses_A0001's two subagents stay marked, its parent does
+# not -> 2 standalone subagents.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
+grep -q "2 subagent(s) will be exported standalone" "$TMP/conf.txt" \
+    && ok "the confirm names the 2 subagents that export standalone" \
+    || bad "no standalone note: $(grep -i 'Spec:' "$TMP/conf.txt")"
+grep -q -- "--no-orphan-subagents would drop them" "$TMP/conf.txt" \
+    && ok "the note points at the flag that would drop them" || bad "no hint: $(grep -i 'Spec:' "$TMP/conf.txt")"
+# The ORPHAN is a root, not a standalone subagent: marked alone it exports as
+# itself, so the note must stay silent. Catches a missing EXISTS guard.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_ORPHAN01" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
+grep -q "standalone" "$TMP/conf.txt" && bad "the orphan was reported as a standalone subagent" \
+    || ok "the orphan (parent row gone) is a root, not a standalone subagent"
+# Hidden mode: no subagent can reach the CSV, so there is nothing to warn about.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
+grep -q "standalone" "$TMP/conf.txt" && bad "a hidden run warned about standalone subagents" \
+    || ok "a hidden run never warns about standalone subagents"
+# Everything marked: every parent is selected, so nothing is standalone.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
+grep -q "standalone" "$TMP/conf.txt" && bad "an all-marked run warned about standalone subagents" \
+    || ok "an all-marked run has no standalone subagent to warn about"
+# The helper itself, against the live fake DB (roots A1/B1 + orphan, subs A2/A3/B2).
+[ "$(oc_export_standalone_subs 'ses_A0002')" = "1" ] && ok "helper: a subagent without its parent counts" \
+    || bad "helper lone subagent: $(oc_export_standalone_subs 'ses_A0002')"
+[ "$(oc_export_standalone_subs 'ses_A0001,ses_A0002,ses_A0003')" = "0" ] && ok "helper: a closed set counts 0" \
+    || bad "helper closed set: $(oc_export_standalone_subs 'ses_A0001,ses_A0002,ses_A0003')"
+[ "$(oc_export_standalone_subs 'ses_ORPHAN01')" = "0" ] && ok "helper: the orphan never counts" \
+    || bad "helper orphan: $(oc_export_standalone_subs 'ses_ORPHAN01')"
+[ "$(oc_export_standalone_subs '')" = "0" ] && ok "helper: an empty CSV is 0" \
+    || bad "helper empty: $(oc_export_standalone_subs '')"
+
+# A real hidden run (no tool logger): 3 roots, 0 subagents on disk.
+reset; confirm_action() { return 0; }
+before=$(count_meta transcript)
+qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
+[ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "hidden run created exactly one export" || bad "hidden run count"
+MH=$(newest_meta transcript)
+# subagents_hidden is 0 here: the exact-id CSV never matched a subagent, so the
+# flag had nothing to drop (it is 3 for the same run driven by --filter/ALL).
+jq -e '.no_subagents == true and .subagents_hidden == 0 and .sessions.total == 3
+       and .sessions.subagents == 0' "$MH" >/dev/null \
+    && ok "real hidden run exports 3 roots, 0 subagents" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
+MH="${MH%/metadata.json}"
+[ -z "$(find "$MH" -type d -name subagents)" ] && ok "no subagents/ folder in a hidden run" || bad "subagents folder leaked"
+# The confirmation tells the user the subagents are excluded.
+reset; confirm_action() { return 0; }
+XOUT="$TMP/xconfirm.txt"
+qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick > "$XOUT" 2>&1
+grep -q "subagents: hidden" "$XOUT" && ok "the plan says the subagents are hidden" || bad "plan note: $(grep -c . "$XOUT")"
+# The shrink picker is roots-only: it must NOT grow the visibility row.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_shrink_sessions_pick >/dev/null
+grep -q 'subagents' "$FZF_HIST" && bad "the shrink picker grew a subagents row" \
+    || ok "the shrink picker keeps no subagents row"
+. "$FZF_PRISTINE"   # hand the real stub back to the rest of the suite
 export OCED_PRESETS="$TMP/no-presets.json"
 
 echo "== export flow: snapshot: fresh -> backup alignment offer =="

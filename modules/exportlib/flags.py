@@ -108,6 +108,26 @@ FLAGS: list[Flag] = [
         cli_help="Output root directory"
     ),
 
+    # Subagent inclusion (all products): these two decide WHETHER a subagent is
+    # part of the export at all; `sub` (below, transcript only) decides only WHERE
+    # an included subagent is rendered.
+    Flag(
+        name="no_subagents",
+        flag_type="bool",
+        products=["*"],
+        default=False,
+        description="Exclude every subagent session from the export (all products); a session whose parent row is gone is kept (it is a root)",
+        cli_help="Exclude every subagent session (all products)"
+    ),
+    Flag(
+        name="no_orphan_subagents",
+        flag_type="bool",
+        products=["*"],
+        default=False,
+        description="Drop a selected subagent whose parent session is not exported (default: keep it, exported standalone as a root)",
+        cli_help="Drop a selected subagent whose parent session is not exported"
+    ),
+
     # Transcript flags
     Flag(
         name="sub",
@@ -268,6 +288,16 @@ FLAG_HELP: Dict[str, str] = {
         "                     overrides --filter / the preset selection"
     ),
     "out": "  --out DIR          output root (default $OCED_OUT)",
+    "no_subagents": (
+        "  --no-subagents     exclude every subagent session (all products): only root\n"
+        "                     sessions are exported. A session whose parent is gone\n"
+        "                     stays (it has no parent to hide behind)"
+    ),
+    "no_orphan_subagents": (
+        "  --no-orphan-subagents   drop a selected subagent whose parent session is NOT\n"
+        "                          part of the export (a closed parent+subagents set).\n"
+        "                          Default: it IS exported, standalone, as a root"
+    ),
     "sub": (
         "  --sub separate|inline|omit   how to place subagent sessions (default separate:\n"
         "                       folder per root session with subagents/ inside)"
@@ -381,6 +411,8 @@ ANNOTATE_HINTS: Dict[str, str] = {
     "files=true": "touched files",
     "sub=inline": "subagents inline",
     "sub=omit": "subagents omitted",
+    "no_subagents=true": "subagents hidden (roots only)",
+    "no_orphan_subagents=true": "orphan subagents dropped",
     "summary_diffs=true": "per-message diff summaries",
     "mark_compactions=true": "compaction markers",
     "role=user": "role 'user'",

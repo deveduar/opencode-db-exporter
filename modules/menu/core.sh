@@ -271,9 +271,11 @@ oc_fzf_sel() {
 oc_sel_key() { printf '%s\n' "$1" | cut -f1; }
 
 # The mode-switch row. Selecting it flips the picker mode and reloads the list.
+# The key defaults to __TOGGLE__ (a picker has ONE such row unless it passes an
+# explicit key for a second switch, e.g. the subagent visibility row).
 oc_toggle_row() {
-    local mode="$1" other="$2"
-    printf '__TOGGLE__\t[mode: %s]  switch to %s\n' "$mode" "$other"
+    local mode="$1" other="$2" key="${3:-__TOGGLE__}"
+    printf '%s\t[mode: %s]  switch to %s\n' "$key" "$mode" "$other"
 }
 
 #-----------------------------------------------------------------------
@@ -289,13 +291,20 @@ oc_toggle_row() {
 #   make_action      str   — bash function called with "marked-ids-csv"
 #   empty_guard_msg  str   — shown when __MAKE__ pressed with nothing marked
 #   get_sub_count    str   — function that prints "id\tcount" TSV (badges)
+#   get_sub_ids      str   — function that prints one REAL subagent id per line;
+#                           enables the __SUBS__ visibility row (when set, a
+#                           hidden subagent is not rendered and never reaches the
+#                           CSV, so unmarking a session takes its subagents with
+#                           it). Without it (shrink) there is no such row.
 #
 # Marks live in a local assoc array (1/0, never unset): new IDs default to 1
 # so existing unmarks survive re-renders, order toggles and bulk ops.
-# __MAKE__   -> build CSV of marked IDs -> call make_action(csv)
+# __MAKE__   -> build CSV of marked IDs -> call make_action(csv, unmarked-csv)
+#              (+ hide_subs as a 3rd arg when the picker has the __SUBS__ row)
 #              rc 130 from sub-action = ESC -> loop (marks intact)
 #              any other rc            -> return that rc
 # __TOGGLE__ -> flip order updated-desc <-> updated-asc
+# __SUBS__   -> flip subagent visibility (only when get_sub_ids is set)
 # __ALL__ / __NONE__ / __LAST__ N / __OLDEST__ N / __DAYS__ N -> bulk mark ops
 # session row -> toggle 0 <-> 1
 # ESC in fzf  -> return 0 (caller climbs one level)
@@ -313,10 +322,12 @@ oc_session_picker() {
     local make_action="${cfg[make_action]:-}"
     local empty_guard_msg="${cfg[empty_guard_msg]:-Nothing is marked.}"
     local get_sub_count="${cfg[get_sub_count]:-}"
+    local get_sub_ids="${cfg[get_sub_ids]:-}"
 
     local -a ids=() top=()
-    local -A marks=() local_disp=() sub_n=()
+    local -A marks=() local_disp=() sub_n=() is_sub=()
     local id line mark sel key n csv all_ids label order_dir
+    local hide_subs=0 subs_note=""
 
     # Pre-load subagent counts once (static; badges don't change mid-flow).
     if [ -n "$get_sub_count" ]; then
@@ -324,6 +335,13 @@ oc_session_picker() {
             [ -n "$line" ] || continue
             sub_n["${line%%$'\t'*}"]="${line##*$'\t'}"
         done < <("$get_sub_count")
+    fi
+    # The subagent set is static too: it decides which rows the __SUBS__ row hides.
+    if [ -n "$get_sub_ids" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            is_sub["$line"]=1
+        done < <("$get_sub_ids")
     fi
 
     while true; do
@@ -334,6 +352,11 @@ oc_session_picker() {
         while IFS= read -r line; do
             [ -n "$line" ] || continue
             id=$(awk '{print $1}' <<<"$line")
+            # A hidden subagent is not rendered, so it can never be marked and
+            # never reaches the CSV: the selection cascades to it by construction.
+            if [ "$hide_subs" = "1" ] && [ -n "${is_sub[$id]+set}" ]; then
+                continue
+            fi
             ids+=("$id")
             local_disp["$id"]="${line#* }"
         done < <(session_rows "${row_args[@]}")
@@ -349,9 +372,29 @@ oc_session_picker() {
         local toggle_other
         [ "$ord_mode" = "newest first" ] && toggle_other="oldest first" || toggle_other="newest first"
 
+        # Recomputed every render so the header always matches the toggle state.
+        subs_note=""
+        if [ -n "$get_sub_ids" ]; then
+            if [ "$hide_subs" = "1" ]; then
+                subs_note=$'\n'"Subagents: HIDDEN — not shown, never exported (they follow their session's mark)"
+            else
+                # The two modes differ exactly here, so the header must not lie:
+                # a shown subagent is an ordinary row with its OWN mark, and that
+                # mark is all that counts. Unmarking its parent does not drop it.
+                subs_note=$'\n'"Subagents: shown — each subagent is its own row: unmark it to drop it."$'\n'"Unmarking its session does not drop it: it is exported standalone."
+            fi
+        fi
+
         sel=$( {
                  printf '__MAKE__\t%s\n' "$make_label"
                  oc_toggle_row "order: $ord_mode" "$toggle_other"
+                 if [ -n "$get_sub_ids" ]; then
+                     if [ "$hide_subs" = "0" ]; then
+                         oc_toggle_row "subagents: shown" "hidden (roots only)" "__SUBS__"
+                     else
+                         oc_toggle_row "subagents: hidden" "shown" "__SUBS__"
+                     fi
+                 fi
                  printf '__ALL__\t[mark ALL sessions]\n'
                  printf '__NONE__\t[unmark ALL]\n'
                  printf '__LAST__\t[mark only the N most recent sessions]\n'
@@ -364,7 +407,7 @@ oc_session_picker() {
                      printf '%s\t%s %s%s\n' "$id" "$mark" "${local_disp[$id]:-}" "$badge"
                  done
                } | oc_fzf_sel "$title" \
-                   "$(printf '%s\nSorted: %s. ESC: back' "$header" "$ord_mode")") || return $?
+                   "$(printf '%s%s\nSorted: %s. ESC: back' "$header" "$subs_note" "$ord_mode")") || return $?
 
         key=$(oc_sel_key "$sel")
         case "$key" in
@@ -384,7 +427,13 @@ oc_session_picker() {
                     continue
                 fi
                 [ -n "$make_action" ] || return 0
-                "$make_action" "$marked_csv" "$unmarked_csv"
+                # The 3rd arg (hide_subs) is passed ONLY when the picker has the
+                # __SUBS__ row, so callbacks without it keep their old arity.
+                if [ -n "$get_sub_ids" ]; then
+                    "$make_action" "$marked_csv" "$unmarked_csv" "$hide_subs"
+                else
+                    "$make_action" "$marked_csv" "$unmarked_csv"
+                fi
                 local _rc=$?
                 [ "$_rc" -eq 130 ] && continue   # ESC in sub-action -> loop
                 return "$_rc"
@@ -395,6 +444,9 @@ oc_session_picker() {
                 else
                     ord=updated-desc; ord_mode="newest first"
                 fi
+                ;;
+            __SUBS__)
+                if [ "$hide_subs" = "0" ]; then hide_subs=1; else hide_subs=0; fi
                 ;;
             __ALL__)   for id in "${ids[@]}"; do marks[$id]=1; done ;;
             __NONE__)  for id in "${ids[@]}"; do marks[$id]=0; done ;;

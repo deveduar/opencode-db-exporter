@@ -2,6 +2,8 @@
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
 | Product flags (top level for single, per product for bundle): | | | |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
+| `no_subagents` | bool | — | any |
+| `no_orphan_subagents` | bool | — | any |
 | `sub` | string | `separate` \| `inline` \| `omit` | transcript |
 | `tool_output` | string | `full` \| `truncated` \| `omit` | transcript |
 | `tool_input_limit` | int | ≥ 0 | transcript |

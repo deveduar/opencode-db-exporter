@@ -506,3 +506,54 @@ flow, both reported from using it.
   (order axes, the order row and mark survival, recipe-only rows, `lean`/`quiet` jumping
   to the plan, the decline -> another recipe loop, ESC climbing, the plan's `Recipe:` /
   `Command:` lines).
+
+## §21 Subagent inclusion in export (current)
+
+§20 kept subagents non-selectable in the **shrink** flow, where the argument holds
+(a subagent is 1.5% of the bytes and always belongs to its root). Export is a
+different question — it is not about shrinking, it is about **what the document
+should say**, and there the permissive default was actively wrong: a `--filter` or a
+no-selection run pulled the whole tree in silently, and `memory` folded every
+subagent into its root's corpus line, so there was no way to ask for a clean
+roots-only corpus.
+
+- **The bug behind the change.** Selecting a single subagent **without** its parent
+  already exported it, promoted to a root. That is right, but it happened *by
+  accident*: nothing in the code said "a subagent without its parent is a root", it
+  just fell out of the hierarchy resolver. Once it becomes deliberate, the two
+  questions separate cleanly:
+- **Q1 — is a subagent in the export?** `--no-subagents`, one flag, **all three
+  products** (`products=["*"]`). Not per-product: "roots only" is a property of the
+  *request*, not of the document format, and a bundle asking for it in one product
+  and not the other is incoherent.
+- **Q2 — a selected subagent whose parent is not exported?** Default: keep it
+  standalone (the "just that one subagent" use case, and the only reason a user
+  selects a subagent by hand). `--no-orphan-subagents` offers the **closed set**:
+  drop it instead, iterated to a fixpoint so a nested chain collapses one level per
+  pass. Shipped as a flag, not as a preset default, because the default is the
+  permissive one and presets exist to make the *chosen* behaviour repeatable.
+- **A subagent is not "any row with a `parent_id`".** A session whose parent row is
+  **gone** is an *orphan* = a root, everywhere: there is nothing to hide behind and a
+  parent that can never be exported. Without this rule a deleted parent would make its
+  children unselectable under `--no-subagents`, which is the opposite of what the
+  flag promises.
+- **The cascade in the menu is structural, not a rule.** The sessions picker gets a
+  `subagents: shown ⇄ hidden` row (`get_sub_ids`, a new cfg key in the generic
+  picker). While hidden the subagent rows are **not rendered**, so they can neither be
+  marked nor reach the `--sessions` CSV — there is no second code path that could
+  disagree with the display. The callback keeps arity: `hide_subs` is passed **only**
+  when that row exists, so the roots-only shrink callback is untouched. A hidden run
+  also pins `--no-subagents`, otherwise the "every session marked → run as configured"
+  path would silently undo the guarantee.
+- **Consequences recorded in the contract**: `metadata.json` grows
+  `no_subagents`/`no_orphan_subagents`/`subagents_hidden`, where `subagents_hidden`
+  counts what the flags dropped **from the matched set** (an exact `--sessions` list
+  that never contained a subagent reports `0`, not a phantom number), and `index.md`
+  only grows its `Subagents` row when a flag actually set one — a `null` flag must
+  not change the artifact.
+- **Verified** — `tests/export_smoke.sh` `223 OK`, `tests/menu_flow.sh` `178 OK`
+  (drop counts, orphan-as-root, closed-set fixpoint, the lone-subagent default, all
+  three products, the preset keys, the bundle propagation, the empty-set guard, the
+  rendered/hidden toggle, the roots-only CSV, the pinned `--no-subagents`, the
+  `subagents: hidden` confirm, marks surviving a toggle, and no regression of the
+  roots-only shrink picker).

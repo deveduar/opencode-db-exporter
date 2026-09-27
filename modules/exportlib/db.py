@@ -77,6 +77,14 @@ def load_sessions(con: sqlite3.Connection, filt: str | None, ids: list[str] | No
     return {r["id"]: dict(r) for r in rows}
 
 
+def all_session_ids(con: sqlite3.Connection) -> set[str]:
+    """Every session id in the DB. Tells a REAL subagent (its parent row still
+    exists) from a session whose parent is gone: the latter is an orphan, i.e. a
+    root for every hierarchy purpose (its parent can never be exported, so there
+    is nothing to hide it behind)."""
+    return {r[0] for r in con.execute("SELECT id FROM session")}
+
+
 def load_messages(con: sqlite3.Connection, sid: str):
     """-> list[(mdata, parts)] with raw part dicts."""
     msgs = con.execute(

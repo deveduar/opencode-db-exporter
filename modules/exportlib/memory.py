@@ -87,7 +87,7 @@ def memory_subagent_ref(sessions, sid: str) -> dict:
     }
 
 
-def memory_export(con, sessions, roots, children_of, out_dir, args, db_path) -> None:
+def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0) -> None:
     # Stream the corpus line by line: one root + its subagents = one JSON line,
     # written to disk immediately. The corpus is never accumulated in memory (it
     # can be larger than the DB itself when --cap is off), which keeps the peak
@@ -128,6 +128,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path) -> 
     idx_rows += [
         f"| Root sessions | {n_root} |",
         f"| Subagents (summarized inline) | {n_subs} |",
+        f"| Subagents excluded | {hidden} |",
         f"| Messages (roots) | {total_msgs} |",
         f"| Compactions | {total_comp} |",
         f"| Tuning | `--cap {'0 (unlimited)' if not args.cap else args.cap}` · `--files {'on' if args.files else 'off'}` |",
@@ -160,6 +161,9 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path) -> 
         "profile": "memory",
         "preset": args.preset,
         "sub": args.sub,
+        "no_subagents": bool(args.no_subagents),
+        "no_orphan_subagents": bool(args.no_orphan_subagents),
+        "subagents_hidden": hidden,
         "role": args.role,
         "cap": args.cap or 0,
         "touched_files": bool(args.files),
@@ -179,6 +183,9 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path) -> 
     print(f"   Root sessions : {n_root}")
     print(f"   Corpus lines  : {n_root} (corpus.jsonl)")
     print(f"   Subagents     : {n_subs} (summarized inline)")
+    if hidden:
+        flag = "--no-subagents" if args.no_subagents else "--no-orphan-subagents"
+        print(f"   Excluded      : {hidden} subagent(s) ({flag})")
     print(f"   Last backup   : {lb['file'] if lb else 'none'}")
     if not args.cap and corpus_bytes > 50 * 1024 * 1024:
         print(

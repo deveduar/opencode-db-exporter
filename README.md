@@ -94,10 +94,22 @@ rows. The `backups`, `sessions` (details), `exports` and `shrinks` pickers are
   (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
   before the y/N gate; discarding offers `export memory --sessions <ids>` first, and
   declining goes back to the recipes.
-- **export** picker (preset-only) — one row per named plan in the presets file (bundle plans
-  render `[transcript+memory]`), then a session or `ALL SESSIONS`. Without a presets file it
-  prints the setup guidance (`cp presets.json.example …`) and the raw CLI as fallback — there
-  is no manual session→product picker anymore.
+- **export** picker (preset-only) — **(1) sessions** first: one row per session, all
+  marked by default (`[ ]` unmark, bulk `ALL`/`NONE`/last-N/oldest-N/last-N-days),
+  sorted **newest used first** with a row to flip to oldest (re-sorting keeps your
+  marks) and a `(N sub)` badge per root. A second switch row, `subagents: shown ⇄ hidden`,
+  hides the subagent rows: while hidden they are not shown and never exported, so
+  un-marking a session takes its subagents with it and the run pins `--no-subagents`
+  (a session whose parent is gone is a root, so it is never hidden). While *shown*, each
+  subagent is its own row with its own mark — un-marking it drops it, and un-marking its
+  session does **not**: it still exports, standalone, and the confirmation says how many
+  will before you start. **(2) the preset**
+  — one row per named plan in the presets file (bundle plans render
+  `[transcript+memory]`) — and then the confirmation. Marking every session runs the
+  preset as configured; a partial selection runs it with `--sessions <ids>`.
+  Without a presets file the export entry prints the setup guidance
+  (`cp presets.json.example …`) and points at the raw CLI — there is no manual
+  session→product picker anymore.
 - **Manage exports** picker (mode `view` / `remove`) — rows: toggle,
   `[delete ALL export runs]`, `[delete all except the newest]`, one row per run
   (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
@@ -195,7 +207,8 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
 
 - `export <name>` resolves to a preset; `export transcript|memory|compactions|full` always
   mean the product. An unknown name fails listing the known presets.
-- Allowed preset keys: `product` + `sub`, `tool_output`, `tool_input_limit`,
+- Allowed preset keys: `product` + `sub`, `no_subagents`, `no_orphan_subagents`,
+  `tool_output`, `tool_input_limit`,
   `tool_output_limit`, `patch`, `role`, `no_reasoning`, `mark_compactions`,
   `summary_diffs`, `json`, `sanitize`, `cap`, `files` (bools/choices as in the flags),
   `snapshot` = `"fresh"` (**single preset only**) and the selection `filter` (LIKE
@@ -216,11 +229,11 @@ opencode-db export archive --sessions ses_abc   # one CLI flag overrides the who
   itself still reads the live DB read-only; this only keeps the *archive* reproducible.
 - No presets file (or none matching) → no presets: export behaves exactly as before.
 The **menu** has no product-only flow: each preset is a first-class action (read from the same
-  file), and it asks **which session or ALL SESSIONS** to export (pending state: a plan is config
-  + selection, and the two are separated at run time — a plan runs **ad-hoc** just like raw flags
-  do). Choosing **ALL** runs the preset as configured (keeping its embedded selection); picking
-  **one session** becomes a `--filter` override shared by every product of a bundle (CLI
-  wins, see above). **No `Manual…` row** (the shipped default plans `notes`/`rag`/`digest` cover
+  file), and the **sessions picker comes first** — a plan is config, the selection is run-time
+  state, so it is asked before the plan and simply applied (a plan runs **ad-hoc** just like raw
+  flags do). Marking **every** session runs the preset as configured (keeping its embedded
+  selection); a partial selection becomes a `--sessions` override shared by every product of a
+  bundle (CLI wins, see above). **No `Manual…` row** (the shipped default plans `notes`/`rag`/`digest` cover
   the three products with defaults); without a presets file the export picker prints setup
   guidance (`cp presets.json.example …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.

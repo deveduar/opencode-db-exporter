@@ -34,10 +34,12 @@ oc_selection_rows() {
 }
 
 oc_export_presets_picker() {
-    local csv="$1"
+    local csv="$1" hide="${2:-0}"
     local sel key header name seldesc
     while true; do
-        header=$'Export — pick a plan (preset): products + config from the presets file'$'\n'$'(ESC: back)'
+        header=$'Export — pick a plan (preset): products + config from the presets file'
+        [ "$hide" = "1" ] && header+=$'\n'"(subagents hidden: roots only)"
+        header+=$'\n'"(ESC: back)"
         sel=$(oc_export_rows | oc_fzf_sel "export (presets)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
@@ -45,7 +47,7 @@ oc_export_presets_picker() {
             __PRESET_*)
                 name="${key#__PRESET_}"
                 seldesc=$(oc_preset_descr "$name") || seldesc=""
-                if oc_preset_run "$name" "$seldesc" "$csv"; then
+                if oc_preset_run "$name" "$seldesc" "$csv" "$hide"; then
                     menu_pause "Export" || return 0
                     return 0 # Exits the wizard back to main menu
                 fi
@@ -54,9 +56,12 @@ oc_export_presets_picker() {
     done
 }
 
-# oc_preset_run <preset> <descr> <csv> -> confirm and run.
+# oc_preset_run <preset> <descr> <csv> [hide_subs] -> confirm and run.
+# hide_subs=1 means the picker had subagents hidden, so the CSV holds roots only:
+# the run pins --no-subagents so the guarantee does not depend on the selection
+# being passed at all (e.g. a preset that would run the whole DB).
 oc_preset_run() {
-    local name="$1" descr="$2" csv="$3" purpose
+    local name="$1" descr="$2" csv="$3" hide="${4:-0}" purpose
     purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
 
     # snapshot: fresh — offer a backup when not aligned.
@@ -79,36 +84,63 @@ oc_preset_run() {
     IFS=',' read -r -a _arr <<< "$csv"
     marked_count="${#_arr[@]}"
 
+    # A hidden-subagent selection is never "all sessions" unless the DB has no
+    # subagents at all, so the exact-id CSV is what makes the guarantee hold.
+    local -a extra=()
+    [ "$hide" = "1" ] && extra=(--no-subagents)
+
+    # In "shown" mode a subagent is an ordinary row with its own mark, so
+    # un-marking its session leaves it selected and the engine exports it
+    # standalone, as a root. The CSV line is the only hint otherwise, and it
+    # reads like a bug — so name it before the gate, with the flag that would
+    # change the outcome. Hidden mode cannot produce any (no subagent ever
+    # reaches the CSV), and "all marked" cannot either (every parent is in it).
+    local stand_note=""
+    if [ "$hide" != "1" ]; then
+        local n_stand
+        n_stand=$(oc_export_standalone_subs "$csv")
+        if [ "$n_stand" -gt 0 ]; then
+            stand_note=" · $n_stand subagent(s) will be exported standalone"
+            stand_note+=" (their session is not selected; --no-orphan-subagents would drop them)"
+        fi
+    fi
+
     if [ "$marked_count" -eq "$total_sess" ]; then
         # All sessions — run as configured (no filter).
-        oc_export_confirm "preset: $name" "(preset as configured)" \
-            "preset '$name' (${descr:-see the presets file})" || return 1
-        run_oced_tool export "$name"
+        local spec="preset '$name' (${descr:-see the presets file})"
+        [ "$hide" = "1" ] && spec+=" · subagents: hidden"
+        spec+="$stand_note"
+        oc_export_confirm "preset: $name" "(preset as configured)" "$spec" || return 1
+        run_oced_tool export "$name" "${extra[@]}"
     else
-        oc_export_confirm "preset: $name" "sessions: $csv" \
-            "preset '$name' (${descr:-see the presets file}) · sessions: $csv" || return 1
-        run_oced_tool export "$name" --sessions "$csv"
+        local spec="preset '$name' (${descr:-see the presets file}) · sessions: $csv"
+        [ "$hide" = "1" ] && spec+=" · subagents: hidden"
+        spec+="$stand_note"
+        oc_export_confirm "preset: $name" "sessions: $csv" "$spec" || return 1
+        run_oced_tool export "$name" --sessions "$csv" "${extra[@]}"
     fi
     return 0
 }
 
 oc_export_sessions_pick() {
     _oc_export_make_action() {
-        local csv="$1"
-        oc_export_presets_picker "$csv"
+        local csv="$1" hide="${3:-0}"
+        oc_export_presets_picker "$csv" "$hide"
         return $?
     }
 
     local -A _cfg=(
         [roots_only]=0
         [title]="export — sessions (marked = include)"
-        [header]="Mark [x] sessions to export (subagents follow their root). Default: all marked."
+        [header]="Mark [x] sessions to export. Default: all marked. Switch 'subagents' to hide them:
+their rows disappear and they are never exported (they follow their session)."
         [order]=updated-desc
         [order_mode]="newest first"
         [make_label]="[>] select preset (recipe) for CURRENT selection"
         [make_action]=_oc_export_make_action
         [empty_guard_msg]="Nothing is marked — at least one session must be selected."
         [get_sub_count]=oc_export_sub_counts
+        [get_sub_ids]=oc_export_sub_ids
     )
     oc_session_picker _cfg
 }
@@ -132,6 +164,16 @@ oc_export_picker() {
 # (No longer used, removed)
 
 #-----------------------------------------------------------------------
+# oc_export_sub_ids -> one id per line: every REAL subagent, i.e. a session with
+# a non-empty parent_id whose parent row still exists. Drives the picker's
+# "subagents" visibility row. A session whose parent is gone (an orphan) is a
+# ROOT for every purpose, so it is never hidden.
+oc_export_sub_ids() {
+    o_q "SELECT s.id FROM session s
+          WHERE s.parent_id IS NOT NULL AND s.parent_id <> ''
+            AND EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id);" 2>/dev/null
+}
+
 # oc_export_sub_counts -> "id\tN_sub" for ROOT sessions that have subagents.
 # Mirror of oc_shrink_sub_counts but used by the export session picker to
 # display a badge for all-sessions mode (roots_only=0).
@@ -157,6 +199,28 @@ oc_export_sql_ids() {
         out="$out'$id'"
     done
     printf '%s' "$out"
+}
+
+# oc_export_standalone_subs <csv> -> how many REAL subagents of <csv> have their
+# parent session OUTSIDE <csv>. Those are the ones the engine promotes to roots
+# and exports standalone, so the confirm step can say so before the gate. The
+# EXISTS guard is the same rule as oc_export_sub_ids: a session whose parent row
+# is GONE is an orphan, i.e. a root, never a "standalone subagent". Prints 0 on
+# an empty CSV or a failed query.
+oc_export_standalone_subs() {
+    local inlist
+    inlist=$(oc_export_sql_ids "$1")
+    [ -n "$inlist" ] || { printf '0'; return 0; }
+    local n
+    n=$(o_q "SELECT count(*) FROM session s
+              WHERE s.parent_id IS NOT NULL AND s.parent_id <> ''
+                AND s.id IN ($inlist)
+                AND s.parent_id NOT IN ($inlist)
+                AND EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id);" 2>/dev/null) || n=""
+    case "${n:-0}" in
+        '' | *[!0-9]*) printf '0' ;;
+        *)             printf '%s' "$n" ;;
+    esac
 }
 
 #-----------------------------------------------------------------------

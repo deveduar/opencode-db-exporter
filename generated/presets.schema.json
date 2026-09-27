@@ -51,6 +51,14 @@
       "type": "string",
       "description": "Output root directory"
     },
+    "flagNo_subagents": {
+      "type": "boolean",
+      "description": "Exclude every subagent session from the export (all products); a session whose parent row is gone is kept (it is a root)"
+    },
+    "flagNo_orphan_subagents": {
+      "type": "boolean",
+      "description": "Drop a selected subagent whose parent session is not exported (default: keep it, exported standalone as a root)"
+    },
     "flagSub": {
       "type": "string",
       "enum": [
@@ -145,6 +153,12 @@
         "out": {
           "$ref": "#/definitions/flagOut"
         },
+        "no_subagents": {
+          "$ref": "#/definitions/flagNo_subagents"
+        },
+        "no_orphan_subagents": {
+          "$ref": "#/definitions/flagNo_orphan_subagents"
+        },
         "sub": {
           "$ref": "#/definitions/flagSub"
         },
@@ -234,6 +248,12 @@
               ],
               "description": "full is a CLI alias, not a preset product."
             },
+            "no_subagents": {
+              "$ref": "#/definitions/flagNo_subagents"
+            },
+            "no_orphan_subagents": {
+              "$ref": "#/definitions/flagNo_orphan_subagents"
+            },
             "sub": {
               "$ref": "#/definitions/flagSub"
             },
@@ -308,6 +328,12 @@
                   "description": "Per-product flags; the selection (top level) is shared by every product.",
                   "additionalProperties": false,
                   "properties": {
+                    "no_subagents": {
+                      "$ref": "#/definitions/flagNo_subagents"
+                    },
+                    "no_orphan_subagents": {
+                      "$ref": "#/definitions/flagNo_orphan_subagents"
+                    },
                     "sub": {
                       "$ref": "#/definitions/flagSub"
                     },
