@@ -91,22 +91,27 @@ Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same session
 opencode-db menu  →  Export
 ```
 
-1. If the presets file exists you see your **plans** (each labeled with its purpose);
-   there is **no `Manual…` row** — the shipped default plans cover the three products
-   with defaults. Without it, the session picker opens directly.
-2. Pick a **plan** → you are asked **which session or ALL SESSIONS**:
-   - `ALL SESSIONS` = run the plan exactly as configured (its embedded selection
-     applies);
-   - **one session** = run the plan for that session only (a shared `--filter`
-     override for every product in the plan).
-3. A plan confirmation shows Source / Filter / Profile / Spec / Output — accept it.
+1. **Session picker** — if the presets file exists, you see the session picker first.
+   Sessions are listed with `[x]` marks (default: all marked). You can:
+   - Toggle individual sessions with Enter
+   - Use bulk rows: `[mark ALL sessions]`, `[unmark ALL]`, `[mark only the N most recent]`, `[mark only the N oldest]`, `[mark only sessions updated in the last N days]`
+   - Toggle sort order with the `order: newest first` / `order: oldest first` row
+   - Press `[>] select preset (recipe) for CURRENT selection` to continue
+
+   Without a presets file, it prints setup guidance and falls back to the raw CLI.
+
+2. **Preset picker** — shows your named plans (each with its purpose tag). Pick one.
+
+3. **Plan confirmation** — shows Source / Sessions / Profile / Spec / Output.
+   - If all sessions were marked: runs the preset as configured (no filter).
+   - If some sessions were unmarked: runs the preset with `--sessions CSV` for the marked sessions.
+   Accept to run, or ESC to go back and change sessions/preset.
+
 4. The run lands in `~/.local/share/opencode-db-exporter/exports/<stamp>/` with one
    subfolder per product (`transcript/`, `memory/`, …) and all sessions aggregated by
    `opencode-db exports list|view`.
 
-Without a presets file, the classic session → product flow with defaults remains
-(the menu's manual fallback). Tuning and multi-product runs belong to the
-presets file (plans) or to the CLI flags. ESC always climbs back / cancels.
+Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|compactions [flags]`). ESC always climbs back / cancels.
 
 ## 4. Decision matrix
 

@@ -295,24 +295,25 @@ reset
 export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 confirm_action() { :; return 0; }
-qset "__NONE__" "ses_A0001" "__MAKE__"
-oc_preset_run "notes" "product transcript" >/dev/null
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
 grep -qx "export notes --sessions ses_A0001" "$CALLS" && ok "preset run overrides the selection with the session filter" || bad "preset session: $(cat "$CALLS")"
 
 : > "$CALLS"
-qset "__ALL__" "__MAKE__"
-oc_preset_run "notes" "product transcript" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
 grep -qx "export notes" "$CALLS" && ok "preset ALL runs as configured (no override)" || bad "preset ALL: $(cat "$CALLS")"
 
 echo "== export flow: ESC cancels without creating a run =="
 reset
 export OCED_PRESETS="$TMP/presets.json"
 before=$(count_meta transcript)
-FZF_FAIL="sessions (preset)"
-oc_preset_run "notes" "x" >/dev/null 2>&1
+FZF_FAIL="export (presets)"
+qset "__ALL__" "__MAKE__"
+oc_export_sessions_pick >/dev/null 2>&1
 rc=$?
 after=$(count_meta transcript)
-[ "$rc" -ne 0 ] && ok "ESC cancels the session picker of a preset ($rc)" || bad "ESC did not cancel"
+[ "$rc" -ne 0 ] && ok "ESC cancels the preset picker ($rc)" || bad "ESC did not cancel"
 [ "$before" -eq "$after" ] && ok "cancelled flow created no export" || bad "cancelled flow exported"
 
 echo "== export flow: confirmation gates the run =="
@@ -322,8 +323,8 @@ export OCED_PRESETS="$TMP/presets.json"
 CONFIRME="$TMP/confirm.txt"
 confirm_action() { printf '%s\n' "$1" >> "$CONFIRME"; return 1; }
 before=$(count_meta transcript)
-qset "__ALL__" "__MAKE__"
-oc_preset_run "notes" "x" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
 after=$(count_meta transcript)
 [ -s "$CONFIRME" ] && grep -q "Start this export" "$CONFIRME" && ok "confirmation asked with the plan" || bad "no confirmation asked"
 [ "$before" -eq "$after" ] && ok "declined confirmation -> no export" || bad "declined but exported"
@@ -333,20 +334,20 @@ reset
 export OCED_PRESETS="$TMP/presets.json"
 confirm_action() { return 0; }
 before=$(count_meta transcript)
-qset "__NONE__" "ses_A0001" "__MAKE__"
-oc_preset_run "notes" "x" >/dev/null
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "preset flow exports the transcript" || bad "preset flow export transcript missing"
 ME=$(newest_meta transcript)
 jq -e '.sessions_selected[0] == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
-qset "__ALL__" "__MAKE__"
-oc_preset_run "notes" "x" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
 MA=$(newest_meta transcript)
 jq -e '.sessions_selected == null' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
 jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
 
-qset "__ALL__" "__MAKE__"
-oc_preset_run "rag" "x" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_rag"
+oc_export_sessions_pick >/dev/null
 MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
 [ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
@@ -358,8 +359,8 @@ export OCED_PRESETS="$TMP/presets.json"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 [ "$(oc_plan_py snapshot snappy 2>/dev/null)" = "fresh" ] && ok "plan.py snapshot exposes the snapshot flag" || bad "plan snapshot"
-qset "__ALL__" "__MAKE__"
-oc_preset_run "snappy" "product transcript" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_snappy"
+oc_export_sessions_pick >/dev/null
 grep -qx "backup" "$CALLS" && ok "snapshot preset offers a fresh backup (no backups yet)" || bad "snap backup offer: $(cat "$CALLS")"
 grep -qx "export snappy" "$CALLS" && ok "snapshot preset exports after the fresh backup" || bad "snap export: $(cat "$CALLS")"
 
@@ -371,8 +372,8 @@ SESSES=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM session" 2>/dev/null
 MSGS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT count(*) FROM message" 2>/dev/null)
 MUTS=$(sqlite3 "file:$FAKE?mode=ro" "SELECT max(time_updated) FROM session" 2>/dev/null)
 printf '{"backups": [{"sessions": %s, "messages": %s, "max_updated": %s}]}' "$SESSES" "$MSGS" "$MUTS" > "$ALIGNED/manifest.json"
-qset "__ALL__" "__MAKE__"
-oc_preset_run "snappy" "product transcript" >/dev/null
+qset "__ALL__" "__MAKE__" "__PRESET_snappy"
+oc_export_sessions_pick >/dev/null
 grep -qx "backup" "$CALLS" && bad "aligned snapshot preset re-offered a backup" || ok "aligned snapshot preset does NOT re-offer a backup"
 export OCED_PRESETS="$TMP/no-presets.json"
 

@@ -34,9 +34,10 @@ oc_selection_rows() {
 }
 
 oc_export_presets_picker() {
+    local csv="$1"
     local sel key header name seldesc
     while true; do
-        header=$'Export — pick a plan (preset): products + config from the presets file'$'\n'$'(then choose a session or ALL SESSIONS; ESC: back)'
+        header=$'Export — pick a plan (preset): products + config from the presets file'$'\n'$'(ESC: back)'
         sel=$(oc_export_rows | oc_fzf_sel "export (presets)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
@@ -44,21 +45,21 @@ oc_export_presets_picker() {
             __PRESET_*)
                 name="${key#__PRESET_}"
                 seldesc=$(oc_preset_descr "$name") || seldesc=""
-                oc_preset_run "$name" "$seldesc" || continue
-                menu_pause "Export" || return 0
+                if oc_preset_run "$name" "$seldesc" "$csv"; then
+                    menu_pause "Export" || return 0
+                    return 0 # Exits the wizard back to main menu
+                fi
                 ;;
         esac
     done
 }
 
-# oc_preset_run <preset> <descr> -> launch the session picker for a preset, confirm, run.
-# Uses oc_session_picker (multi-mark): all marked = run as configured (no --sessions),
-# a subset = run with --sessions CSV (CLI wins over the preset).
+# oc_preset_run <preset> <descr> <csv> -> confirm and run.
 oc_preset_run() {
-    local name="$1" descr="$2" purpose
+    local name="$1" descr="$2" csv="$3" purpose
     purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
 
-    # snapshot: fresh — offer a backup when not aligned (BEFORE the picker opens).
+    # snapshot: fresh — offer a backup when not aligned.
     if [ "$(oc_plan_py snapshot "$name" 2>/dev/null)" = "fresh" ]; then
         local align
         align=$(o_backup_aligned)
@@ -72,49 +73,49 @@ oc_preset_run() {
         fi
     fi
 
-    # Globals read by the make_action callbacks below.
-    _OC_EXPORT_PRESET_NAME="$name"
-    _OC_EXPORT_PRESET_DESCR="$descr"
+    local total_sess marked_count
+    total_sess=$(o_q "SELECT count(*) FROM session;" 2>/dev/null) || total_sess=0
+    local -a _arr
+    IFS=',' read -r -a _arr <<< "$csv"
+    marked_count="${#_arr[@]}"
 
-    # make_action: called with the CSV of marked session IDs.
-    # If every session is marked we run without --sessions ("as configured");
-    # otherwise we run with --sessions <csv>.
-    _oc_preset_make_action() {
+    if [ "$marked_count" -eq "$total_sess" ]; then
+        # All sessions — run as configured (no filter).
+        oc_export_confirm "preset: $name" "(preset as configured)" \
+            "preset '$name' (${descr:-see the presets file})" || return 1
+        run_oced_tool export "$name"
+    else
+        oc_export_confirm "preset: $name" "sessions: $csv" \
+            "preset '$name' (${descr:-see the presets file}) · sessions: $csv" || return 1
+        run_oced_tool export "$name" --sessions "$csv"
+    fi
+    return 0
+}
+
+oc_export_sessions_pick() {
+    _oc_export_make_action() {
         local csv="$1"
-        local _name="$_OC_EXPORT_PRESET_NAME" _descr="$_OC_EXPORT_PRESET_DESCR"
-        local total_sess marked_count
-        total_sess=$(o_q "SELECT count(*) FROM session;" 2>/dev/null) || total_sess=0
-        IFS=',' read -r -a _arr <<< "$csv"
-        marked_count="${#_arr[@]}"
-        if [ "$marked_count" -eq "$total_sess" ]; then
-            # All sessions — run as configured (no filter).
-            oc_export_confirm "preset: $_name" "(preset as configured)" \
-                "preset '$_name' (${_descr:-see the presets file})" || return 0
-            run_oced_tool export "$_name"
-        else
-            oc_export_confirm "preset: $_name" "sessions: $csv" \
-                "preset '$_name' (${_descr:-see the presets file}) · sessions: $csv" || return 0
-            run_oced_tool export "$_name" --sessions "$csv"
-        fi
+        oc_export_presets_picker "$csv"
+        return $?
     }
 
-    local -A _pr_cfg=(
+    local -A _cfg=(
         [roots_only]=0
-        [title]="export — sessions (preset: $name)"
-        [header]="$(printf 'Preset %s — %s\nMark [x] sessions to export. ALL = as configured, subset = --sessions override. ESC: back' "$name" "$purpose")"
+        [title]="export — sessions (marked = include)"
+        [header]="Mark [x] sessions to export (subagents follow their root). Default: all marked."
         [order]=updated-desc
         [order_mode]="newest first"
-        [make_label]="[>] run export with CURRENT selection"
-        [make_action]=_oc_preset_make_action
+        [make_label]="[>] select preset (recipe) for CURRENT selection"
+        [make_action]=_oc_export_make_action
         [empty_guard_msg]="Nothing is marked — at least one session must be selected."
         [get_sub_count]=oc_export_sub_counts
     )
-    oc_session_picker _pr_cfg
+    oc_session_picker _cfg
 }
 
 oc_export_picker() {
     if [ -f "${OCED_PRESETS:-}" ]; then
-        oc_export_presets_picker
+        oc_export_sessions_pick
         return 0
     fi
     # No presets file: the menu wizard is preset-only. The CLI still accepts
@@ -128,8 +129,7 @@ oc_export_picker() {
 }
 
 # Globals used by oc_preset_run callbacks (reset on every call).
-_OC_EXPORT_PRESET_NAME=""
-_OC_EXPORT_PRESET_DESCR=""
+# (No longer used, removed)
 
 #-----------------------------------------------------------------------
 # oc_export_sub_counts -> "id\tN_sub" for ROOT sessions that have subagents.

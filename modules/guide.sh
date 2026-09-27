@@ -21,7 +21,7 @@ guide_step_export() {
 
     echo ""
     echo "=== Step 1: Export sessions ==="
-    echo "Pick a named plan (preset), then choose session or ALL."
+    echo "Choose sessions or ALL, then pick a named plan (preset)."
     echo ""
 
     # Run the export picker which returns the preset key selected

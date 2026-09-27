@@ -302,17 +302,17 @@ oc_toggle_row() {
 #-----------------------------------------------------------------------
 oc_session_picker() {
     local cfg_ref="$1"
-    local -n _cfg="$cfg_ref"
+    local -n cfg="$cfg_ref"
 
-    local roots_only="${_cfg[roots_only]:-0}"
-    local title="${_cfg[title]:-sessions}"
-    local header="${_cfg[header]:-}"
-    local ord="${_cfg[order]:-updated-desc}"
-    local ord_mode="${_cfg[order_mode]:-newest first}"
-    local make_label="${_cfg[make_label]:-[>] continue}"
-    local make_action="${_cfg[make_action]:-}"
-    local empty_guard_msg="${_cfg[empty_guard_msg]:-Nothing is marked.}"
-    local get_sub_count="${_cfg[get_sub_count]:-}"
+    local roots_only="${cfg[roots_only]:-0}"
+    local title="${cfg[title]:-sessions}"
+    local header="${cfg[header]:-}"
+    local ord="${cfg[order]:-updated-desc}"
+    local ord_mode="${cfg[order_mode]:-newest first}"
+    local make_label="${cfg[make_label]:-[>] continue}"
+    local make_action="${cfg[make_action]:-}"
+    local empty_guard_msg="${cfg[empty_guard_msg]:-Nothing is marked.}"
+    local get_sub_count="${cfg[get_sub_count]:-}"
 
     local -a ids=() top=()
     local -A marks=() local_disp=() sub_n=()
