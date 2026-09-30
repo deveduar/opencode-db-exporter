@@ -247,8 +247,41 @@ oced_list() {
 oced_info() {
     o_check_deps
     o_db_exists
-    local id="${1:-}"
-    [ -n "$id" ] || o_die "Usage: opencode-db info <session_id>"
+    local id="${1:-}" json_mode=0
+    [ -n "$id" ] || o_die "Usage: opencode-db info <session_id> [--json]"
+    [ "${2:-}" = "--json" ] && json_mode=1
+    
+    if [ "$json_mode" -eq 1 ]; then
+        o_q -json "
+            SELECT
+                s.id, s.slug, s.title, s.project_id,
+                coalesce(s.agent,'') AS agent, s.model, s.directory, s.version,
+                datetime(s.time_created/1000,'unixepoch') AS created,
+                datetime(s.time_updated/1000,'unixepoch') AS updated,
+                datetime(s.time_archived/1000,'unixepoch') AS archived,
+                datetime(s.time_compacting/1000,'unixepoch') AS compacted,
+                s.share_url, s.cost, s.tokens_input, s.tokens_output, s.tokens_reasoning,
+                s.tokens_cache_read, s.tokens_cache_write,
+                coalesce(p.title,'') AS parent_title, s.parent_id,
+                (SELECT count(*) FROM session c WHERE c.parent_id = s.id) AS subagents,
+                (SELECT count(*) FROM message m WHERE m.session_id = s.id) AS messages,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id) AS parts,
+                (SELECT count(*) FROM session_input i WHERE i.session_id = s.id) AS inputs,
+                (SELECT count(*) FROM todo t WHERE t.session_id = s.id AND t.status != 'done') AS todos_open,
+                (SELECT count(*) FROM todo t WHERE t.session_id = s.id AND t.status = 'done') AS todos_done,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='text') AS parts_text,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='reasoning') AS parts_reasoning,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='tool') AS parts_tool,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='patch') AS parts_patch,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='file') AS parts_file,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='step-start') AS parts_step_start,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='step-finish') AS parts_step_finish,
+                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id AND json_extract(pt.data,'$.type')='compaction') AS parts_compaction
+            FROM session s LEFT JOIN session p ON p.id = s.parent_id
+            WHERE s.id = '${id//\'/\'\'}' LIMIT 1;" 2>&1
+        return 0
+    fi
+
     local row rc
     row=$(o_q -line "
         SELECT
@@ -283,6 +316,13 @@ oced_info() {
         echo "Try: opencode-db list"
         return 1
     fi
+    # Banner first: the raw `key = value` dump is unreadable without the id/title
+    # in front of it (same shape as the `== Compactions ($id) — $title ==` header).
+    local title
+    title=$(sed -n 's/^ *title *= *//p' <<<"$row")
+    [ -n "$title" ] || title=$(sed -n 's/^ *slug *= *//p' <<<"$row")
+    echo "== Session ($id)${title:+ — $title} =="
+    echo ""
     echo "$row"
     echo ""
     oced_compactions "$id" || true

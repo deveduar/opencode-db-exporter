@@ -594,12 +594,19 @@ oced_shrinks_list() {
 }
 
 oced_shrinks_view() {
-    local stamp="${1:-}" target j
-    [ -n "$stamp" ] || { echo "Usage: opencode-db shrinks view <stamp>"; return 1; }
+    local stamp="${1:-}" json_mode=0 target j
+    [ -n "$stamp" ] || { echo "Usage: opencode-db shrinks view <stamp> [--json]"; return 1; }
+    [ "${2:-}" = "--json" ] && json_mode=1
     target="$(shrinks_dir)/$stamp"
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db shrinks list"; return 1; }
     j="$target/shrink.json"
     [ -f "$j" ] || { echo "No shrink.json in $target"; return 1; }
+    
+    if [ "$json_mode" -eq 1 ]; then
+        cat "$j"
+        return 0
+    fi
+    
     echo "== Shrink run: $stamp =="
     jq . "$j"
     echo ""

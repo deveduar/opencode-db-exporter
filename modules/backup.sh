@@ -52,10 +52,16 @@ oc_backup_sha_state() {
 # The sha check lives HERE (not in a separate `verify` row) so a details view
 # can never show a backup nobody has ever validated.
 oced_backups_view() {
-    local f="${1:-}" rec
-    [ -n "$f" ] || { echo "Usage: opencode-db backups view <backup-file>"; return 1; }
+    local f="${1:-}" json_mode=0 rec
+    [ -n "$f" ] || { echo "Usage: opencode-db backups view <backup-file> [--json]"; return 1; }
+    [ "${2:-}" = "--json" ] && json_mode=1
     rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$(manifest_path)")
     [ -n "$rec" ] || { echo "Not in the manifest: $f"; echo "Try: opencode-db backups list"; return 1; }
+
+    if [ "$json_mode" -eq 1 ]; then
+        printf '%s' "$rec" | jq -c .
+        return 0
+    fi
 
     local date size size_raw sess msgs parts mu src stored_line align
     date=$(printf '%s' "$rec" | jq -r '.date // "-"')
@@ -196,7 +202,7 @@ oced_backups() {
             echo "== Backups ($n) =="
             jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + (.value.date | sub("T"; "_") | sub("Z$"; "")) + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
             echo ""
-            echo "  view <file>  ·  verify <file>  ·  prune <N>"
+            echo "  view <file> [--json]  ·  verify <file>  ·  prune <N>"
             ;;
         view)   shift; oced_backups_view "$@" ;;
         verify)

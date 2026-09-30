@@ -60,9 +60,9 @@ exports list         list past export runs (date/profile/counts/size);
                         a run with several profiles shows them joined with '+'
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
-  exports view <stamp> [--files]   show details of an export run (index, sessions, files)
+  exports view <stamp> [--files] [--json]   show details of an export run (config, sessions, files; --json = raw)
   shrinks list [--tsv]   list the produced shrink copies (criteria/counts/size)
-  shrinks view <stamp>   show the shrink.json of a run
+  shrinks view <stamp> [--json]   show the shrink.json of a run (--json = raw)
   shrinks verify [--yes] [--tsv]   check for orphan run dirs, old pre-shrink
                        copies and a shrink that is stale vs the live DB; --yes
                        auto-removes orphan dirs + old pre-shrinks

@@ -85,6 +85,13 @@ grep_run "Project Beta" list --filter 'Project Beta' && ok "list --filter" || ba
 echo "== info / compactions =="
 I=$(run info ses_A0001); grep_run "Compactions" info ses_A0001 && ok "info" || bad "info"
 printf "%s" "$I" | grep -q "1$" && ok "info counts 1 compaction" || bad "info count"
+# A detail screen must lead with a banner: the raw `key = value` dump is unreadable alone.
+printf "%s" "$I" | sed -n '1p' | grep -q "^== Session (ses_A0001)" \
+    && ok "info leads with a session header" || bad "info header: $(printf '%s' "$I" | sed -n '1p')"
+IJ=$(run info ses_A0001 --json)
+printf "%s" "$IJ" | jq -e '.[0].id == "ses_A0001"' >/dev/null \
+    && ok "info --json is a structured row" || bad "info --json"
+printf '%s' "$IJ" | grep -q "== Session" && bad "info --json header" || ok "info --json has no header"
 C=$(run compactions ses_A0001); printf "%s" "$C" | grep -vq "no compactions" && ok "compactions detected" || bad "compactions"
 
 echo "== backup =="
@@ -234,6 +241,7 @@ jq -e '.json == true and .sanitize == true' "$MT" >/dev/null && ok "json+sanitiz
 
 echo "== shared-stamp bundle (products share one run folder) =="
 BSTAMP="stplug-$(date -u +%s)"
+SELRUN="selrun-$(date -u +%s)"
 run export transcript --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
 run export compactions --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
 [ -f "$OUT/$BSTAMP/transcript/metadata.json" ] && [ -f "$OUT/$BSTAMP/compactions/metadata.json" ] \
@@ -244,12 +252,35 @@ printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "c
 VIEW=$(run exports view "$BSTAMP")
 printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "compactions" && printf '%s' "$VIEW" | grep -q "totals:" \
     && ok "exports view shows every product of the run" || bad "exports view aggregate: $(printf '%s' "$VIEW" | sed -n '1,6p')"
+# A detail screen must lead with a banner, like info/backups/shrinks.
+printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
+    && ok "exports view leads with a run header" || bad "exports view header: $(printf '%s' "$VIEW" | sed -n '1p')"
+printf '%s' "$VIEW" | grep -c "== Export run:" | grep -qx "1" \
+    && ok "exports view repeats the run header once (per product)" || bad "exports view header repeated"
+VJSON=$(run exports view "$BSTAMP" --json)
+printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["compactions","transcript"]' >/dev/null \
+    && ok "exports view --json is one metadata record per product" || bad "exports view --json: $VJSON"
+printf '%s' "$VJSON" | grep -q "== Export run" && bad "exports view --json header" || ok "exports view --json has no header"
+# sessions_selected is an ARRAY: the Selection line must join it, never concat it.
+mkdir -p "$OUT/$SELRUN/transcript"
+jq -n '{profile:"transcript",filter:null,sessions_selected:["ses_A0001","ses_B0001"],preset:"archive",
+        sessions:{total:2,roots:2,subagents:0},messages:2,compactions:0,files:["index.md"]}' \
+    > "$OUT/$SELRUN/transcript/metadata.json"
+SELV=$(run exports view "$SELRUN")
+printf '%s' "$SELV" | grep -q "jq: error" && bad "exports view selection array: jq error" || ok "exports view renders an array sessions_selected"
+printf '%s' "$SELV" | grep -q "Selection:      sessions: ses_A0001,ses_B0001" \
+    && ok "exports view joins an array sessions_selected" || bad "exports view selection array: $(printf '%s' "$SELV" | grep -i 'selection')"
 # Legacy runs wrote metadatos.json; readers must keep aggregating them.
 LEGACY="legacy-$(date -u +%s)"
 mkdir -p "$OUT/$LEGACY/transcript"
 echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
 EXL=$(run exports list)
 printf '%s' "$EXL" | grep -q "$LEGACY" && ok "exports list aggregates legacy metadatos.json runs" || bad "legacy run aggregation"
+LEGACYV=$(run exports view "$LEGACY")
+# No sessions.total in legacy metadata: it must be derived from roots + subagents.
+printf '%s' "$LEGACYV" | grep -q "jq: error" && bad "legacy sessions total: jq error" || ok "exports view renders a legacy metadatos.json run"
+printf '%s' "$LEGACYV" | grep -q "Sessions:       1 total (1 roots · 0 subagents)" \
+    && ok "exports view derives Sessions total for legacy runs" || bad "legacy sessions total: $(printf '%s' "$LEGACYV" | grep -i 'sessions:')"
 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null

@@ -15,7 +15,7 @@ oced_exports() {
         remove) shift; oced_exports_remove "$@" ;;
         prune)  shift; oced_exports_prune "$@" ;;
         view)   shift; oced_exports_view "$@" ;;
-        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files]]"; return 1 ;;
+        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]]"; return 1 ;;
     esac
 }
 
@@ -104,47 +104,61 @@ oced_exports_prune() {
 }
 
 oced_exports_view() {
-    local stamp="${1:-}" show_files=0
-    [ -n "$stamp" ] || { echo "Usage: opencode-db exports view <stamp> [--files]"; return 1; }
-    [ "${2:-}" = "--files" ] && show_files=1
+    local stamp="${1:-}" show_files=0 json_mode=0
+    [ -n "$stamp" ] || { echo "Usage: opencode-db exports view <stamp> [--files] [--json]"; return 1; }
+    for arg in "${@:2}"; do
+        case "$arg" in
+            --files) show_files=1 ;;
+            --json)  json_mode=1 ;;
+            *) echo "Unknown option: $arg"; return 1 ;;
+        esac
+    done
     local target="$OCED_OUT/$stamp"
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db exports list"; return 1; }
 
-    # Summary covers every product in the run (the old head -1 hid all but the
-    # first alphabetically, e.g. the memory/RAG corpus of a multi-product run).
     local -a metas
-    local meta prod r s m c first_meta="" profiles=""
-    local tot_roots=0 tot_subs=0 tot_msgs=0 tot_comp=0
     mapfile -t metas < <(find "$target" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
     [ "${#metas[@]}" -gt 0 ] || { echo "No metadata.json found in $target"; return 1; }
 
+    if [ "$json_mode" -eq 1 ]; then
+        printf '['
+        local first=1
+        for meta in "${metas[@]}"; do
+            [ -f "$meta" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            cat "$meta"
+            first=0
+        done
+        printf ']\n'
+        return 0
+    fi
+
+    # Pretty output (human readable) - aggregate across products like the old format
     echo "== Export run: $stamp =="
+    echo ""
+    local tot_roots=0 tot_subs=0 tot_msgs=0 tot_comp=0 tot_files=0 first_meta=""
+    local prod r s m c f
     for meta in "${metas[@]}"; do
         [ -f "$meta" ] || continue
         [ -n "$first_meta" ] || first_meta="$meta"
         prod=$(jq -r '.profile // "?"' "$meta")
-        profiles="${profiles:+$profiles+}$prod"
         r=$(jq -r '.sessions.roots // 0' "$meta")
         s=$(jq -r '.sessions.subagents // 0' "$meta")
         m=$(jq -r '.messages // 0' "$meta")
         c=$(jq -r '.compactions // 0' "$meta")
+        f=$(jq -r '.files // [] | length' "$meta")
         [ "$r" -gt "$tot_roots" ] && tot_roots="$r"
         [ "$s" -gt "$tot_subs" ] && tot_subs="$s"
         tot_msgs=$((tot_msgs + m))
         tot_comp=$((tot_comp + c))
+        tot_files=$((tot_files + f))
         printf '  %-14s %s roots (%s subagent) · %s msgs · %s comp\n' \
             "$prod" "$r" "$s" "$m" "$c"
-        if [ -f "$(dirname "$meta")/corpus.jsonl" ]; then
-            local cl nlines
-            cl="$(dirname "$meta")/corpus.jsonl"
-            nlines=$(wc -l < "$cl" | tr -d ' ')
-            printf '  %-14s %s\n' "" "corpus: $nlines entries · $(o_human_size "$(stat -c %s "$cl")")"
-        fi
     done
     echo ""
     local size
     size=$(du -sb "$target" 2>/dev/null | cut -f1); size=${size:-0}
-    echo "  totals: $profiles · $tot_roots roots ($tot_subs subagent) · $tot_msgs msgs · $tot_comp comp · $(o_human_size "$size")"
+    echo "  totals: $tot_roots roots ($tot_subs subagent) · $tot_msgs msgs · $tot_comp comp · $(o_human_size "$size")"
     if [ -n "$first_meta" ]; then
         echo "  date:   $(jq -r '.date // "-"' "$first_meta")"
         echo "  db:     $(jq -r '.db // "-"' "$first_meta")"
@@ -152,14 +166,38 @@ oced_exports_view() {
     fi
 
     echo ""
-    echo "== Indexes =="
-    local index_file
-    for index_file in "$target"/*/index.md; do
-        [ -f "$index_file" ] || continue
-        local rel_path="${index_file#$target/}"
-        rel_path="${rel_path%/index.md}"
-        echo "  $rel_path"
-        sed -n '/^## Sessions$/,/^---$/p' "$index_file" | head -20 | grep -E '^[0-9]+\.|^\s+- ' | sed 's/^/    /'
+    echo "== Details per product =="
+    local n=0
+    for meta in "${metas[@]}"; do
+        [ -f "$meta" ] || continue
+        [ "$n" -eq 0 ] || echo ""
+        n=$((n + 1))
+        jq -r '
+            "  Product:        " + (.profile // "?"),
+            "  Preset:         " + (.preset // "?"),
+            "  Selection:      " + (if .filter then "filter: " + .filter else "sessions: " + ((.sessions_selected // ["all"]) | join(",")) end),
+            "  Sub:            " + (.sub // "?"),
+            "  Role:           " + (.role // "all"),
+            "  Cap:            " + (.cap // 0 | tostring) + " (unlimited)",
+            "  Touched files:  " + (.touched_files // false | tostring),
+            "  Sanitize:       " + (.sanitize // false | tostring),
+            "  Tokens backfilled: " + (.tokens_backfilled // 0 | tostring),
+            "  No subagents:   " + (.no_subagents // false | tostring),
+            "  No orphan subagents: " + (.no_orphan_subagents // false | tostring),
+            "  Date:           " + (.date // "-"),
+            "  DB:             " + (.db // "-"),
+            "  DB sha256:      " + (.db_sha256 // "-"),
+            "  Sessions:       " + ((.sessions.total // ((.sessions.roots // 0) + (.sessions.subagents // 0))) | tostring) + " total (" + (.sessions.roots // 0 | tostring) + " roots · " + (.sessions.subagents // 0 | tostring) + " subagents)",
+            "  Stats:          " + (.messages // 0 | tostring) + " msgs · " + (.compactions // 0 | tostring) + " comp",
+            "  Files:          " + (.files // [] | length | tostring) + " files"
+        ' "$meta"
+
+        # Older/extended runs may carry the individual session ids.
+        if jq -e '.session_ids' "$meta" >/dev/null 2>&1; then
+            echo ""
+            echo "  Session ids:"
+            jq -r '.session_ids[]? | "    " + .' "$meta"
+        fi
     done
 
     if [ "$show_files" -eq 1 ]; then

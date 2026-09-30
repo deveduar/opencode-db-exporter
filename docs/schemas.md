@@ -383,9 +383,23 @@ accepted) under a stamp directory:
 ```
 
 roots/subagents = max across metadata files, msgs/comp = sum, size = du of the
-stamp dir; a run with no readable metadata renders `profiles="?"`. `exports view
-<stamp>` prints the `date`/`profile`/`sessions`/`messages`/`compactions`/`db`/
-`db_sha256` line from the first metadata file found.
+stamp dir; a run with no readable metadata renders `profiles="?"`.
+
+`exports view <stamp>` is a **detail screen**, so it leads with a banner
+(`== Export run: <stamp> ==`), then one summary line per product, the aggregate
+`totals:`/`date:`/`db:`/`sha256:` block and a `== Details per product ==` section
+with one field block per `metadata.json` (blank-line separated). Two rules worth
+naming because the data shapes are not uniform:
+
+- `Selection:` renders `filter: <p>` when `.filter` is set, else
+  `sessions: <ids joined by ",">` — `.sessions_selected` is an **array**, never
+  concatenated as a string (a `// "all"` default with no `join` breaks on real runs).
+- `Sessions:` shows `total (roots · subagents)`; when a legacy run has no
+  `.sessions.total` it is derived as `roots + subagents`.
+
+`--json` returns one metadata record per product as a JSON array (the raw
+`metadata.json`/`metadatos.json` contents, no banner, no aggregation). Only the
+human mode carries the header — a machine reader gets the data untouched.
 
 ## 8. shrinks list
 

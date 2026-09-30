@@ -45,11 +45,13 @@ opencode-db status                    # DB state + alignment with the last backu
 opencode-db version                   # tool version + opencode CLI version + schema probe
 opencode-db list [--root|--sub] [--filter PATTERN] [--info]
                                       # --order: created-asc|created-desc|updated-asc|updated-desc
-opencode-db info <session_id>         # tokens, cost, compactions, counts
+opencode-db info <session_id> [--json]
+                                      # banner + tokens, cost, compactions, counts
+                                      # --json = the row as JSON (no banner)
 opencode-db compactions <session_id> [show [last|N|all]]
                                       # compaction points; 'show' prints the digest
 opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
-opencode-db backups [list|view <file>|verify <file>|remove <file> [--yes]|prune <N>]
+opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | compactions
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
@@ -288,6 +290,9 @@ Export folders accumulate; list, delete or prune them with `opencode-db exports`
 
 ```bash
 opencode-db exports list              # date / profile / counts / size per run (multi-profile runs show 'full+compactions', counts are totals)
+opencode-db exports view <stamp>      # detail: banner, per-product summary, aggregate totals, one field block per product
+opencode-db exports view <stamp> --files   # + the produced files with sizes
+opencode-db exports view <stamp> --json    # one metadata record per product as a JSON array
 opencode-db exports remove <stamp>    # delete one run (asks; --yes to skip)
 opencode-db exports prune 5           # keep only the 5 most recent runs
 ```
@@ -357,7 +362,7 @@ Produced copies accumulate under `backups/shrink/`; manage them like export runs
 ```bash
 opencode-db shrinks list              # date / criteria / kept-deleted / sizes per copy
 opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
-opencode-db shrinks view <stamp>      # show a copy's shrink.json
+opencode-db shrinks view <stamp> [--json]  # show a copy's shrink.json (--json = raw)
 opencode-db shrinks verify [--yes]    # audit: orphan dirs, old pre-shrinks, stale copy vs live DB
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
