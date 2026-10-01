@@ -74,9 +74,9 @@ PRODUCT_KEYWORDS = ["transcript", "memory", "compactions"]  # 'full' is alias
 
 # Product keyword -> one-line description for the plan confirm / index.
 PRODUCT_INTRO: Dict[str, str] = {
-    "transcript": "Markdown conversation per session — everything you see + reasoning + tool calls",
-    "memory": "RAG corpus corpus.jsonl — one line per root session, machine facts (tokens, todos, tools, digests)",
-    "compactions": "Markdown digests only — the compacted knowledge arc (extract of transcript/memory)",
+    "transcript": "Markdown conversation per session, with reasoning and tool calls",
+    "memory": "RAG corpus in corpus.jsonl, one line per root session: tokens, todos, tools and digests",
+    "compactions": "Markdown digests only: the compacted knowledge arc",
 }
 
 # ---- Flag registry ----
@@ -444,7 +444,7 @@ BUNDLE_PRESET_KEYS = ["products", "filter", "sessions"]
 # ---- Human-readable annotation hints (menu.confirm/annotate) ----
 # value-aware phrases per key=value pair (CSV "key=value,key=value").
 ANNOTATE_HINTS: Dict[str, str] = {
-    "json=true": "+faithful JSON (raw, unfiltered)",
+    "json=true": "faithful JSON, raw and unfiltered",
     "tool_output=full": "full tool outputs",
     "tool_output=truncated": "truncated tool outputs",
     "tool_output=omit": "no tool outputs",
@@ -463,16 +463,17 @@ ANNOTATE_HINTS: Dict[str, str] = {
 }
 
 
-def annotate_flags(csv: str) -> str:
-    """Map a presets CSV ("key=value,key=value") to human phrases.
+def annotate_flags(csv: str) -> list[str]:
+    """Map a presets CSV ("key=value,key=value") to human phrases, ONE PER LINE.
 
-    Mirror of the former bash `oc_annotate_flags`: bits are separated by ' · '
-    with one leading space (the menu confirm stretches them into bullet lines via
-    `sed 's/ · /\\n  - /g'`). Unknown key=value pairs (sub=separate, role=all,
-    patch=full, …) are skipped unless a hint exists.
+    The caller renders the list as standalone lines: there is no separator
+    between items and no bullet marker, because a ' · ' or a '+' read like an
+    operator rather than a caption (and the old leading '+' survived the loss of
+    its sibling bullets, so it pointed at nothing). Unknown key=value pairs
+    (sub=separate, role=all, patch=full, …) are skipped unless a hint exists.
     """
     if not csv:
-        return ""
+        return []
     bits: list[str] = []
     for kv in csv.split(","):
         kv = kv.strip()
@@ -485,15 +486,15 @@ def annotate_flags(csv: str) -> str:
         hint = ANNOTATE_HINTS.get(kv)
         if hint:
             bits.append(hint)
-    if not bits:
-        return ""
-    return " " + " · ".join(bits)
+    return bits
 
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) == 3 and sys.argv[1] == "--annotate":
-        print(annotate_flags(sys.argv[2]))
+        # one phrase per line (never a ' · '-joined line): the menu renders each
+        # as its own caption, and a joined string would re-appear as one blob.
+        print("\n".join(annotate_flags(sys.argv[2])))
         sys.exit(0)
     if len(sys.argv) == 2 and sys.argv[1] == "--help-exports":
         print(help_main_exports())

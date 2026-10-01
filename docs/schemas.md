@@ -116,7 +116,13 @@ list`/`view`, menu), so old run dirs keep aggregating.
   "date": "YYYY-MM-DDTHH:MM:SSZ",
   "db": "/…/opencode.db", "db_sha256": "…",
   "filter": null,                       // or SQL LIKE pattern
-  "sessions_selected": null,            // or ["ses_…", …]
+  "sessions_selected": null,            // or ["ses_…", …] — the REQUESTED ids, only when --sessions was passed
+  "session_records": [                  // WHICH sessions this run actually CONTAINS (never a cap)
+    {"id": "ses_a", "title": "Project Alpha", "kind": "root",
+     "parent_id": null, "created": "…Z", "updated": "…Z"},
+    {"id": "ses_b", "title": "Explore gaps", "kind": "subagent",
+     "parent_id": "ses_a", "created": "…Z", "updated": "…Z"}
+  ],
   "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
   "profile": "transcript",              // product keyword: transcript | memory | compactions (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
@@ -149,6 +155,32 @@ run is self-describing even when `filter`/`sessions_selected` are both `null`:
 select changes every time they run. The same phrase appears as the `Selection` row of
 `index.md` and in the error when a rule matches nothing
 (`error: No sessions to export (last 5 session(s) by last update matched nothing).`).
+
+### `session_records` vs `sessions` vs `sessions_selected`
+
+Three keys, one job each — they are deliberately not redundant:
+
+| key | answers | shape |
+|---|---|---|
+| `session_records` | **which sessions the run contains** | array, one entry per written session (roots + subagents), export order, **never capped** |
+| `sessions` | how many | `{total, roots, subagents}` — the *summary* of `session_records`, derived from the same list |
+| `sessions_selected` | what was **requested** | the `--sessions` ids, or `null` when a rule like `filter`/`last`/`since` chose the set |
+
+The gap `session_records` fills is real: with `filter`/`last`/`since` (or any
+subagent flag) nothing in `metadata.json` recorded the resulting set, so
+`exports view --json` could not list what a run actually holds.
+
+- **One source of truth**: it is built from the same `written` list of
+  `(root, subagents, folder)` tuples that created the directories on disk, so the
+  records cannot disagree with the artifacts, and a cascaded or dropped subagent
+  is recorded as the result — not as the intent.
+- **Identity only.** `id`, `title`, `kind`, `parent_id`, `created`, `updated`. There
+  are no per-session `messages`/`compactions`: those totals already exist at the top
+  level, and a second copy would be a second number to keep in sync for no gain.
+- `kind` is `root`/`subagent` as resolved by the run, so an **orphan** (parent row
+  gone) is `root` even though it carries a dangling `parent_id` — the same rule the
+  counts use. `parent_id` is `null` when there is none, never `""`.
+- Dates are ISO-8601 UTC (`ts_iso`), like every other date in the machine artifacts.
 
 A **subagent** is a session with a non-empty `parent_id` **whose parent row still
 exists**; a session whose parent is gone is an *orphan* and counts as a root

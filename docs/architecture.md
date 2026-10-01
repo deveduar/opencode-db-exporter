@@ -243,7 +243,7 @@ are not used`; partial → `the N sessions you marked (the menu overrides the pr
 `--no-subagents`), and an optional `Note:` (subagents that will be exported standalone,
 or a preset that already drops subagents, which the switch cannot widen). The old
 `Filter: (preset as configured)` / duplicated `Spec:` CSV is gone: the per-product
-`Will produce:` block already carries the descriptions. The recency rules that used to
+block already carries the descriptions. The recency rules that used to
 be mark-only rows are now CLI flags (`--last N` counts roots and closes over their
 subagents, `--since DATE` is a plain window; both CLI-only via `CLI_ONLY_KEYS`, so a
 preset can never pin a non-reproducible set), and the rule that ran is recorded in
@@ -255,8 +255,23 @@ surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 `oc_preset_purpose` annotates the shipped plans
 (`archive`/`quick`/`share`/`notes`/`rag`/`digest`) with their intent (unknown names get
-the bare row). The confirm step prints a **Will produce:** block with per-product
-descriptions + effective flags, and a sanitize caveat when applicable. There are **no
+the bare row). The confirm step prints the plan as a **flat, flush-left** block. The
+rationale is legibility at a glance: an indented tree forced the reader to decode a
+hierarchy that carries no extra meaning, and the bullets broke the alignment that made
+the rows scannable. So `plan_text()` emits one line per product at the left margin with
+its description and effective flags *below* it, a blank line between products, and no
+label, bullet or nesting anywhere; `_wrap()` keeps every line inside a fixed 72-column
+budget so the block is deterministic. Nothing is hidden to achieve this — the full
+`PRODUCT_INTRO` is still printed, only folded. What changed next was the **symbology**:
+the flags used to be joined with `' · '` and the first one carried a `+`, which read as an
+expression rather than a list of things (`+faithful JSON, raw and unfiltered · full tool
+outputs`) — and that `+` only survived because it happened to be first, so it pointed at
+nothing. `annotate_flags()` now returns a **list** of standalone phrases rendered one per
+line, and `PRODUCT_INTRO` lost its `—` and `+` too; a test fails if a `+`/`*`/`-` marker, a
+`' · '` joiner or an em dash reappears in the block. The caveats (raw/unfiltered faithful
+JSON, sanitize) are **not** products, so they moved out
+of the tree into their own `-> Notes` block (`notes_text()`), which is omitted entirely
+when a plan has nothing to warn about. There are **no
 variant tables or custom checklists**: tuning and "bundle everything in one stamp" live
 in the presets file (`OCED_PRESETS`) or the CLI.
 

@@ -662,3 +662,117 @@ plain toggles.
   a tampered copy → `MISMATCH` with both hashes and a deleted one → `MISSING`, plus
   `verify` agreeing with `view` on both), `tests/menu_flow.sh` `207 OK` (12 new: the
   view/remove matrix, the exact row copy of both modes, and the symbol guard).
+
+## §24 The export plan is flat: no label, no bullets, no nesting (current)
+
+**Decision.** `oc_export_confirm` renders the whole plan flush left. The header rows
+(`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`, plus `Note:` when the menu has
+one) stay as-is with a `%-10s` label; below them each product gets **one line at the left
+margin** with its description and effective flags on the lines *below*, a blank line
+between products, and no `Will produce:` label, no bullet and no indentation anywhere.
+
+**Why.** §14 introduced the block to show the per-product descriptions and the sanitize
+caveat. It grew a label, then a nested tree, then a bullet per flag — three layers of
+chrome to express what is really a flat list of two or three things. The hierarchy
+carried no extra meaning (a product never has children), and the bullets cost the
+alignment that made the block scannable. The user read the result as a data dump. So the
+structure was removed rather than restyled.
+
+**Nothing is hidden to get there.** The full `PRODUCT_INTRO` and the complete `bits`
+string are still printed — only folded by `_wrap()` into a fixed `PLAN_WIDTH = 72`, so
+the block is deterministic across runs. In particular `bits` is emitted verbatim and is
+never re-split on `" · "`: that was the old `replace(" · ", "\n  - ")`, which could only
+prefix the 2nd..Nth bit, so the first one lost its marker and rendered one column off
+(`" +faithful JSON…"` instead of `"  - faithful JSON…"`). Without bullets that bug class
+cannot come back.
+
+**Notes are not products.** The caveats (raw/unfiltered faithful JSON, sanitize) used to
+sit inside the tree as a line that read like a third thing being produced.
+`notes_text()` moves them to their own `-> Notes` block, derived from the plan's own
+`has_json`/`has_sanitize` — never hand-written — and returns `""` when a plan has nothing
+to warn about, so the menu prints no block at all. The CLI exposes both halves
+(`plan <profile> [--width N]`, `notes <profile> [--width N]`) so `menu/export.sh` never
+formats anything itself.
+
+**Verified** — `tests/menu_flow.sh` `227 OK` (13 new guards: no `Will produce:`, product
+name at the margin, flush left, no bullets/levels, every line ≤ 72, `OCED_PLAN_WIDTH` and
+`plan.py PLAN_WIDTH` pinned to the literal 72, the intros/flags survive the rewrap, notes
+present once when there is something to warn and absent when there is not, and the
+standalone-subagent `Note:` row kept in the header). Each structural guard was mutation
+checked: re-indenting `_product_block` or reinstating the `"  - "` bullets fails the
+suite, and raising either width knob to 200 fails the two width guards — the width
+assertion compares against the literal `72`, not against the same variable it is testing,
+which would pass if both moved together.
+
+## §25 metadata.json gains `session_records`: which sessions the run contains (current)
+
+**Decision.** A new `session_records` array (one entry per written session: `id`, `title`,
+`kind`, `parent_id`, `created`, `updated`) records WHICH sessions a run actually contains.
+Never capped. Nothing was repurposed: `.sessions` stays the aggregate `{total, roots,
+subagents}` and `.sessions_selected` stays the REQUESTED ids.
+
+**Why.** The gap was real rather than cosmetic. `sessions_selected` is only populated when
+`--sessions` was passed at all, and even then it records the request, not the result — so with
+`filter`/`last`/`since`, or after `--no-subagents` dropped or cascaded subagents, `metadata.json`
+held no record of the resulting set. That is why `exports view --json` could return metadata
+records whose only hint of content was three counts. The user asked for the sessions to be
+listable, and the honest answer was that the exporter had been throwing that information away.
+
+**One source of truth, and no duplication.** Two worries were raised and both shaped the
+design:
+
+- *Is a new key redundant with `.sessions`?* No — it is the other direction. `.sessions` is the
+  **summary** of `session_records`, derived from the same list, so the counts stay consistent
+  by construction (`records == total`, and the root/subagent tallies match). The records add
+  the identity that the counts could never carry.
+- *Do per-session fields duplicate anything?* Only counts would have, and they were left out
+  on purpose: `messages`/`compactions` already exist as totals at the top level, so a second
+  copy would be a second number to keep in sync for nothing. Records are identity only.
+
+**Built from `written`, never from a second query.** `_session_records()` walks the same list
+of `(root, subagents, folder)` tuples that created the directories, so it cannot disagree with
+what is on disk: a cascaded subagent is recorded as present, a dropped one as absent, and an
+orphan (parent row gone) as `kind: root` while keeping its dangling `parent_id` verbatim —
+the same rule the counts use, not a second opinion.
+
+**Verified** — `tests/export_smoke.sh` `286 OK` (18 new). The guards were mutation-checked:
+emitting only roots, classifying everything as `root`, `""` instead of `null`, a raw epoch
+instead of an ISO date and id truncation each fail the suite. One guard is explicitly
+non-vacuous (`the run really did include subagents`): the first version of this section
+filtered on a root title, and a title filter like `%Project Alpha%` matches **no** subagent
+at all, so every subagent assertion passed against a set that had none — the unfiltered run is
+the only meaningful one. `exports view --json` asserts that *some* record carries the key
+rather than reading `[0]`, because that command aggregates every run of the stamp and older
+runs predate it.
+
+## §26 The plan drops operator symbology: one thing per line, plain prose (current)
+
+**Decision.** `annotate_flags()` returns a **list** of phrases and `_product_block()`
+renders each on its own line. The `' · '` joiner and the leading `+` marker are gone, and
+`PRODUCT_INTRO` lost its `—` and `+`. A bare product keyword prints
+`Default options, no flags set` as its own caption. The notes were cleaned the same way
+(`&` and the `!` prefix are gone; `SANITIZE_WARN` no longer opens with a bang or an em dash).
+
+**Why.** The flat block from §24 was still cluttered. The line
+
+```
++faithful JSON (raw, unfiltered) · full tool outputs
+```
+
+read as an *expression*: the `+` looked like an operator and the `·` like a multiplier, so
+the line said "add A times B" instead of "this export adds A and adds B". Worse, the `+` was
+an artefact, not a marker: it had been a bullet prefix that survived the loss of its
+siblings, so it pointed at nothing while the second item lost its own marker entirely — the
+same `replace(" · ", "\n  - ")` bug noted in §24, wearing a different hat.
+
+**Why each item on its own line rather than a labelled list.** The remaining choices were
+a `key: value` per flag (repeats the flag name as noise the user does not read) or an
+`adds` prefix on every line. Plain prose wins because the block has no indentation to build
+a hierarchy with anyway (§24 already removed it): the description is the first line under
+the product name and everything after it is a thing the export adds. Distinguishing them by
+*position* rather than by markup is what keeps the block free of symbols.
+
+**Verified** — `tests/menu_flow.sh` `231 OK`. One guard rejects the whole class at once
+(`^[+*-] `, `' · '` or `—` anywhere in the block) plus per-item `grep -qxF` checks that each
+phrase is on a line of its own. Mutation-checked: restoring the `+`, restoring the
+`" · ".join(...)`, and restoring the em-dash `PRODUCT_INTRO` each fail the suite.

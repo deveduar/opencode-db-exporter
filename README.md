@@ -137,9 +137,12 @@ Every row carries one marker that says what it does:
   toggle, then in remove mode `[delete all]` / `[delete olds]`, then one row per run
   (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
 
-Export flow: session selection → plan → confirmation (`Will produce:` block per product,
-with the effective flags) → run. Mark sessions in the picker (`[x]` = include), then pick
-a preset. A partial selection becomes `export <name> --sessions <csv>` (CLI wins over any
+Export flow: session selection → plan → confirmation → run. Mark sessions in the picker
+(`[x]` = include), then pick a preset. The confirmation is a flat, flush-left `-> Export
+plan` block: the header rows (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`)
+first, then one line per product with its description and effective flags **below** it,
+then an optional `-> Notes` block for the caveats (raw/unfiltered JSON, sanitize). Every
+line wraps at 72 columns, nothing is bulleted or indented, and no information is dropped. A partial selection becomes `export <name> --sessions <csv>` (CLI wins over any
 embedded preset selection; a bundle shares the override); all marked runs the preset as
 configured. **No** variant tables or custom checklists in the menu — tuning and
 multi-product runs in one stamp (bundle presets) live in the presets file (`OCED_PRESETS`)

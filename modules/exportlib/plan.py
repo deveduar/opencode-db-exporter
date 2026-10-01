@@ -14,7 +14,8 @@
 #   purpose <name>       one-line purpose for the shipped plans (unknown -> 1)
 #   legend               header lines explaining each shipped plan in the file
 #   resolve <profile>    JSON plan for a product keyword or preset name
-#   plan <profile>       multi-line "Will produce:" block for the confirm
+#   plan <profile> [--width N]   the confirm's product block (flat, no label)
+#   notes <profile> [--width N]  the caveats of that plan ("" when there are none)
 #   snapshot <name>      "fresh" when the preset pins snapshot: fresh, else ""
 #   selection <name>     the selection the preset PINS, as a human phrase, or ""
 #   subagents <name>     "no_subagents" | "no_orphan_subagents" | "both" | ""
@@ -25,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import textwrap
 
 MODULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if MODULES_DIR not in sys.path:
@@ -77,11 +79,11 @@ PRODUCT_PICKER_LEGEND = [
 ]
 
 NOTES_JSON = [
-    "faithful JSON is raw/unfiltered (all messages, reasoning & full tool outputs)",
-    "markdown display filters (tool_output, role, no_reasoning, tool_input_limit) do not apply to the JSON",
+    "faithful JSON keeps everything: all messages, reasoning and full tool outputs",
+    "the markdown display filters do not apply to it: tool_output, role, no_reasoning, tool_input_limit",
 ]
 
-SANITIZE_WARN = "! sanitize redacts safe prefixes only (sk-, ghp_, AKIA, JWT, PEM) — review output."
+SANITIZE_WARN = "sanitize redacts high-confidence secrets only (sk-, ghp_, AKIA, JWT, PEM), so review the output anyway"
 
 
 def _jq_tostring(v) -> str:
@@ -139,7 +141,7 @@ def resolve(profile: str, presets: dict | None = None) -> dict:
                     "product": profile,
                     "intro": PRODUCT_INTRO[profile],
                     "flags": "",
-                    "bits": "",
+                    "bits": [],
                 }
             ],
             "has_json": False,
@@ -195,34 +197,82 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
 
 # --- text artifacts served to the menu ------------------------------------
 
+# The confirm screen is deliberately FLAT: no bullets, no nesting, no labels.
+# A product name sits at the left margin and every line of its description goes
+# BELOW it, wrapped. Nothing is truncated and nothing is summarised away — the
+# intros are the product's real documentation, so they are wrapped, not cut.
+# Fixed width (not `tput cols`): it keeps the layout deterministic across
+# terminals and assertable in the smoke suite.
+PLAN_WIDTH = 72
 
-def plan_text(profile: str, presets: dict | None = None) -> str:
-    """The multi-line 'Will produce:' block (NO leading indentation; the caller
-    adds uniform indentation). Replicates the old oc_export_plan byte-for-byte.
-    """
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Greedy word wrap, one paragraph per line-group. Never splits a word, so
+    a long session id or path stays whole. width <= 0 disables wrapping."""
+    if not text:
+        return []
+    if width <= 0:
+        return text.split("\n")
+    out: list[str] = []
+    for para in text.split("\n"):
+        out += textwrap.wrap(
+            para, width, break_long_words=False, break_on_hyphens=False
+        ) or [""]
+    return out
+
+
+def _product_block(item: dict, intro: str, width: int) -> list[str]:
+    lines = [item["product"]]
+    lines += _wrap(intro, width)
+    # `bits` is a LIST of standalone phrases, emitted one per line. There is no
+    # separator and no bullet: the old `" · ".join(...)` plus a '+' marker read
+    # like an expression (`+faithful JSON… · full tool outputs`) rather than a
+    # list of things, and the '+' only survived because it happened to be first.
+    for bit in item["bits"]:
+        lines += _wrap(bit, width)
+    return lines
+
+
+def plan_text(
+    profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
+) -> str:
+    """The product block of the confirm (NO label, NO leading indentation: the
+    caller owns the surrounding layout). One line per product name, its
+    description and its effective flags BELOW it, wrapped at `width`."""
     plan = resolve(profile, presets)
-    lines: list[str] = []
+    blocks: list[list[str]] = []
     if plan["kind"] == "preset":
         for item in plan["items"]:
-            lines.append(f"{item['product']}:")
-            lines.append(f"  - {item['intro']}")
-            bits = item["bits"]
-            if bits:
-                # old bash: printf '%s\n' "$bits" | sed 's/ · /\n  - /g'
-                # the leading space of the first bit survives (see probing).
-                lines.append(bits.replace(" · ", "\n  - "))
+            blocks.append(_product_block(item, item["intro"], width))
     else:
         item = plan["items"][0]
-        lines.append(f"{item['product']}:")
-        lines.append(f"  - {item['intro']} (default options)")
+        block = _product_block(item, item["intro"], width)
+        # A bare product keyword has no preset behind it. That used to ride on
+        # the description as "(default options)", but the 72-column wrap pushed
+        # the parenthetical onto its own line, where it read as a stray fragment.
+        # It is a caption in its own right, like every other line here.
+        block.append("Default options, no flags set")
+        blocks.append(block)
+    return "\n\n".join("\n".join(b) for b in blocks)
+
+
+def notes_text(
+    profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
+) -> str:
+    """The caveats of a plan, wrapped and label-free; "" when there are none.
+
+    A note is NEVER a recipe of its own — `has_json`/`has_sanitize` are read off
+    the preset's own flags (per product for a bundle), so these lines can only
+    ever describe THAT recipe, which is why the caller marks them as an
+    annotation of the plan instead of another thing it will produce.
+    """
+    plan = resolve(profile, presets)
+    notes: list[str] = []
     if plan["has_json"]:
-        lines.append("Notes:")
-        for note in NOTES_JSON:
-            lines.append(f"  - {note}")
+        notes += list(NOTES_JSON)
     if plan["has_sanitize"]:
-        lines.append("")
-        lines.append(SANITIZE_WARN)
-    return "\n".join(lines)
+        notes.append(SANITIZE_WARN)
+    return "\n".join(line for note in notes for line in _wrap(note, width))
 
 
 def preset_descr(name: str, pdata: dict | None = None) -> str:
@@ -434,10 +484,22 @@ def _cli() -> int:
             plan = resolve(args[1])
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
-        if cmd == "plan":
+        if cmd in ("plan", "notes"):
             if len(args) < 2:
                 return 1
-            print(plan_text(args[1]))
+            # `plan <profile> [--width N]` / `notes <profile> [--width N]`
+            width = PLAN_WIDTH
+            if len(args) > 3 and args[2] == "--width" and args[3].isdigit():
+                width = int(args[3])
+            text = (
+                plan_text(args[1], width=width)
+                if cmd == "plan"
+                else notes_text(args[1], width=width)
+            )
+            # No trailing newline when empty: an empty `$(...)` is how the
+            # caller tells "this plan has no notes" from "it printed nothing".
+            if text:
+                print(text)
             return 0
     except ValueError:
         return 1

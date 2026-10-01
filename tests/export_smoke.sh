@@ -612,6 +612,67 @@ IX=$(last_meta transcript); IX="${IX%/metadata.json}/index.md"
 grep -q "## Sessions" "$IX" && ok "index.md sessions section" || bad "index.md"
 grep -q "](" "$IX" && ok "index.md links" || bad "index.md links"
 
+echo "== metadata.session_records (WHICH sessions the run actually contains) =="
+# NOTE: the UNFILTERED run is the meaningful one. A title filter like
+# "%Project Alpha%" matches NO subagent (their titles differ), so a filtered run
+# has zero subagents and every subagent assertion below would pass vacuously.
+run export transcript --filter "%" >/dev/null
+SR=$(last_meta transcript)
+jq -e '.session_records | type == "array"' "$SR" >/dev/null \
+    && ok "session_records is an array" || bad "session_records type"
+# .sessions stays the untouched AGGREGATE object (nothing was repurposed).
+jq -e '.sessions | (has("total") and has("roots") and has("subagents"))' "$SR" >/dev/null \
+    && ok ".sessions is still the aggregate {total,roots,subagents}" || bad ".sessions shape"
+# The aggregate is the SUMMARY of the records, so the two cannot disagree.
+NREC=$(jq '.session_records | length' "$SR")
+[ "$NREC" = "$(jq '.sessions.total' "$SR")" ] \
+    && ok "records == sessions.total ($NREC)" || bad "records $NREC != total $(jq '.sessions.total' "$SR")"
+[ "$(jq '[.session_records[] | select(.kind == "root")] | length' "$SR")" = "$(jq '.sessions.roots' "$SR")" ] \
+    && ok "record roots == sessions.roots" || bad "root count mismatch"
+NSUB=$(jq '[.session_records[] | select(.kind == "subagent")] | length' "$SR")
+[ "$NSUB" = "$(jq '.sessions.subagents' "$SR")" ] \
+    && ok "record subagents == sessions.subagents ($NSUB)" || bad "subagent count mismatch"
+[ "$NSUB" -gt 0 ] \
+    && ok "the run really did include subagents (assertions are not vacuous)" || bad "no subagents in the set"
+# IDENTITY only: no per-session counts duplicated (the totals live at top level).
+jq -e '[.session_records[] | keys[]] | unique - ["id","title","kind","parent_id","created","updated"] | length == 0' "$SR" >/dev/null \
+    && ok "records carry identity only (no duplicated counts)" || bad "record fields: $(jq -c '[.session_records[0]|keys]' "$SR")"
+# Absent parent is null, never "" (the machine-artifact rule).
+jq -e '[.session_records[] | select(.parent_id == null)] | length > 0' "$SR" >/dev/null \
+    && ok "a root parent_id is null (not an empty string)" || bad "parent_id null rule"
+jq -e '[.session_records[] | select(.kind == "subagent") | .parent_id | type == "string"] | all' "$SR" >/dev/null \
+    && ok "every subagent record names its parent" || bad "subagent parent_id"
+# An ORPHAN (parent row gone) is a root, and keeps its dangling parent_id.
+jq -e '[.session_records[] | select(.id == "ses_ORPHAN01") | .kind] == ["root"]' "$SR" >/dev/null \
+    && ok "the orphan is recorded as a root, not a subagent" || bad "orphan kind: $(jq -c '[.session_records[] | select(.id == "ses_ORPHAN01")]' "$SR")"
+jq -e '[.session_records[] | select(.id == "ses_ORPHAN01") | .parent_id] == ["ses_MISSING"]' "$SR" >/dev/null \
+    && ok "the orphan keeps its dangling parent_id verbatim" || bad "orphan parent_id"
+# ISO-8601 UTC dates, one form.
+jq -e '[.session_records[] | .created, .updated] | all(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "$SR" >/dev/null \
+    && ok "record dates are ISO-8601 UTC" || bad "record date format"
+# It tracks the EXPORTED set, not the requested one: --no-subagents drops rows.
+run export transcript --filter "%" --no-subagents >/dev/null
+SR2=$(last_meta transcript)
+[ "$(jq '.session_records | length' "$SR2")" = "$(jq '.sessions.total' "$SR2")" ] \
+    && ok "no-subagents: records == total ($(jq '.sessions.total' "$SR2"))" || bad "no-subagents: records $(jq '.session_records|length' "$SR2") != total $(jq '.sessions.total' "$SR2")"
+jq -e '[.session_records[] | select(.kind == "subagent")] | length == 0' "$SR2" >/dev/null \
+    && ok "no-subagents: every dropped subagent is absent from the records" || bad "no-subagents records leak"
+# It is NOT sessions_selected, which stays the REQUESTED ids (and only when asked).
+jq -e '.sessions_selected == null' "$SR" >/dev/null \
+    && ok "sessions_selected untouched (no --sessions was passed)" || bad "sessions_selected changed"
+run export transcript --sessions ses_A0001,ses_B0001 >/dev/null
+SR3=$(last_meta transcript)
+[ "$(jq '.session_records | length' "$SR3")" = 2 ] \
+    && ok "an explicit --sessions run records exactly what it exported" || bad "records with --sessions: $(jq -c '.session_records|map(.id)' "$SR3")"
+jq -e '.sessions_selected | type == "array"' "$SR3" >/dev/null \
+    && ok "sessions_selected keeps its own meaning (requested ids)" || bad "sessions_selected type"
+# exports view --json carries them through (it returns the raw metadata). It
+# aggregates EVERY run of the stamp, so assert "at least one has records" rather
+# than reading [0]: older runs predate the key.
+NV=$(run exports view "$(basename "$(dirname "$(dirname "$SR3")")")" --json \
+     | jq '[.[] | select(.session_records != null) | .session_records | length] | add // 0')
+[ "$NV" -gt 0 ] && ok "exports view --json carries session_records ($NV total)" || bad "exports view --json records ($NV)"
+
 echo "== exports management =="
 XL=$(run exports list)
 printf '%s' "$XL" | grep -q "^== Exports (" && ok "exports list" || bad "exports list"

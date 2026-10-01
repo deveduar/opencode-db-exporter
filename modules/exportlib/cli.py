@@ -30,7 +30,7 @@ from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile
 from exportlib.render import Renderer
 from exportlib.transcript import append_transcript_inline, write_transcript
-from exportlib.util import die, safe_filename, selection_label, selection_meta, sha256_file
+from exportlib.util import die, safe_filename, selection_label, selection_meta, sha256_file, ts_iso
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
 from exportlib.flags import FLAGS
 
@@ -166,6 +166,42 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
     return ap
+
+
+def _session_record(sess: dict, kind: str) -> dict:
+    """One session identity for `metadata.json.session_records`.
+
+    IDENTITY ONLY, deliberately. `messages`/`compactions` are already totals at
+    the top level of the same file, so repeating them per session would create a
+    second set of numbers to keep in sync for no gain; what metadata did NOT have
+    anywhere was WHICH sessions the run actually contains.
+    """
+    return {
+        "id": sess["id"],
+        "title": sess["title"] or sess["slug"],
+        "kind": kind,
+        # absent parent -> null, not "" (the machine-artifact rule)
+        "parent_id": sess["parent_id"] or None,
+        "created": ts_iso(sess["time_created"]),
+        "updated": ts_iso(sess["time_updated"]),
+    }
+
+
+def _session_records(written: list, sessions: dict) -> list[dict]:
+    """One record per session actually WRITTEN, in export order.
+
+    Derived from `written` — the very list of `(root, subs, folder)` tuples that
+    created the directories — so the records cannot disagree with what is on
+    disk, and a run that cascaded or dropped subagents records exactly the
+    result. This is also why it is NOT `sessions_selected`, which records what
+    was REQUESTED (and only when `--sessions` was passed at all).
+    """
+    out: list[dict] = []
+    for root, subs, _folder in written:
+        out.append(_session_record(root, "root"))
+        for sid in subs:
+            out.append(_session_record(sessions[sid], "subagent"))
+    return out
 
 
 def _backup_aligned(db_path: Path) -> str:
@@ -374,6 +410,7 @@ def main() -> None:
         "db_sha256": meta_sha,
         "filter": args.filter,
         "sessions_selected": args.sessions,
+        "session_records": _session_records(written, sessions),
         "selection": selection_meta(args),
         "profile": args.profile,
         "preset": args.preset,

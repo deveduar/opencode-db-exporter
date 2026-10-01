@@ -259,19 +259,46 @@ printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless
     && ok "preset rows include purpose tag (archive shows lossless)" || bad "preset rows missing purpose: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
 printf '%s\n' "$(oc_preset_legend)" | grep -q 'lossless full backup' \
     && ok "oc_preset_legend explains each shipped plan in the header" || bad "preset legend: $(printf '%s\n' "$(oc_preset_legend)")"
-# New helper tests
-[ "$(oc_annotate_flags "json=true,tool_output=full")" = " +faithful JSON (raw, unfiltered) · full tool outputs" ] \
-    && ok "oc_annotate_flags json+tool_output" || bad "annotate: [$(oc_annotate_flags "json=true,tool_output=full")]"
-[ "$(oc_annotate_flags "sanitize=true,no_reasoning=true")" = " sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…) · reasoning omitted" ] \
+# New helper tests. One phrase per LINE: no separator, no leading marker, because
+# a joined string rendered as an expression (`+faithful JSON... · full tool
+# outputs`) instead of a list of things the export adds.
+[ "$(oc_annotate_flags "json=true,tool_output=full")" = "faithful JSON, raw and unfiltered
+full tool outputs" ] \
+    && ok "oc_annotate_flags json+tool_output, one phrase per line" || bad "annotate: [$(oc_annotate_flags "json=true,tool_output=full")]"
+[ "$(oc_annotate_flags "sanitize=true,no_reasoning=true")" = "sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…)
+reasoning omitted" ] \
     && ok "oc_annotate_flags sanitize+no_reasoning" || bad "annotate: [$(oc_annotate_flags "sanitize=true,no_reasoning=true")]"
-[ "$(oc_annotate_flags "cap=500")" = " cap 500 chars" ] && ok "oc_annotate_flags cap" || bad "annotate cap: [$(oc_annotate_flags "cap=500")]"
+[ "$(oc_annotate_flags "cap=500")" = "cap 500 chars" ] && ok "oc_annotate_flags cap" || bad "annotate cap: [$(oc_annotate_flags "cap=500")]"
 # oc_export_plan produces lines for a preset (check archive)
-printf '%s\n' "$(oc_export_plan archive)" | grep -q '+faithful JSON (raw, unfiltered)' && ok "oc_export_plan archive notes raw JSON" || bad "plan archive: $(oc_export_plan archive)"
-printf '%s\n' "$(oc_export_plan archive)" | grep -q 'full tool outputs' && ok "oc_export_plan archive notes full outputs" || bad "plan archive: $(oc_export_plan archive)"
+printf '%s\n' "$(oc_export_plan archive)" | grep -q '^faithful JSON, raw and unfiltered$' && ok "oc_export_plan archive notes raw JSON" || bad "plan archive: $(oc_export_plan archive)"
+printf '%s\n' "$(oc_export_plan archive)" | grep -q '^full tool outputs$' && ok "oc_export_plan archive notes full outputs" || bad "plan archive: $(oc_export_plan archive)"
+# No operator symbology anywhere in the block: no '+' marker, no ' · ' joiner,
+# no em dash. Each thing is its own line of prose.
+PLAN_SYM=$(oc_export_plan archive)
+grep -qE '^[+*-] | · |—| +$' <<<"$PLAN_SYM" \
+    && bad "the plan reintroduced operator symbology: [$(grep -nE '^[+*-] | · |—| +$' <<<"$PLAN_SYM" | head -2)]" \
+    || ok "no '+' marker, no ' · ' joiner, no em dash in the plan"
+# Every added flag is on its OWN line, so each one is assertable on its own.
+for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched files"; do
+    grep -qxF "$bit" <<<"$PLAN_SYM" \
+        && ok "its own line: $bit" || bad "not on its own line: $bit"
+done
 # share plan NO LONGER has sanitize (removed from preset)
 printf '%s\n' "$(oc_export_plan share)" | grep -qv 'sanitize' && ok "oc_export_plan share has no sanitize" || bad "plan share should not have sanitize: $(oc_export_plan share)"
 # transcript default plan
-printf '%s\n' "$(oc_export_plan transcript)" | grep -q 'default options' && ok "oc_export_plan transcript default" || bad "plan transcript: $(oc_export_plan transcript)"
+printf '%s\n' "$(oc_export_plan transcript)" | grep -qx 'Default options, no flags set' \
+    && ok "oc_export_plan transcript default (a caption, not a parenthetical)" || bad "plan transcript: $(oc_export_plan transcript)"
+# Notes are an ANNOTATION of the plan, not another thing it produces: they come
+# from the preset's own flags, so they live in their own '-> Notes' block.
+N_ARCH=$(oc_export_notes archive); N_NOTES=$(oc_export_notes notes)
+grep -q 'faithful JSON keeps everything' <<<"$N_ARCH" \
+    && ok "oc_export_notes archive reports the raw-JSON caveat" || bad "notes archive: $N_ARCH"
+[ -n "$N_NOTES" ] && bad "a preset with no json/sanitize must have no notes: $N_NOTES" \
+    || ok "a plan with nothing to warn about prints no notes"
+# The notes must never leak into the product block (that was the old 'Notes:'
+# line inside the tree, which read like a third product).
+oc_export_plan archive | grep -q 'Notes' \
+    && bad "the notes leaked back into the product block" || ok "the product block carries no notes"
 export OCED_PRESETS="$TMP/no-presets.json"
 
 echo "== exports picker (view / toggle to remove / bulk) =="
@@ -517,9 +544,66 @@ qset "__SUBS__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$XOUT" 2>&1
 grep -q 'Menu adds: subagents cascaded from selected roots' "$XOUT" \
     && ok "the plan says subagents are cascaded" || bad "plan menu-adds row: $(grep 'Menu adds' "$XOUT")"
-grep -qE '^   Sessions: +the 3 sessions you marked' "$XOUT" \
+grep -qE '^Sessions: +the 3 sessions you marked' "$XOUT" \
     && ok "the plan says which sessions are selected" || bad "plan sessions row: $(grep 'Sessions:' "$XOUT")"
-grep -q 'Will produce:' "$XOUT" && ok "the plan still lists what will be produced" || bad "will-produce block missing"
+# The plan block is FLAT: product name at the left margin, its description
+# BELOW it. No "Will produce:" label, no bullets, no leading indentation.
+grep -q 'Will produce' "$XOUT" && bad "the old 'Will produce:' label is still there" \
+    || ok "the plan dropped the 'Will produce:' label"
+grep -qE '^transcript$' "$XOUT" \
+    && ok "the product name sits at the left margin" || bad "plan product margin: $(grep -nE 'transcript' "$XOUT" | head -3)"
+grep -qE '^[-*] ' "$XOUT" && bad "the plan grew a bullet again" || ok "the plan has no bullets"
+# The 'notes' preset sets no json/sanitize, so the confirm must show NO
+# '-> Notes' block at all (a note is an annotation, not a product). $XOUT above
+# is exactly that preset, so it is already the negative case.
+grep -q '^-> Notes' "$XOUT" \
+    && bad "a note-less plan still printed '-> Notes'" \
+    || ok "no '-> Notes' block when the plan has nothing to warn about"
+# A preset that DOES set json gets the block, once, after the products.
+# NOTE: grep PATTERN "$VAR" would treat the variable as a FILENAME; these
+# guards pipe / use a here-string so the content is really the input.
+CARC=$(oc_export_confirm archive "all 6 sessions in the DB" "nothing" "")
+grep -q '^-> Notes' <<<"$CARC" \
+    && ok "'-> Notes' marks the caveats as an annotation of the plan" || bad "missing '-> Notes' in: $(tr '\n' '|' <<<"$CARC")"
+[ "$(grep -c '^-> Notes' <<<"$CARC")" = "1" ] \
+    && ok "'-> Notes' appears exactly once" || bad "'-> Notes' repeated"
+# The standalone-subagent note stays in the header rows.
+CSUB=$(oc_export_confirm notes "the 2 sessions you marked" "nothing" "the preset drops every subagent")
+grep -qE '^Note: +the preset drops every subagent' <<<"$CSUB" \
+    && ok "the standalone-subagent note stays in the header rows" || bad "note row: [$(grep '^Note:' <<<"$CSUB")]"
+# Scoped to the plan helper itself: $XOUT also holds the picker rows, which DO
+# carry a leading space, so a blanket '^ +' over it proves nothing.
+PLANOUT=$(oc_export_plan archive)
+grep -qE '^ +' <<<"$PLANOUT" \
+    && bad "the plan is not flush left: [$(grep -nE '^ +' <<<"$PLANOUT" | head -1)]" \
+    || ok "the plan is flush left"
+grep -qE '^[-*] |^ +' <<<"$PLANOUT" \
+    && bad "the plan reintroduced a level or a bullet" || ok "the plan has no levels and no bullets"
+# Nothing is hidden: the wrap may split a line but never a word, and no line
+# runs past the fixed width.
+# The contract is the LITERAL 72, not "$OCED_PLAN_WIDTH": comparing against the
+# same knob would still pass if both the width and the expectation moved.
+WIDEST=$(printf '%s\n' "$PLANOUT" | awk '{ n=length($0); if (n>m) m=n } END { print m+0 }')
+[ "$WIDEST" -le 72 ] \
+    && ok "every plan line fits the fixed width ($WIDEST <= 72)" || bad "plan line too long: $WIDEST"
+[ "$OCED_PLAN_WIDTH" = "72" ] \
+    && ok "the menu pins the plan width to 72" || bad "OCED_PLAN_WIDTH is $OCED_PLAN_WIDTH, not 72"
+[ "$(python3 "$MOD/exportlib/plan.py" rows >/dev/null 2>&1; python3 -c "
+import sys; sys.path.insert(0, '$MOD')
+import importlib.util as u
+spec = u.spec_from_file_location('pl', '$MOD/exportlib/plan.py'); m = u.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.PLAN_WIDTH)")" = "72" ] \
+    && ok "plan.py PLAN_WIDTH default is 72" || bad "plan.py PLAN_WIDTH drifted"
+printf '%s\n' "$PLANOUT" | grep -q 'RAG corpus in corpus.jsonl' \
+    && ok "the plan keeps the full product intros (nothing hidden)" || bad "plan intro missing"
+# The bits are emitted verbatim: every one of them is present, in order.
+for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched files"; do
+    printf '%s\n' "$PLANOUT" | grep -qF "$bit" \
+        && ok "the plan keeps the effective flag: $bit" || bad "plan flag missing: $bit"
+done
+# Every line of the description must be under its product, never beside it.
+grep -qE '^Markdown conversation per session' "$XOUT" \
+    && ok "the description goes BELOW its product" || bad "plan description placement"
 
 echo "== the confirmation is honest about the EFFECTIVE selection =="
 # 'clean' pins filter "Project Beta"; 'notes' pins no selection at all.
@@ -529,19 +613,19 @@ ALL_IDS="ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 oc_preset_run clean "" "$ALL_IDS" 0 > "$TMP/c1.txt" 2>&1
-grep -qE '^   Sessions: +filter "Project Beta" \(from the preset\) — your 6 marks are not used' "$TMP/c1.txt" \
+grep -qE '^Sessions: +filter "Project Beta" \(from the preset\) — your 6 marks are not used' "$TMP/c1.txt" \
     && ok "all marked + pinned filter: the preset wins and says so" || bad "c1: $(grep 'Sessions:' "$TMP/c1.txt")"
 grep -qx 'export clean' "$CALLS" && ok "all marked passes no --sessions (the preset selection applies)" || bad "c1 cmd: $(cat "$CALLS")"
 # 2) a partial selection always overrides the preset, and says it does.
 : > "$CALLS"
 oc_preset_run clean "" "ses_A0001,ses_B0001" 0 > "$TMP/c2.txt" 2>&1
-grep -qE '^   Sessions: +the 2 sessions you marked \(the menu overrides the preset: filter "Project Beta"\)' "$TMP/c2.txt" \
+grep -qE '^Sessions: +the 2 sessions you marked \(the menu overrides the preset: filter "Project Beta"\)' "$TMP/c2.txt" \
     && ok "partial marks override the preset filter, and the plan says so" || bad "c2: $(grep 'Sessions:' "$TMP/c2.txt")"
 grep -qx 'export clean --sessions ses_A0001,ses_B0001' "$CALLS" && ok "partial marks pass --sessions" || bad "c2 cmd: $(cat "$CALLS")"
 # 3) everything marked + a preset that pins nothing -> the marks really are all.
 : > "$CALLS"
 oc_preset_run notes "" "$ALL_IDS" 0 > "$TMP/c3.txt" 2>&1
-grep -qE '^   Sessions: +all 6 sessions in the DB' "$TMP/c3.txt" \
+grep -qE '^Sessions: +all 6 sessions in the DB' "$TMP/c3.txt" \
     && ok "all marked + no pinned selection = every session" || bad "c3: $(grep 'Sessions:' "$TMP/c3.txt")"
 grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is marked" || bad "c3 cmd: $(cat "$CALLS")"
 # 4) a preset that already drops subagents: the switch cannot widen it, and the
@@ -551,7 +635,7 @@ grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is mark
 oc_preset_run nosub "" "$ALL_IDS" 0 > "$TMP/c4.txt" 2>&1
 grep -q 'the preset drops every subagent' "$TMP/c4.txt" \
     && ok "a subagent-dropping preset is called out in the plan" || bad "c4: $(grep 'Note:' "$TMP/c4.txt")"
-grep -qE '^   Menu adds: +nothing' "$TMP/c4.txt" \
+grep -qE '^Menu adds: +nothing' "$TMP/c4.txt" \
     && ok "the menu claims no flag when it adds none" || bad "c4 menu-adds: $(grep 'Menu adds' "$TMP/c4.txt")"
 # The shrink picker is roots-only: it must NOT grow the visibility row.
 reset; call_log; confirm_action() { return 0; }

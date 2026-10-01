@@ -305,6 +305,23 @@ def shrink_flags_table() -> str:
     return "\n".join(rows)
 
 
+def _write_atomic(path: str, text: str) -> None:
+    """Write `text` to `path` atomically (temp file in the same dir + rename).
+
+    These four artifacts ARE the contract the smoke suite validates, so a partial
+    write must never be observable: a plain open(...,"w") leaves a file of the
+    right length filled with NULs if the process dies before flushing, and the
+    anti-drift check then reports a meaningless "drift" for a file that is not
+    stale but corrupt.
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--docs", action="store_true",
@@ -313,21 +330,17 @@ if __name__ == "__main__":
     os.makedirs(GENERATED, exist_ok=True)
     if args.docs:
         table = flags_table() + "\n"
-        with open(FLAGS_TABLE_PATH, "w", encoding="utf-8") as f:
-            f.write(table)
+        _write_atomic(FLAGS_TABLE_PATH, table)
         print(f"Generated {os.path.relpath(FLAGS_TABLE_PATH, ROOT)}")
         print(table, end="")
         shrink_table = shrink_flags_table() + "\n"
-        with open(SHRINK_FLAGS_TABLE_PATH, "w", encoding="utf-8") as f:
-            f.write(shrink_table)
+        _write_atomic(SHRINK_FLAGS_TABLE_PATH, shrink_table)
         print(f"Generated {os.path.relpath(SHRINK_FLAGS_TABLE_PATH, ROOT)}")
         print(shrink_table, end="")
         sys.exit(0)
     schema = generate_schema()
-    with open(SCHEMA_PATH, "w", encoding="utf-8") as f:
-        json.dump(schema, f, indent=2, ensure_ascii=False)
+    _write_atomic(SCHEMA_PATH, json.dumps(schema, indent=2, ensure_ascii=False))
     print(f"Generated {os.path.relpath(SCHEMA_PATH, ROOT)}")
     shrink_schema = generate_shrink_schema()
-    with open(SHRINK_SCHEMA_PATH, "w", encoding="utf-8") as f:
-        json.dump(shrink_schema, f, indent=2, ensure_ascii=False)
+    _write_atomic(SHRINK_SCHEMA_PATH, json.dumps(shrink_schema, indent=2, ensure_ascii=False))
     print(f"Generated {os.path.relpath(SHRINK_SCHEMA_PATH, ROOT)}")
