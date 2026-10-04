@@ -11,7 +11,7 @@
   "properties": {
     "presets": {
       "type": "object",
-      "description": "Name -> preset. Names conflict with product keywords (transcript|memory|compactions|full) are allowed as data, but `export <name>` always resolves a keyword first.",
+      "description": "Name -> preset. Names conflict with product keywords (transcript|memory|digest|full) are allowed as data, but `export <name>` always resolves a keyword first. 'compactions' is a deprecated alias of 'digest'.",
       "additionalProperties": {
         "$ref": "#/definitions/preset"
       }
@@ -259,7 +259,7 @@
               "enum": [
                 "transcript",
                 "memory",
-                "compactions"
+                "digest"
               ],
               "description": "full is a CLI alias, not a preset product."
             },
@@ -338,7 +338,7 @@
               "minProperties": 1,
               "additionalProperties": false,
               "patternProperties": {
-                "^(transcript|memory|compactions)$": {
+                "^(transcript|memory|digest)$": {
                   "type": "object",
                   "description": "Per-product flags; the selection (top level) is shared by every product.",
                   "additionalProperties": false,

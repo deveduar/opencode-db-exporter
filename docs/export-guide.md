@@ -39,10 +39,13 @@ Use it when you want to *give context to another AI* (RAG: index it, search it,
 ingest a summary of yesterday's work), or when you want a terse *inventory* of what
 each conversation produced. Not for human continuous reading.
 
-### `compactions` — "quick knowledge review" (the digest-only extract)
+### `digest` — "quick knowledge review" (the digest-only extract)
 
 What it produces: one Markdown file per session with **only the compacted-context
-summaries** — what opencode "remembered" each time the conversation was compacted.
+digests** — what opencode "remembered" each time the conversation was compacted.
+(The old name `compactions` still works as a deprecated alias; `digest` is the real
+one, because a *compaction* is the event and a *digest* is the summary written for
+it — see the marker/digest table in [docs/schemas.md](schemas.md).)
 
 Sizing: **very small**.
 
@@ -104,7 +107,7 @@ The **shipped plans** are named after their purpose:
 | `share` | transcript (`json` + `sanitize` + `no_reasoning`) | **publish transcript (best-effort redaction)**: sanitized, no reasoning, faithful JSON | medium |
 | `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
-| `digest` | compactions (defaults) | **knowledge arc**: just the compaction summaries | tiny |
+| `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
 
 Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same sessions, and
 `quick` ~4× the plain manual transcript. Delete runs you no longer need with
@@ -158,7 +161,7 @@ opencode-db menu  →  Export
    subfolder per product (`transcript/`, `memory/`, …) and all sessions aggregated by
    `opencode-db exports list|view`.
 
-Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|compactions [flags]`). ESC always climbs back / cancels.
+Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|digest [flags]`; `full` and `compactions` still resolve as aliases). ESC always climbs back / cancels.
 
 ## 4. Decision matrix
 
@@ -173,7 +176,7 @@ Without a presets file, the classic raw-flags CLI remains available (`opencode-d
 | give another AI the context of my sessions (RAG) | `export memory` | corpus.jsonl; add `--files` for touched files |
 | read one conversation in full | `transcript` (manual/CLI) | add `--json` if you also want the faithful archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
-| skim the "knowledge arc" of a session | `compactions` | also available without exporting: `opencode-db info <id>` / `opencode-db compactions <id> show` |
+| skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
 | export from a stored backup instead of the live DB | `--from-backup <file>` | every read command honors it |
 

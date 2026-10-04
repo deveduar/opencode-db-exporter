@@ -41,7 +41,11 @@ describe an invented schema):
 - **Compaction**: the `part.data.type = 'compaction'` rows are only markers (`auto`,
   `overflow`, `tail_start_id`); the **digest** of the compacted context is the `text` of
   the following message with `data.mode='compaction'`. `digests_for` (in `exportlib/db.py`)
-  is the single source of this digest, shared by the `compactions` product and `memory`.
+  is the single source of this digest, shared by the `digest` product and `memory`. The
+  same two literals make `compactions` and `digests` two different counters in
+  `metadata.json` (markers vs summaries) and are the reason the **product** is named
+  `digest`: it only ever wrote digests. `compactions` survives as a deprecated alias
+  (`PRODUCT_ALIASES`, normalised at resolve time) — see `docs/export-analysis.md`.
 - Config precedence: **env > conf file > default** (`load_conf` in `common.sh` snapshots
   the variables before sourcing `$OCED_CONF`).
 
@@ -59,7 +63,7 @@ guarantees seeing everything).
 | Product | Document |
 |---|---|
 | `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers). `full` is an accepted alias |
-| `compactions` | only the `mode=compaction` digests |
+| `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
 | `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
 
 There is no `all` meta-profile; "all sessions" means selecting ALL in the picker (or an
@@ -74,7 +78,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
 `product` + its config flags + optionally the selection (`filter` LIKE **or** exact
 `sessions`, never both). It is the source of truth for both the CLI and the menu:
 
-- `export <name>` resolves: if `name` ∈ `transcript|memory|compactions|full` it is a
+- `export <name>` resolves: if `name` ∈ `transcript|memory|digest|full` it is a
   product; if it is a known preset, `apply_preset()` applies its keys over the argparse
   `args` (validating `choices`/types with `die()` on an invalid value); otherwise
   `ap.error` lists the known products and presets. `metadata.json` records `"preset"`
@@ -90,7 +94,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   before exporting; the menu turns that into an offer to create a fresh backup first.
   Skipped silently under `--from-backup` (the source *is* the snapshot).
 - **Bundle presets** (`products` instead of `product`): a map `{product: {flags}}` over
-  `transcript|memory|compactions` (mutually exclusive with `product`). The selection is
+  `transcript|memory|digest` (mutually exclusive with `product`). The selection is
   top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
   (`run_bundle()` in `cli.py`) computes one shared collision-free stamp (bumped to
   `stamp@N` only when any product dir already exists), then re-executes `exportlib/cli.py
@@ -207,13 +211,51 @@ inspect row and on a toggle without `[*]`, and asserts the sample is non-vacuous
 `oc_fzf_sel` and sources the per-domain flows from `modules/menu/`
 (`backups.sh`, `sessions.sh`, `export.sh`, `exports.sh`, `shrink.sh`), with the shared
 multi-mark picker in `modules/menu/core.sh`. That picker is **one generic function**
-(`oc_session_picker`) parameterised through a `cfg` nameref — `roots_only`, `title`,
-`header`, `order`, `order_mode`, `make_label`, `make_action`, `empty_guard_msg`,
-`get_sub_count` — so the sessions picker (read-only details) and the export/shrink
-selectors cannot drift apart. `make_action` receives a third argument, `hide_subs`,
-**only when the flow defines `get_sub_ids`**; that keeps the shrink callback at arity 2
-without a special case inside the shared code. The cfg is passed as a name, never
-copied into a local: a self-referential nameref would be a circular reference.
+(`oc_session_picker`) parameterised through a `cfg` nameref, so the three session
+screens cannot drift apart:
+
+| cfg key | used by | meaning |
+|---|---|---|
+| `roots_only` | shrink | render ROOT sessions only (a subagent always follows its root) |
+| `title` / `header` | all | the fzf title and the live-state line above the rows |
+| `order` / `order_mode` | all | initial sort and its label; the `[*]` order row flips both |
+| `make_label` / `make_action` | select screens | the `[>]` flow row's text and what it runs with the marked-ids CSV |
+| `empty_guard_msg` | select screens | what to say when `[>]` is pressed with nothing marked |
+| `get_sub_count` | select screens | the `(N sub)` badge per root (recursive) |
+| `get_sub_ids` | sessions + export | adds the `subagents: shown ⇄ hidden` row; its presence is also what makes `make_action` receive the third argument `hide_subs`, which keeps the shrink callback at arity 2 without a special case in the shared code |
+| `mode: view` | sessions | browse instead of select: no marks, no `__MAKE__`, no mark-all rows, and a session row is a **report** rather than a selection (so it wears no `[x]`/`[ ]`, which would promise a selection that is never built) |
+| `view_action` / `view_action_all` / `view_all_header` | sessions | the per-row report, the iterator for `[>] details of all sessions`, and the one group header printed **before** the loop by the picker itself (a callback cannot tell the first call from the last) |
+
+The cfg is passed as a name, never copied into a local: a self-referential nameref would
+be a circular reference.
+
+**One list, one rule: where a picker goes after it returns.** `run_menu` has **no
+back-stack** — a submenu is a function call, so a picker that `return`s hands control to
+the root menu, and every "go back to the list I came from" has to be a `continue` inside
+the picker's own `while true`. The single idiom is:
+
+```bash
+menu_pause "<label>" || return 0; continue    # Enter: redraw THIS list · Esc: main menu
+```
+
+This was not cosmetic. The report paths used to `return 0` after the pause (→ root) while
+the remove paths `continue`d (→ stayed), which is why Enter after a report jumped to the
+main menu and Enter after a confirmed removal did not. A deep wizard must therefore
+**not** own a pause: `oc_export_picker` and the shrink wizard return `0` = "it ran" and
+`130` = "ESC'd out, no pause", and the frame that owns the list pauses and decides the
+destination (`[ $? -eq 0 ] || continue; menu_pause … || return 0; continue`). Report
+pauses are labelled after the list (`Manage exports`/`Backups`/`Shrinks`) and create
+pauses after the action (`Export`/`New backup`/`Shrink copy`), so they can never be
+confused. `oc_shrinks_swap_pick` is the one exception that already owned its pause: it
+returns the pause rc so `__SWAP__` can propagate an ESC.
+
+**The label is a short id; the key is the full id.** `oc_short_id` renders
+`ses_f72115a…` as `f72115a_` in a fixed `ID_LABEL_W`=8 column (`ses_` dropped, cut with
+a `_` truncation marker), and every session row does it the same way across the three
+pickers, so the id is a fixed-width field and the title/date columns stay aligned. The
+**row key stays the full id**: marks, the CSV and every command depend on it. This is
+display only — a `__REPORT_ALL__` id is never shortened in the data path, and the
+`info <id>` banner keeps the full id on purpose (it is copy-pasteable there).
 
 **The export flow is sessions → preset → confirm.** The sessions picker comes first
 (all sessions marked, `(N sub)` badges, `subagents: shown ⇄ hidden`, recency-ordered with
@@ -279,6 +321,17 @@ The root menu recomputes its header on every loop: `run_menu --refresh-cb oc_roo
 rebuilds `ACTION_STATUS` (DB/sessions/WAL/backup/exports counts) after each action, so a
 pickered deletion is reflected immediately.
 
+**There is no `check` entry, because `status` is the check.** The root is
+`exports · backups · shrinks · sessions · status · help`, and that is deliberate rather than
+an omission: `status` is read-only, prints the whole health picture (size/WAL, the `> 1 GiB`
+warning with its shrink recipe, table/session/message counts, **backup alignment**, the
+version + schema probe and the dependency report) and already returns **non-zero** when the
+schema probe fails, so it is scriptable as a health check. A second `check` row would only
+reprint it. What `status` genuinely does *not* cover is verifying stored **artifacts**
+(`backups verify`'s sha256 vs the manifest, `shrinks verify`'s staleness): the first is
+deliberately folded into `backups view` (§4) because a details screen must not show an
+unvalidated backup, and the second is exposed as the shrinks picker's `[?] verify` row.
+
 **Create + manage in one picker.** Shrink lives in its own root entry: `oc_shrinks_picker`
 offers `[>] create shrink copy` (a **3-step wizard**: sessions → recipe → read-only
 plan, see §5; LIVE DB, own snapshot), a `[>] swap a copy into the LIVE DB` row
@@ -304,7 +357,7 @@ wants, a file makes the view of a *non-newest* copy correct. The check is not a 
 stays available in the CLI for scripted use.
 
 The term **plan/preset** always means the named config; **product** always the keyword
-(`transcript|memory|compactions`). Usage and the decision matrix:
+(`transcript|memory|digest`). Usage and the decision matrix:
 `docs/export-guide.md`; short usage: `README.md` (Menu).
 
 ## 5. `shrink`

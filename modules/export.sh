@@ -12,7 +12,7 @@ oced_export_one() {
 }
 
 # oced_export [product] [flags]
-# product: transcript | memory | compactions (see exportlib/cli.py).
+# product: transcript | memory | digest (see exportlib/cli.py).
 oced_export() {
     o_check_deps
     o_db_exists

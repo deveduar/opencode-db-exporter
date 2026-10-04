@@ -58,7 +58,18 @@ _SESSION_COLS = """s.id, s.title, s.slug, s.project_id, s.parent_id, s.directory
                s.tokens_input, s.tokens_output, s.tokens_reasoning,
                s.tokens_cache_read, s.tokens_cache_write,
                (SELECT count(*) FROM part pt WHERE pt.session_id = s.id
-                    AND json_extract(pt.data,'$.type')='compaction') AS compactions"""
+                    AND json_extract(pt.data,'$.type')='compaction') AS compactions,
+               (SELECT count(*) FROM message m WHERE m.session_id = s.id
+                    AND json_extract(m.data,'$.mode')='compaction') AS digests"""
+
+# `compactions` and `digests` are TWO different things and never interchangeable:
+#   - a COMPACTION is the event/marker. opencode writes it as a part with
+#     data.type='compaction' (and carries no content of its own).
+#   - a DIGEST is the text the assistant produced for that event: the `text` part
+#     of the next message, whose data.mode='compaction' (Objective, Next Moves…).
+# `export digest` writes the digests; `metadata.compactions` counts the markers.
+# Both literals ('compaction' in part.data and in message.data) are opencode's
+# own vocabulary, not ours.
 
 # What `list --root` means (see view.sh): no parent, an empty parent, or a parent
 # row that is gone — the last case is an ORPHAN, a root for every purpose.

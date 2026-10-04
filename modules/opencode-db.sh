@@ -26,11 +26,12 @@ Usage: opencode-db.sh [command]
                        --filter: SQL LIKE pattern on id/title, e.g. 'ses_f7%'
                        --order: sort axis + direction (default created-asc = oldest
                        first); ties always fall back to time_created
-  info <id>            full detail of one session (tokens, compactions, counts)
-  compactions <id> [show [last|N|all]]
-                       list compaction points (date + new queue) of a session;
-                       'show' also prints the compacted-context digest stored in
-                       the following "mode=compaction" message (last / N / all)
+  info <id>            full detail of one session (tokens, digests, counts)
+  digest <id> [show [last|N|all]]
+                       a compaction MARKER is the event opencode records (date +
+                       new queue); a DIGEST is the summary it wrote for it, in the
+                       following "mode=compaction" message (last / N / all).
+                       'compactions' still works: deprecated alias of 'digest'
   backup [--no-compress] [--yes]   consistent snapshot (sqlite .backup) with timestamp
                        + sha256 + stats in backups/manifest.json (gzip by default);
                        shows the plan (source/target/estimated size) and asks to
@@ -68,9 +69,6 @@ exports list         list past export runs (date/profile/counts/size);
                        auto-removes orphan dirs + old pre-shrinks
   shrinks remove <stamp> [--yes]   delete a shrink run (the pruned + VACUUMed copy)
   shrinks prune <N> [--yes]   keep only the N most recent shrink runs
-  guide [--list]       linear step-by-step wizard: export -> optional shrink ->
-                       optional swap (destructive, requires typing 'confirm');
-                       --list prints the plan only
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
   help                 this help
 
@@ -79,7 +77,7 @@ EOF
     if ! python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports 2>/dev/null; then
         cat <<'EOF'
 export products (default: transcript):
-  transcript | memory | compactions   (see 'opencode-db export --help' for the flags)
+  transcript | memory | digest        (see 'opencode-db export --help' for the flags)
 
 EOF
     fi
@@ -103,7 +101,7 @@ Named presets (presets file, source of truth for the menu and the CLI):
                      The preset pins the product, its config flags and optionally
                      the selection ('filter' or exact 'sessions' ids, not both;
                      none = ALL). Explicit CLI flags (--filter/--sessions/--cap...)
-                     override the preset. 'export transcript'/'memory'/'compactions'
+                     override the preset. 'export transcript'/'memory'/'digest'
                      always mean the product (its aliases and flags are unchanged).
 
 Configuration (env > conf file > built-in default):
@@ -135,7 +133,7 @@ fi
 # Resolve the DB source once (memoized) for the commands that read it, and clean
 # up the decompressed temp backup on exit. Meta/write-only commands skip this.
 case "${1:-help}" in
-    deps|help|-h|menu|guide|backups|shrinks) ;;
+    deps|help|-h|menu|backups|shrinks) ;;
     shrink) [ "${2:-}" = "--list-presets" ] || o_resolve_db ;;
     *) o_resolve_db ;;
 esac
@@ -147,14 +145,15 @@ case "${1:-help}" in
     version|--version|-V)  oced_version ;;
     list)          shift; oced_list "$@" ;;
     info)          shift; oced_info "$@" ;;
-    compactions)   shift; oced_compactions "$@" ;;
+    digest)        shift; oced_digest "$@" ;;
+    # Deprecated alias: the old name of `digest`, kept so old scripts work.
+    compactions)   shift; oced_digest "$@" ;;
     backup)        shift; oced_backup "$@" ;;
     backups)       shift; oced_backups "$@" ;;
     shrink)          shift; oced_shrink "$@" ;;
     shrinks)       shift; oced_shrinks "$@" ;;
     export)        shift; oced_export "$@" ;;
     exports)       shift; oced_exports "$@" ;;
-    guide)         shift; . "$SCRIPT_DIR/guide.sh"; oced_guide "$@" ;;
     deps)          shift; oced_deps "$@" ;;
     help|-h)       help ;;
     *) echo "Unrecognized subcommand: $1"; help; exit 1 ;;

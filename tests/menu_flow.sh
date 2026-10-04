@@ -201,14 +201,154 @@ oc_backups_picker >/dev/null
 [ ! -s "$CALLS" ] && ok "backups delete-all cancelled on 'n'" || bad "backups delete-all ran on 'n'"
 confirm_action() { return 0; }
 
-echo "== sessions details picker (independent, no toggle) =="
+echo "== sessions browse picker (details-only: the generic picker in view mode) =="
 reset
 : > "$CALLS"; call_log
 qset "ses_A0001"
 oc_sessions_picker >/dev/null
-grep -qx "info ses_A0001" "$CALLS" && ok "sessions details dispatches info for the session" || bad "sessions details: $(cat "$CALLS")"
+grep -qx "info ses_A0001" "$CALLS" && ok "sessions browse dispatches info for the session" || bad "sessions details: $(cat "$CALLS")"
 grep -q "sessions (details)" "$FZF_HIST" && ok "sessions picker is details-only" || bad "sessions title"
-printf '%s\n' "$(oc_sessions_rows)" | grep -q '__TOGGLE__' && bad "toggle leaked into sessions" || ok "sessions details has no mode toggle"
+
+# Rows are recorded PER RENDER in their own file: the stub runs in a pipeline
+# subshell, so the render number has to live in a FILE, not in a shell variable.
+BROWSE_ROWS="$TMP/browse_rows.tsv"; BROWSE_HDR="$TMP/browse_header.txt"
+browse_recorder() {
+    printf '0' > "$TMP/bn"
+    fzf() {
+        local args="$*" item n h
+        n=$(( $(cat "$TMP/bn") + 1 )); printf '%s' "$n" > "$TMP/bn"
+        cat > "$BROWSE_ROWS.$n"
+        h="$args"; h="${h#*--header=}"; h="${h%% --delimiter=*}"; printf '%s\n' "$h" > "$BROWSE_HDR.$n"
+        if [ ! -s "$FZF_QUEUE_FILE" ]; then return 130; fi
+        IFS= read -r item < "$FZF_QUEUE_FILE"
+        tail -n +2 "$FZF_QUEUE_FILE" > "$FZF_QUEUE_FILE.tmp" && mv "$FZF_QUEUE_FILE.tmp" "$FZF_QUEUE_FILE"
+        printf '%s\n' "$item"
+        return 0
+    }
+}
+TAB="$(printf '\t')"
+# Render 1 pops the queued session (a detail row), render 2 hits ESC.
+qset "ses_A0001"
+browse_recorder
+oc_sessions_picker >/dev/null
+. "$FZF_PRISTINE"
+BR="$BROWSE_ROWS.1"; BH="$BROWSE_HDR.1"
+grep -q "__MAKE__$TAB" "$BR" && bad "browse screen offers a continue row" || ok "browse screen has no continue row"
+printf '%s' "$BR" | grep -qE "^__(ALL|NONE)__$TAB" && bad "browse screen offers mark all/unmark all" || ok "browse screen has no bulk marks"
+# NO symbol at all on a browse row: it is not a flow (nothing to open) and not a
+# mark (nothing to select). A stray [>] or [x] would promise the wrong thing.
+printf '%s' "$BR" | grep -qE "^ses_[A-Za-z0-9]+$TAB\\[" && bad "browse rows carry a symbol" || ok "browse rows carry no symbol"
+# The ID is shown SHORTENED (ses_ prefix dropped) while the KEY stays complete:
+# dropping the prefix from the key would break run_oced_tool info <id>.
+grep -qE "^ses_A0001$TAB[A-Z0-9]" "$BR" && ok "browse rows show the id shortened" || bad "browse row id: $(grep -m1 '^ses_A0001' "$BR")"
+# Toggles and the explicit 'show all' action lead the screen in a fixed order.
+TOGPOS=$(grep -nE "^__(TOGGLE|TOGGLE_COMP|SUBS|REPORT_ALL)__$TAB" "$BR" | cut -d: -f1 | paste -sd, -)
+[ "$TOGPOS" = "1,2,3,4" ] && ok "the four control rows lead the screen, in order" || bad "toggle rows at: $TOGPOS"
+grep -q "__TOGGLE__$TAB" "$BR" && ok "browse screen has the order toggle" || bad "order toggle"
+grep -q "__TOGGLE_COMP__$TAB" "$BR" && ok "browse screen has the compactions report toggle" || bad "compactions toggle"
+grep -q "__SUBS__$TAB" "$BR" && ok "browse screen can hide subagents" || bad "subagents toggle"
+grep -q "__REPORT_ALL__$TAB" "$BR" && ok "browse screen has an explicit show-all action" || bad "show all action"
+
+# The order toggle MUST do something in view mode (it used to be a no-op there).
+qset "__TOGGLE__"
+browse_recorder
+oc_sessions_picker >/dev/null
+. "$FZF_PRISTINE"
+grep -q "old first" "$BROWSE_HDR.2" && ok "the order toggle flips to old first in browse mode" \
+    || bad "order toggle is a no-op: $(cat "$BROWSE_HDR.2" 2>/dev/null)"
+# Hiding subagents really removes their rows (a hidden session cannot be read).
+qset "__SUBS__"
+browse_recorder
+oc_sessions_picker >/dev/null
+. "$FZF_PRISTINE"
+# The toggle is selected on render 1, so its EFFECT is render 2.
+NB=$(grep -cE "^ses_" "$BROWSE_ROWS.2")
+[ "$NB" -eq 3 ] && ok "hiding subagents drops their rows ($NB left)" || bad "hidden subagents: $NB rows"
+# A browse screen selects nothing, so its header must not talk about marks.
+grep -qE "session\(s\)" "$BH" && ! grep -q "marked" "$BH" \
+    && ok "browse header reports sessions, not a selection" || bad "browse header: $(cat "$BH")"
+# A detail row RE-RENDERS the same screen instead of leaving it.
+qset "ses_A0001"
+browse_recorder
+oc_sessions_picker >/dev/null
+. "$FZF_PRISTINE"
+[ -f "$BROWSE_ROWS.2" ] && grep -qE "^ses_.*$TAB[A-Z0-9]" "$BROWSE_ROWS.2" \
+    && ok "a detail row re-renders the browse screen" || bad "browse re-render: $(ls "$TMP" | grep browse_rows)"
+# Every session in the DB gets a row (the old hand-rolled list showed the same set).
+[ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
+    && ok "browse lists every session" || bad "browse row count"
+
+# The two REPORT toggles are exclusive to browse mode. In a SELECT picker they
+# would be dead keys (nothing is reported there), so their absence there is part
+# of the contract: the export and shrink pickers must not show them.
+reset
+probe_make() { return 0; }
+declare -A pick_cfg=(
+    [title]="probe" [header]="probe" [order]="updated-desc"
+    [get_sub_ids]="oc_export_sub_ids"
+    [make_action]="probe_make"
+)
+qset "__MAKE__"
+browse_recorder
+oc_session_picker pick_cfg >/dev/null
+. "$FZF_PRISTINE"
+SELROWS=$(cat "$BROWSE_ROWS.1")
+printf '%s' "$SELROWS" | grep -q "__TOGGLE_COMP__$TAB" && bad "a select picker offers the compactions toggle" \
+    || ok "a select picker has no compactions toggle"
+
+printf '%s' "$SELROWS" | grep -q "__SUBS__$TAB" && ok "a select picker still offers subagents" \
+    || bad "a select picker lost the subagents toggle"
+printf '%s' "$SELROWS" | grep -q "__MAKE__$TAB" && ok "a select picker still offers its continue row" \
+    || bad "a select picker lost __MAKE__"
+
+echo "== sessions browse: compactions toggle and single/all mode =="
+reset
+: > "$CALLS"; call_log
+# Toggle compactions OFF, then pick a session: the report must ask info to drop
+# the digest block. A second `digest` call is the bug this replaced: `info`
+# already ends with that block, so both printed it twice.
+qset "__TOGGLE_COMP__" "ses_A0001"
+oc_sessions_picker >/dev/null
+grep -qx "info ses_A0001 --no-digest" "$CALLS" && ! grep -q "digest ses_" "$CALLS" \
+    && ok "compactions hidden drops the digest block" || bad "compactions toggle: $(cat "$CALLS")"
+# Same flow with compactions ON: the plain report keeps it.
+: > "$CALLS"
+qset "ses_A0001"
+oc_sessions_picker >/dev/null
+grep -qx "info ses_A0001" "$CALLS" && ! grep -q -- "--no-digest" "$CALLS" \
+    && ok "compactions shown keeps the digest block" || bad "compactions on: $(cat "$CALLS")"
+# 'show all sessions' is an EXPLICIT action (not a toggle that affects a click).
+: > "$CALLS"
+DUMP="$TMP/dump.txt"; : > "$DUMP"
+qset "__REPORT_ALL__"
+oc_sessions_picker > "$DUMP"
+NVIS=$(session_rows | wc -l)
+NDUMP=$(grep -c "^info ses_" "$CALLS")
+[ "$NDUMP" -eq "$NVIS" ] && ok "reports all dumps every session ($NDUMP)" || bad "reports all: $NDUMP of $NVIS"
+grep -q "^== Details of all sessions ==" "$DUMP" && ok "details of all prints the group header" \
+    || bad "details of all has no group header"
+# The group header is printed ONCE by the picker (it owns the iteration), not
+# once per session by the callback, which cannot know the first call.
+NH=$(grep -c "^== Details of all sessions ==" "$DUMP")
+[ "$NH" -eq 1 ] && ok "the group header appears once ($NH)" || bad "group header x$NH"
+# Regression: the header must not depend on a variable that only exists in the
+# test harness. It once used $TMP and died with "TMP: unbound variable" in the
+# real menu, where the suites cannot catch it because they DO define TMP.
+( unset TMP; oc_sessions_view_one ses_A0001 >/dev/null 2>&1; oc_sessions_view_all ses_A0001 >/dev/null 2>&1 ) \
+    && ok "the report callbacks need no harness variable" || bad "report callback depends on the harness"
+# Hiding subagents narrows the dump too (the filters apply to the dump).
+: > "$CALLS"; DUMP="$TMP/dump2.txt"; : > "$DUMP"
+qset "__SUBS__" "__REPORT_ALL__"
+oc_sessions_picker > "$DUMP"
+[ "$(grep -c "^info ses_" "$CALLS")" -eq 3 ] \
+    && ok "reports all honours hidden subagents" || bad "reports all with hidden subs: $(grep -c '^info ses_' "$CALLS")"
+# The explicit all action does NOT change the behaviour of clicking a single row.
+: > "$CALLS"
+qset "ses_A0001"
+oc_sessions_picker >/dev/null
+N1=$(grep -c "^info ses_" "$CALLS")
+[ "$N1" -eq 1 ] && ok "clicking a session row shows it once (single mode)" || bad "single row count: $N1"
+
 
 echo "== export picker needs presets (no-pass manual fallback: guidance instead) =="
 reset
@@ -219,7 +359,7 @@ rm -f "$OCED_PRESETS"
 GUIDE=$(oc_export_picker)
 [ ! -s "$CALLS" ] && ok "no-presets export picker dispatches nothing" || bad "no-presets export picker ran a command: $(cat "$CALLS")"
 printf '%s' "$GUIDE" | grep -q 'presets.json.example' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
-printf '%s' "$GUIDE" | grep -q 'export transcript|memory|compactions' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
+printf '%s' "$GUIDE" | grep -q 'export transcript|memory|digest' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
 [ -z "$(oc_export_rows)" ] && ok "export rows empty without presets (no manual fallback)" || bad "export rows: $(oc_export_rows)"
 printf '%s\n' "$(oc_selection_rows)" | sed -n '1p' | grep -q '^__ALL__' && ok "selection rows list ALL SESSIONS first" || bad "selection rows ALL missing"
 
@@ -301,7 +441,19 @@ oc_export_plan archive | grep -q 'Notes' \
     && bad "the notes leaked back into the product block" || ok "the product block carries no notes"
 export OCED_PRESETS="$TMP/no-presets.json"
 
-echo "== exports picker (view / toggle to remove / bulk) =="
+echo "== exports picker (view / toggle to remove / bulk) ==
+== exports rows: [>] create export first, toggle and bulk rows =="
+reset
+TAB=$(printf '\t')
+ER_VIEW=$(oc_exports_rows view)
+ER_REM=$(oc_exports_rows remove)
+printf '%s\n' "$ER_VIEW" | head -1 | grep -qxF "__CREATE__${TAB}[>] create export" \
+    && ok "exports rows have [>] create export first" || bad "exports create first: $(printf '%s\n' "$ER_VIEW" | head -1)"
+printf '%s\n' "$ER_VIEW" | grep -qxF "__TOGGLE__${TAB}[*] view  ${ARROW}  remove" \
+    && ok "exports rows have view/remove toggle" || bad "exports toggle: $(printf '%s\n' "$ER_VIEW" | grep __TOGGLE__)"
+printf '%s\n' "$ER_REM" | grep -qxF "__TOGGLE__${TAB}[*] remove  ${ARROW}  view" \
+    && ok "exports rows toggle flips in remove mode" || bad "exports toggle rem: $(printf '%s\n' "$ER_REM" | grep __TOGGLE__)"
+printf '%s\n' "$ER_REM" | grep -qE "^__(DELETE_ALL|KEEP_NEWEST)__" && ok "exports remove mode has bulk rows" || bad "exports bulk rows"
 reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
@@ -985,6 +1137,204 @@ qset "__CREATE__" "__MAKE__" "__PRESET_lean"
 oc_shrinks_picker >/dev/null
 grep -qx "shrink --keep-all --strip-reasoning" "$CALLS" \
     && ok "shrinks picker: __CREATE__ walks sessions -> recipe -> the dispatcher" || bad "shrinks create: $(cat "$CALLS")"
+
+#-----------------------------------------------------------------------
+# The id column in a LABEL is short; the row KEY stays the full id.
+#-----------------------------------------------------------------------
+echo "== session rows: short id in the label, full id as the key =="
+reset
+[ "$(oc_short_id ses_f72115a9b3c4d5e6f708192a3b4c5d6e)" = "f72115a_" ] \
+    && ok "oc_short_id cuts ses_<32 hex> to f72115a_" || bad "oc_short_id: $(oc_short_id ses_f72115a9b3c4d5e6f708192a3b4c5d6e)"
+[ "$(oc_short_id ses_A0001)" = "A0001_" ] \
+    && ok "oc_short_id leaves a short id alone (plus the marker)" || bad "oc_short_id short id"
+[ "$(oc_short_id f72115a9b3c4d5e6f708192a3b4c5d6e | wc -c)" -eq "$ID_LABEL_W" ] \
+    && ok "the id column is a fixed ID_LABEL_W-wide field" || bad "id column not fixed width"
+
+# BROWSE (details) and SELECT (shrink/export create) render the id through the
+# SAME helper, so both rows must show the short form while the key keeps the
+# real id: the CSV/marks/commands all depend on it.
+reset
+browse_recorder
+qset "ses_A0001"
+oc_sessions_picker >/dev/null
+. "$FZF_PRISTINE"
+grep -q "^ses_A0001${TAB}A0001_" "$BROWSE_ROWS.1" \
+    && ok "browse row: full id as key, A0001_ as label" || bad "browse id label: $(grep -e A0001 -- "$BROWSE_ROWS.1")"
+
+reset
+browse_recorder
+qset "__MAKE__"
+oc_shrink_sessions_pick >/dev/null
+. "$FZF_PRISTINE"
+grep -q "^ses_B0001${TAB}\[x\] B0001_" "$BROWSE_ROWS.1" \
+    && ok "shrink row: full id as key, B0001_ as label" || bad "shrink id label: $(grep -e B0001 -- "$BROWSE_ROWS.1")"
+grep -q "^ses_ORPHAN01${TAB}\[x\] ORPHAN0_" "$BROWSE_ROWS.1" \
+    && ok "the orphan root is shortened too" || bad "orphan id label: $(grep -e ORPHAN -- "$BROWSE_ROWS.1")"
+# The short label must never leak into what the engine receives.
+reset
+export OCED_PRESETS="$TMP/presets.json"
+: > "$CALLS"; call_log
+confirm_action() { return 0; }   # accept the run: we only care about the CSV
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
+oc_export_sessions_pick >/dev/null
+grep -qx "export notes --sessions ses_A0001" "$CALLS" \
+    && ok "the CSV still carries the FULL id, not the label" || bad "short id leaked into the CSV: $(cat "$CALLS")"
+export OCED_PRESETS="$TMP/no-presets.json"
+
+#-----------------------------------------------------------------------
+# Navigation contract: a report/pause NEVER leaves the picker on Enter
+# (it redraws the list), and ESC at the pause closes the submenu.
+# run_menu has no back-stack, so a picker that RETURNS lands on the root.
+#-----------------------------------------------------------------------
+echo "== navigation: Enter after a report stays in the list, ESC leaves the submenu =="
+grep -q 'Enter: back to the list' "$MOD/menu/core.sh" \
+    && ok "menu_pause advertises 'Enter: back to the list · Esc: main menu'" || bad "menu_pause label"
+
+# Own fixtures: the sections above REMOVE backups and shrink runs for real, so
+# this one rebuilds both manifests instead of trusting the leftovers.
+nav_fixtures() {
+    mkdir -p "$OCED_BACKUP_DIR"
+    jq -n '{backups: [
+        {"file":"nav-0.db","date":"2026-01-01T00:00:00Z","size":100,"sessions":1,"messages":2,"sha256":"a"},
+        {"file":"nav-1.db","date":"2026-01-02T00:00:00Z","size":100,"sessions":1,"messages":2,"sha256":"b"},
+        {"file":"nav-2.db","date":"2026-01-03T00:00:00Z","size":100,"sessions":1,"messages":2,"sha256":"c"}
+    ]}' > "$OCED_BACKUP_DIR/manifest.json"
+    mkdir -p "$OCED_BACKUP_DIR/shrink/nav-0" "$OCED_BACKUP_DIR/shrink/nav-1"
+    for d in nav-0 nav-1; do
+        jq -n '{criteria:"keep 10", sessions:{total:6,kept:2,deleted:4,max_updated:0},
+                size:{before:100000,after:30000}, stripped_reasoning:0, date:"2026-01-01T00:00:00Z"}' \
+            > "$OCED_BACKUP_DIR/shrink/$d/shrink.json"
+        : > "$OCED_BACKUP_DIR/shrink/$d/opencode.shrunk.db"
+    done
+}
+# The fzf stub pops ONE selection per render, so a picker that survives the
+# pause must consume the next queued row too. A picker that RETURNS after the
+# pause (the old bug) would dispatch only the first one.
+reset; nav_fixtures
+: > "$CALLS"; call_log
+qset "aaa" "bbb"
+oc_exports_picker >/dev/null
+grep -qx "exports view aaa" "$CALLS" && grep -qx "exports view bbb" "$CALLS" \
+    && ok "exports: Enter after a report redraws the exports list" || bad "exports view stays: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+qset "nav-0.db" "nav-1.db"
+oc_backups_picker >/dev/null
+grep -qx "backups view nav-0.db" "$CALLS" && grep -qx "backups view nav-1.db" "$CALLS" \
+    && ok "backups: Enter after a report redraws the backups list" || bad "backups view stays: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+qset "nav-1" "nav-0"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks view nav-1" "$CALLS" && grep -qx "shrinks view nav-0" "$CALLS" \
+    && ok "shrinks: Enter after a report redraws the shrinks list" || bad "shrinks view stays: $(cat "$CALLS")"
+
+# ESC at the pause: the picker closes the submenu (rc 0) WITHOUT redrawing, so
+# the queued second row is never consumed.
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { return 2; }
+qset "aaa" "bbb"
+oc_exports_picker >/dev/null
+rc=$?
+[ "$rc" -eq 0 ] && [ "$(wc -l < "$FZF_HIST")" -eq 1 ] && ! grep -q 'exports view bbb' "$CALLS" \
+    && ok "exports: ESC at the pause closes the submenu (no redraw)" \
+    || bad "exports ESC pause (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { return 2; }
+qset "nav-0.db" "nav-1.db"
+oc_backups_picker >/dev/null
+rc=$?
+[ "$rc" -eq 0 ] && [ "$(wc -l < "$FZF_HIST")" -eq 1 ] && ! grep -q 'nav-1' "$CALLS" \
+    && ok "backups: ESC at the pause closes the submenu (no redraw)" \
+    || bad "backups ESC pause (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { return 2; }
+qset "nav-1" "nav-0"
+oc_shrinks_picker >/dev/null
+rc=$?
+[ "$rc" -eq 0 ] && [ "$(wc -l < "$FZF_HIST")" -eq 1 ] && ! grep -q 'shrinks view nav-0' "$CALLS" \
+    && ok "shrinks: ESC at the pause closes the submenu (no redraw)" \
+    || bad "shrinks ESC pause (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
+
+echo "== navigation: a finished create/swap pauses, then returns to its own list =="
+# The pause (and its ESC) belong to the frame that OWNS the list, so a deep
+# wizard only reports "did it run?" through its rc: 0 = ran (pause), 130 = ESC
+# out of the wizard (no pause). Each create pause carries its OWN label
+# ("Export"/"New backup"/"Shrink copy") so it can never be confused with the
+# report pause of the list it returns to.
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
+oc_export_picker() { printf 'flow:ran\n' >> "$CALLS"; return "${EXPORT_RC:-0}"; }
+qset "__CREATE__" "aaa"
+oc_exports_picker >/dev/null
+grep -qx "flow:ran" "$CALLS" && grep -qx "pause:Export" "$CALLS" && grep -qx "exports view aaa" "$CALLS" \
+    && ok "export: a finished run pauses and lands back in the exports list" || bad "export create nav: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
+oc_export_picker() { printf 'flow:ran\n' >> "$CALLS"; return "${EXPORT_RC:-0}"; }
+EXPORT_RC=130
+qset "__CREATE__" "aaa"
+oc_exports_picker >/dev/null
+! grep -qx "pause:Export" "$CALLS" && grep -qx "exports view aaa" "$CALLS" \
+    && ok "export: ESC out of the wizard skips the pause and stays in the list" || bad "export ESC nav: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+oc_export_picker() { printf 'flow:ran\n' >> "$CALLS"; return 0; }
+menu_pause() { return 2; }
+qset "__CREATE__" "aaa"
+oc_exports_picker >/dev/null
+rc=$?
+[ "$rc" -eq 0 ] && ! grep -qx "exports view aaa" "$CALLS" \
+    && ok "export: ESC at the post-run pause closes the submenu" || bad "export pause ESC (rc=$rc): $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
+qset "__CREATE__" "nav-0.db"
+oc_backups_picker >/dev/null
+grep -qx "backup" "$CALLS" && grep -qx "pause:New backup" "$CALLS" && grep -qx "backups view nav-0.db" "$CALLS" \
+    && ok "backups: a created backup pauses, then stays in the list" || bad "backups create nav: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
+oc_pick_shrink() { printf 'flow:ran\n' >> "$CALLS"; return "${SHRINK_RC:-0}"; }
+qset "__CREATE__" "nav-1"
+oc_shrinks_picker >/dev/null
+grep -qx "flow:ran" "$CALLS" && grep -qx "pause:Shrink copy" "$CALLS" && grep -qx "shrinks view nav-1" "$CALLS" \
+    && ok "shrink: a finished run pauses, then stays in the shrinks list" || bad "shrink create nav: $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
+oc_pick_shrink() { printf 'flow:ran\n' >> "$CALLS"; return 130; }
+qset "__CREATE__" "nav-1"
+oc_shrinks_picker >/dev/null
+! grep -qx "pause:Shrink copy" "$CALLS" && grep -qx "shrinks view nav-1" "$CALLS" \
+    && ok "shrink: ESC out of the wizard skips the pause" || bad "shrink ESC nav: $(cat "$CALLS")"
+
+# The swap already owned its pause; its rc now travels to __SWAP__ so an ESC
+# there closes the submenu instead of silently redrawing the list.
+reset; nav_fixtures
+: > "$CALLS"; call_log
+oced_shrink_swap() { printf 'swap:%s\n' "$*" >> "$CALLS"; }
+menu_pause() { return 2; }
+qset "__SWAP__" "nav-0"
+printf 'confirm\n' | oc_shrinks_picker >/dev/null 2>&1
+rc=$?
+grep -q 'swap:' "$CALLS" && [ "$rc" -eq 0 ] \
+    && ok "swap: ESC at the post-swap pause closes the submenu" || bad "swap pause ESC (rc=$rc): $(cat "$CALLS")"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

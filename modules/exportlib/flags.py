@@ -69,14 +69,20 @@ class Flag:
 
 
 # ---- Product registry ----
-PRODUCTS = ["transcript", "memory", "compactions", "full"]
-PRODUCT_KEYWORDS = ["transcript", "memory", "compactions"]  # 'full' is alias
+PRODUCTS = ["transcript", "memory", "digest", "full"]
+PRODUCT_KEYWORDS = ["transcript", "memory", "digest"]  # 'full' is alias
+# Accepted spelling of a product keyword that is NOT its real name. `compactions`
+# was the original name of the `digest` product and is kept working as a deprecated
+# alias. Two things are deliberately NOT renamed: the marker/event (opencode writes
+# part.data.type='compaction', counted as `compactions` in the metadata) and the
+# `digest` text itself. The product only writes the digests, so it is `digest`.
+PRODUCT_ALIASES = {"compactions": "digest"}
 
 # Product keyword -> one-line description for the plan confirm / index.
 PRODUCT_INTRO: Dict[str, str] = {
     "transcript": "Markdown conversation per session, with reasoning and tool calls",
     "memory": "RAG corpus in corpus.jsonl, one line per root session: tokens, todos, tools and digests",
-    "compactions": "Markdown digests only: the compacted knowledge arc",
+    "digest": "Markdown digests only: the compacted knowledge arc",
 }
 
 # ---- Flag registry ----
@@ -201,7 +207,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="no_reasoning",
         flag_type="bool",
-        products=["transcript", "compactions"],
+        products=["transcript", "digest"],
         default=False,
         description="Omit reasoning parts from output",
         cli_help="Omit reasoning parts"
@@ -209,7 +215,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="mark_compactions",
         flag_type="bool",
-        products=["transcript", "compactions"],
+        products=["transcript", "digest"],
         default=False,
         description="Mark compaction boundaries in output",
         cli_help="Mark compaction boundaries"
@@ -217,7 +223,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="summary_diffs",
         flag_type="bool",
-        products=["transcript", "compactions"],
+        products=["transcript", "digest"],
         default=False,
         description="Include per-message change summaries",
         cli_help="Include summary diffs"
@@ -225,7 +231,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="role",
         flag_type="choice",
-        products=["transcript", "compactions"],
+        products=["transcript", "digest"],
         default="all",
         choices=["all", "user", "assistant"],
         description="Filter messages by role",
@@ -234,7 +240,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="json",
         flag_type="bool",
-        products=["transcript", "compactions"],
+        products=["transcript", "digest"],
         default=False,
         description="Write faithful JSON archive per session",
         cli_help="Write faithful JSON archive"
@@ -298,7 +304,7 @@ PRODUCT_HELP: Dict[str, str] = {
         "               (metadata + first user text + last assistant text + all\n"
         "               compaction digests) - ready for embeddings, not a transcript"
     ),
-    "compactions": "only the compacted-context digests (mode=compaction messages)",
+    "digest": "only the compacted-context digests (mode=compaction messages)",
 }
 
 # Flag name -> exact line(s) of the `export flags:` block (emitted verbatim in
@@ -338,20 +344,20 @@ FLAG_HELP: Dict[str, str] = {
     ),
     "tool_output": (
         "  --tool-output full|truncated|omit   tool output verbosity (default truncated;\n"
-        "                       applies to transcripts/compactions)"
+        "                       applies to transcripts/digest)"
     ),
     "patch": "  --patch full|omit   include patch parts (default full; transcripts only)",
     "mark_compactions": "  --mark-compactions   include compaction marker paragraphs (transcripts only)",
     "no_reasoning": "  --no-reasoning       omit the reasoning parts (transcripts only)",
     "summary_diffs": "  --summary-diffs    render user-message summary.diffs (files+additions/deletions)",
     "role": (
-        "  --role all|user|assistant   transcripts/compactions: render only one role's\n"
+        "  --role all|user|assistant   transcripts/digest: render only one role's\n"
         "                       messages (--role user = prompts only, --role assistant =\n"
         "                       answers only; memory ignores it)"
     ),
     "json": (
         "  --json             also write a faithful JSON archive per session (transcripts\n"
-        "                     and compactions)"
+        "                     and digest)"
     ),
     "sanitize": (
         "  --sanitize         redact secret-looking values (API keys, bearer tokens,\n"
@@ -422,7 +428,7 @@ PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
         and f.name not in SINGLE_ONLY_KEYS
         and f.name not in CLI_ONLY_KEYS
     ]
-    for p in ("transcript", "memory", "compactions")
+    for p in ("transcript", "memory", "digest")
 }
 
 # For bundle presets: per-product allowed keys

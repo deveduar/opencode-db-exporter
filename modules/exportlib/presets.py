@@ -22,6 +22,7 @@ from exportlib.flags import (
     FLAGS,
     PRODUCTS,
     PRODUCT_KEYWORDS,
+    PRODUCT_ALIASES,
     BUNDLE_PRODUCT_KEYS,
     SELECTION_KEYS,
     SINGLE_PRESET_KEYS,
@@ -144,7 +145,10 @@ def apply_bundle(args, name: str, pdata: dict) -> None:
     cleaned = {}
     for prod, cfg in products.items():
         if prod not in _PRODUCTS[:3]:
-            die(f"preset '{name}': 'products' keys must be transcript, memory or compactions (got {prod!r})")
+            die(
+                f"preset '{name}': 'products' keys must be transcript, memory or digest "
+                f"(got {prod!r})"
+            )
         if not isinstance(cfg, dict):
             die(f"preset '{name}': products.{prod} must be an object of flags (got {type(cfg).__name__})")
         for k in cfg:
@@ -204,6 +208,12 @@ def resolve_profile(args, ap) -> None:
     args.preset = None
     args.bundle = None
     profile = args.profile
+    # A deprecated spelling of a product keyword still resolves (compactions ->
+    # digest) and is NORMALISED here, so everything downstream (preset lookup,
+    # rendering, metadata, the plan) only ever sees the real name.
+    if profile in PRODUCT_ALIASES:
+        profile = PRODUCT_ALIASES[profile]
+        args.profile = profile
     if profile in _PRODUCTS:
         return
     presets = load_presets()
@@ -215,8 +225,13 @@ def resolve_profile(args, ap) -> None:
             args.preset = profile
             return
         prod = pdata.get("product")
+        if prod in PRODUCT_ALIASES:
+            prod = PRODUCT_ALIASES[prod]
         if prod not in _PRODUCTS[:3]:
-            die(f"preset '{profile}': 'product' must be transcript, memory or compactions (got {prod!r})")
+            die(
+                f"preset '{profile}': 'product' must be transcript, memory or digest "
+                f"(got {prod!r})"
+            )
         args.profile = prod if prod != "full" else "transcript"
         args.preset = profile
         apply_preset(args, profile, pdata)

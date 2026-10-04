@@ -49,7 +49,7 @@ in sync by construction.
     },
     "notes": { "product": "transcript" },
     "rag":   { "product": "memory" },
-    "digest": { "product": "compactions" }
+    "digest": { "product": "digest" }
   }
 }
 ```
@@ -58,10 +58,16 @@ in sync by construction.
 > — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
 > Summary of the non-obvious rows:
 
-| `product` | string | `transcript` \| `memory` \| `compactions` | single only (`full` is a CLI alias, **not** a preset product) |
+> **The `product` / `products` values are `transcript` \| `memory` \| `digest`** and
+> nothing else: `full` is a CLI alias of `transcript` and `compactions` is a deprecated
+> alias of `digest` (both are normalised at resolve time, so a run records `digest`).
+> This table restates the non-obvious rows of the generated one; it is a summary, the
+> generated file is the contract.
+
+| `product` | string | `transcript` \| `memory` \| `digest` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
-| `json` | bool | — | transcript/compactions (faithful archive) |
+| `json` | bool | — | transcript/digest (faithful archive) |
 | `snapshot` | string | `"fresh"` | **single preset only** (never per-product/bundle): coordinate the export + the reference backup — CLI warns, menu offers a fresh backup, when no backup exists or the last one diverged from the live DB |
 | `out` | string | — | CLI-only (never a preset key) |
 
@@ -108,7 +114,7 @@ list` aggregates it as `transcript+memory`.
 Legacy runs wrote `metadatos.json`; the tool still reads both names (`exports
 list`/`view`, menu), so old run dirs keep aggregating.
 
-### transcript / compactions `metadata.json`
+### transcript / digest `metadata.json`
 
 ```jsonc
 {
@@ -124,7 +130,7 @@ list`/`view`, menu), so old run dirs keep aggregating.
      "parent_id": "ses_a", "created": "…Z", "updated": "…Z"}
   ],
   "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
-  "profile": "transcript",              // product keyword: transcript | memory | compactions (never a preset name)
+  "profile": "transcript",              // product keyword: transcript | memory | digest (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
   "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
   "json": false, "sanitize": false, "role": "all",
@@ -134,7 +140,7 @@ list`/`view`, menu), so old run dirs keep aggregating.
                                    // (0 for an exact --sessions selection: a subagent that was never selected cannot be dropped)
   "tokens_backfilled": 0,               // number of sessions whose token/cost rows were summed from step-finish parts
   "sessions": {"total": 6, "roots": 1, "subagents": 5},
-  "compactions": 2, "messages": 21,
+  "compactions": 2, "digests": 2, "messages": 21,
   "last_backup": {"file": "…", "date": "…"},   // R?: latest entry of the backup manifest, else null
   "files": ["transcript/index.md", "transcript/ses_….json"]
 }
@@ -155,6 +161,21 @@ run is self-describing even when `filter`/`sessions_selected` are both `null`:
 select changes every time they run. The same phrase appears as the `Selection` row of
 `index.md` and in the error when a rule matches nothing
 (`error: No sessions to export (last 5 session(s) by last update matched nothing).`).
+
+**`compactions` and `digests` are two different counters and never interchangeable.**
+
+| key | counts | source in the DB |
+|---|---|---|
+| `compactions` | the **markers** — the compaction *events* opencode recorded | `part.data.type = 'compaction'` |
+| `digests` | the **summary texts** it produced for those events | the `text` part of the next message, whose `message.data.mode = 'compaction'` |
+
+A marker carries no content of its own (only `auto`/`overflow`/`tail_start_id`), so a
+session can have more markers than digests if a compaction was interrupted before the
+model answered. `'compaction'` in `part.data` and `'compaction'` in `message.data` are
+opencode's own two vocabularies, not ours. The `digest` **product** exports the digests
+(the second column); `--mark-compactions` is what puts the *markers* inline in a
+transcript. Both keys are always present in every product's `metadata.json`, so a
+consumer never has to guess which of the two it is reading.
 
 ### `session_records` vs `sessions` vs `sessions_selected`
 
@@ -252,7 +273,7 @@ Field notes:
 
 ---
 
-## 4. Faithful JSON archive (transcript/compactions `--json`)
+## 4. Faithful JSON archive (transcript/digest `--json`)
 
 One `<stamp>/<profile>/<session-id>.json` per root session. Native shape,
 mirrors `{info, messages:[{info, parts}]}` (see `exportlib/faithful.py`):
@@ -283,6 +304,11 @@ mirrors `{info, messages:[{info, parts}]}` (see `exportlib/faithful.py`):
 Part records keep `part.data` verbatim; only quoted/escaped where sqlite raw
 dumps require it. `tokens.backfilled` flags summed-from-step-finish sessions.
 Absent `agent`/`mode`/`parentId` are `null`.
+
+`info.compactions` counts the **markers** (as in `metadata.json`); there is no
+`info.digests` count because the digests are not summarised here — they are in the
+archive itself, as the message whose `info.mode = 'compaction'` with its `text` part.
+A consumer that wants the number counts those messages.
 
 ---
 
@@ -414,20 +440,30 @@ accepted) under a stamp directory:
   N.  <YYY-MM-DD HH:MM UTC>  <profiles joined '+' +, order = dir sort>  <roots> roots (<subagents> subagent) · <msgs> msgs · <comp> comp · <size>
 ```
 
-roots/subagents = max across metadata files, msgs/comp = sum, size = du of the
-stamp dir; a run with no readable metadata renders `profiles="?"`.
+roots/subagents = max across metadata files, msgs/comp = sum (comp = the
+`compactions` **markers**), size = du of the stamp dir; a run with no readable
+metadata renders `profiles="?"`.
 
 `exports view <stamp>` is a **detail screen**, so it leads with a banner
 (`== Export run: <stamp> ==`), then one summary line per product, the aggregate
 `totals:`/`date:`/`db:`/`sha256:` block and a `== Details per product ==` section
-with one field block per `metadata.json` (blank-line separated). Two rules worth
+with one field block per `metadata.json` (blank-line separated). Three rules worth
 naming because the data shapes are not uniform:
 
-- `Selection:` renders `filter: <p>` when `.filter` is set, else
-  `sessions: <ids joined by ",">` — `.sessions_selected` is an **array**, never
-  concatenated as a string (a `// "all"` default with no `join` breaks on real runs).
+- `selection:` is rendered by `util.selection_phrase()` from **`.selection`**, not
+  from `.filter`/`.sessions_selected`: those two only describe a filter or an
+  explicit id list, so a run selected by `--last N` would read as "all sessions" —
+  flatly wrong in the screen whose whole job is to say what the run contains. Runs
+  written before `.selection` existed are labelled `(legacy record)`. It is a
+  **run-level** fact, so a bundle prints it once (read from the first product's
+  metadata), not once per product.
+- `.sessions_selected` is an **array**, never concatenated as a string (a `// "all"`
+  default with no `join` breaks on real runs).
 - `Sessions:` shows `total (roots · subagents)`; when a legacy run has no
-  `.sessions.total` it is derived as `roots + subagents`.
+  `.sessions.total` it is derived as `roots + subagents`. A field block prints only
+  the keys its metadata actually has (`cap: 0`/`touched_files: false` were rendered
+  for every transcript before), and the sessions a run contains come from
+  `.session_records`.
 
 `--json` returns one metadata record per product as a JSON array (the raw
 `metadata.json`/`metadatos.json` contents, no banner, no aggregation). Only the

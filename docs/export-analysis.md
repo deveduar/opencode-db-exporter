@@ -292,7 +292,7 @@ swap), nothing to inspect or choose in a menu. Final shape (decision log):
   `shrink.json` `.sessions.max_updated`, but `oced_shrink` never wrote that field, and the guard
   `max_updated > 0` silently treated old shrinks as "up to date". Fix: `oced_shrink` now records
   `sessions.max_updated` (copy's newest kept `session.time_updated`), and the check is one helper
-  `o_shrink_stale <shrink.json>` used by `shrinks verify`, `guide.sh` Step 3 and the menu's
+  `o_shrink_stale <shrink.json>` used by `shrinks verify`, the (since removed) `guide.sh` Step 3 and the menu's
   remove mode — it warns when the live DB has newer sessions **or** when the field is missing
   (legacy copy ⇒ unverifiable, never silently "clean").
 - **Docs/artifacts reorg (done here)** — moved `presets.schema.json` to `generated/` (with the
@@ -387,7 +387,7 @@ and the export entry/naming + shrink help strings were unified.
 - **Swap inside the shrinks manager** — `oc_shrinks_rows` gained a `__SWAP__` row
   (always visible, before the view/remove toggle): pick a copy, `o_shrink_stale`
   warns first (stale OR unverifiable — max_updated missing), then the hard gate
-  `oc_confirm_typed "confirm"` (extracted from guide.sh, now reused by both) hands the
+  `oc_confirm_typed "confirm"` (extracted from the now-removed guide.sh, now reused by both) hands the
   path to `oced_shrink_swap` (pre-shrink WAL-safe snapshot + rollback unchanged).
   `__VERIFY__` stays as the manager's `shrinks verify`.
 - **Naming** — `modules/export.py` (a 4-line shim) is **gone**: `exportlib/cli.py` is
@@ -776,3 +776,172 @@ the product name and everything after it is a thing the export adds. Distinguish
 (`^[+*-] `, `' · '` or `—` anywhere in the block) plus per-item `grep -qxF` checks that each
 phrase is on a line of its own. Mutation-checked: restoring the `+`, restoring the
 `" · ".join(...)`, and restoring the em-dash `PRODUCT_INTRO` each fail the suite.
+
+## §27 The guide is removed; the pickers ARE the workflow (current)
+
+The interactive `guide` (`opencode-db guide` + the root menu entry) is **deleted**: `modules/guide.sh`,
+its dispatcher wiring and its menu row are gone from both paths, and a smoke assertion keeps it gone
+(a silent alias would still leave the wizard on disk).
+
+**Why.** Three failures, in order of how they hurt:
+
+1. **It only reacted to Enter.** `run_oced_tool` (the menu's single entry point for any command) runs
+   `out=$(bash "$OC_DISPATCHER" "$@" 2>&1)`, so every byte the wizard printed sat in a buffer and was
+   flushed *after* it exited. `oc_guide_ask` printed its prompt into that buffer, then blocked on
+   `read` from a terminal fzf had just left in a raw state: the user saw no prompt, typed nothing, and
+   Enter alone "answered" it. Reproduced with a pipe, where the wizard printed
+   `(non-interactive input: showing the plan only)` and did nothing at all.
+2. **The prompt appeared out of order** — after `Cancelled.`, on the same line, because the buffered
+   `printf` was flushed after the `read` had already returned. A pure buffer-ordering artefact of (1).
+3. **It was redundant.** The three steps were already first-class fzf pickers: exports
+   (`[>] create export`), shrinks (`__CREATE__`, and `__SWAP__` for the destructive swap, which already
+   runs `o_shrink_stale` + `oc_confirm_typed`). The guide added no logic over them, only a narration
+   of a workflow you can already walk — and it wrapped that narration around a *second* navigation
+   model (`read`-from-stdin steps wrapping fzf sub-pickers), which is what made it fragile.
+
+The one thing the guide claimed as its own — swapping **the copy you just built** — is not lost: the
+shrinks picker makes you pick the copy explicitly and warns when it is stale or unverifiable, which is
+strictly safer than trusting a stamp carried across three nested wizards.
+
+**Kept:** `oc_confirm_typed` and `o_shrink_stale` were extracted from `guide.sh` and are now shared by
+the shrinks picker's `__SWAP__` and remove modes, so deleting the wizard deletes no live behaviour.
+The safety rationale moves to `docs/architecture.md` §6 and `docs/export-guide.md`, which are where a
+reader asks that question.
+
+## §28 Navigation: one list, one rule (current)
+
+**The bug.** Enter after a report jumped to the **main menu** instead of the list you came from —
+but only in `exports view`, `backups view` and `shrinks view`; `sessions` browse behaved, and so did
+every *removal*. After a finished export it went to the main menu too.
+
+**Why it is a bug and not a design.** `run_menu` calls a picker with `_oc_menu_call` and, when the
+picker function **returns**, just `continue`s: the ROOT menu is rebuilt. There is no back-stack, so a
+picker cannot "go back" to itself — it must not return. Two conventions had drifted apart:
+
+| path | code | destination |
+|---|---|---|
+| `sessions` browse report (`core.sh`) | `continue` | stayed |
+| remove paths (`confirm_action … \|\| continue`) | `continue` | stayed |
+| `exports`/`backups`/`shrinks` view (`menu_pause …; return 0`) | `return 0` | **root** |
+| export wizard after a run (`menu_pause "Export"; return 0` + `__CREATE__ → return 0`) | `return 0` | **root** |
+| shrink create (`__CREATE__) oc_pick_shrink; continue`) | `continue` | already correct |
+
+So the rule that shipped was "mutating actions stay, reports leave", which is the opposite of what a
+menu should do and the opposite of what the sessions picker had been doing all along.
+
+**The rule now.** One idiom everywhere:
+
+```bash
+menu_pause "<label>" || return 0   # ESC  -> close this submenu (main menu)
+continue                          # Enter -> redraw THIS list
+```
+
+`menu_pause` returns 0 (Enter) or 2 (ESC), so the `|| return 0` is the ESC exit and it already
+matched the advertised meaning ("exit this submenu"). The label was lying about the other half and
+now says `Enter: back to the list · Esc: main menu`.
+
+**Where the pause lives.** A deep wizard must not own the pause, because it does not know which list
+to return to. The wizard reports only *did it run* through its rc (`0` = ran, `130` = ESC'd out) and
+the frame that OWNS the list pauses and decides:
+
+```bash
+oc_export_picker
+[ $? -eq 0 ] || continue          # ESC out of the wizard: no pause, stay in the list
+menu_pause "Export" || return 0
+continue
+```
+
+This is what fixed "after an export, Enter goes to the main menu": the wizard's `return 0` used to
+mean "back to the root", and now it only means "I ran". The `__CREATE__` branch that called it is the
+one that knows the destination. `n` at the confirm is unchanged — `oc_preset_run` fails, the preset
+picker `continue`s, so declining still returns you to the presets.
+
+Three paths had **no pause at all** and were flashing their result away before redrawing: a created
+backup (`run_oced_tool backup; continue`) and a built shrink copy. They now pause too, each with a
+label naming the action (`Export`, `New backup`, `Shrink copy`) instead of the list, so the pause can
+never be read as "you are looking at a report".
+
+`oc_shrinks_swap_pick` already owned its pause and swallowed it with `|| :`; it now **returns** the
+pause rc so `__SWAP__` can propagate an ESC — the one place the rule needed a return value rather than
+a `continue`.
+
+**Guarded.** `tests/menu_flow.sh` gained 14 assertions. The discriminating one is structural: the fzf
+stub pops ONE selection per render, so "the picker survived the pause" is proven by a *second queued
+row being dispatched* (a picker that returns would dispatch only the first), and "ESC closed the
+submenu" by exactly one render and rc 0. Each of the three reverts was checked to fail the suite.
+
+## §29 The id column: short in the label, full in the key (current)
+
+A menu row is `key<TAB>display` and fzf only ever shows `display`. The key was already the real
+session id (marks, the `--sessions` CSV and every `run_oced_tool` call need it), but the display was
+`${id#ses_}` — which on a real database is still 32 hex characters, so every row in the three
+session pickers led with a 35-character id and the title/date columns were unreadable.
+
+**The fix is one helper**, `oc_short_id`, because the three offending screens were never three
+implementations: browse (details), shrink create (`mark the ROOT sessions that survive`) and export
+create all render through the same loop in `oc_session_picker`. It strips `ses_`, cuts the rest to
+`ID_LABEL_W - 1` characters and appends `_` as an explicit truncation marker — a real id reads
+`f72115a_`, exactly the shape the row needs. The marker is the point: a truncated id that *looks*
+complete is worse than one that admits it.
+
+`ID_LABEL_W` is a variable rather than a literal because the point is the fixed width, not the number:
+the title/date columns stay aligned across rows, which is what makes the rest of the row scannable.
+
+**Nothing else changed.** The key is still the full id, so nothing downstream can be affected: a short
+label that leaked into a CSV would silently export the wrong sessions, which is why the suite asserts
+`export notes --sessions ses_A0001` (full) while the row it was picked from showed `A0001_`.
+
+Deliberately NOT shortened: the `== Session (<id>) - <title> ==` banner of `info`, which is a detail
+screen, not a list — that id is there to be copied, and it is a CLI contract the smoke suite pins.
+
+## §30 The product is `digest`; a marker and a digest are two things (current)
+
+The third product was called `compactions`, and the name was wrong in a way that leaked into every
+artifact: the product has only ever written **digests**. What opencode stores is two different
+things under the same word, and `docs/architecture.md` §2 already said so:
+
+| | what it is | where it lives |
+|---|---|---|
+| **compaction (marker)** | the *event* opencode recorded — `auto`/`overflow`/`tail_start_id`, and **no text of its own** | `part.data.type = 'compaction'` |
+| **digest** | the summary the model wrote *for* that event (Objective, Next Moves…) | the `text` part of the next message, whose `message.data.mode = 'compaction'` |
+
+So `metadata.json` was counting markers under the same name the product used for digests, and
+`export compactions` wrote digests. Nothing was *broken*, but every answer to "what is
+`compactions` in this file?" needed a paragraph, and a transcript with more markers than digests (a
+compaction interrupted before the model answered) made the number look wrong.
+
+**Decided:** the product is **`digest`**; `metadata.json` records **both** counters —
+`.compactions` (the markers) and `.digests` (the summary texts) — and they are never
+interchangeable, which is why `db.py` selects them in two different subqueries instead of one.
+A marker carries no text, so `compactions >= digests` always; both keys are present in *every*
+product's metadata, so a consumer never has to guess which one it is reading. `docs/schemas.md`
+§2 now carries that table, because it is a machine contract and not a detail.
+
+**Old names are aliases, not errors.** `PRODUCT_ALIASES = {"compactions": "digest"}` in
+`flags.py` (the SSoT) is normalised in `resolve_profile()`, so everything downstream — preset
+lookup, rendering, `metadata.profile`, the plan — only ever sees the real name: `export
+compactions` and `export digest` produce byte-identical runs, and the run records `"profile":
+"digest"`. Same for the read-only command: `opencode-db digest <id> [show …]` with
+`compactions` still dispatching to the same function, and `info <id> --no-digest` (the report
+filter behind the browse screen's toggle) renamed from `--no-compactions`. `full` stays an alias
+of `transcript`, which was already the alias-instead-of-a-second-product policy this tool
+follows: a deprecated spelling costs one dict entry, a second name to remember costs everything.
+
+**The generated artifacts followed** (`flags.py` → `scripts/generate_schema.py`):
+`generated/presets.schema.json` and `generated/flags-table.md` now advertise `digest`, and the
+anti-drift check in `tests/export_smoke.sh` fails if the committed pair ever diverges from what
+the SSoT produces.
+
+**What this did NOT fix on its own — the docs were the real drift.** After the rename, four
+documentation files still taught `compactions` as the product (README, `docs/export-guide.md`,
+`docs/architecture.md`, `docs/export-analysis.md`'s own historical entries) and, worse,
+`docs/schemas.md` never documented the new `.digests` key at all — its `metadata.json` block
+still showed only `"compactions": 2`, which would have been the *machine contract* disagreeing with
+every run on disk. Nothing guarded that: the anti-drift check only compares `generated/`, and the
+product table in `schemas.md` §1 is a hand-written summary of a generated one. All four were
+re-synced, and `docs/export-analysis.md` keeps its old entries (a decision log records what was
+decided then; §30 supersedes them) rather than rewriting history.
+
+**Guarded by:** `tests/export_smoke.sh` — `run compactions ses_A0001` equals
+`run digest ses_A0001` for the CLI alias, and `export compactions --filter …` writes the same run
+with `.profile == "digest"` for the product keyword.

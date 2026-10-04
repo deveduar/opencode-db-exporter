@@ -45,14 +45,17 @@ opencode-db status                    # DB state + alignment with the last backu
 opencode-db version                   # tool version + opencode CLI version + schema probe
 opencode-db list [--root|--sub] [--filter PATTERN] [--info]
                                       # --order: created-asc|created-desc|updated-asc|updated-desc
-opencode-db info <session_id> [--json]
-                                      # banner + tokens, cost, compactions, counts
+opencode-db info <session_id> [--json] [--no-digest]
+                                      # banner + tokens, cost, digests, counts
                                       # --json = the row as JSON (no banner)
-opencode-db compactions <session_id> [show [last|N|all]]
-                                      # compaction points; 'show' prints the digest
+                                      # --no-digest = drop the compaction-digest block
+opencode-db digest <session_id> [show [last|N|all]]
+                                      # compaction MARKERS (points); 'show' prints
+                                      # the DIGEST written for each one
+                                      # ('compactions' is the deprecated alias)
 opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
-opencode-db export <product> [FLAGS]  # products: transcript | memory | compactions
+opencode-db export <product> [FLAGS]  # products: transcript | memory | digest
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
                     |--keep-sessions ID[,ID]|--discard-sessions ID[,ID]]
@@ -61,7 +64,6 @@ opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
                                       # unless --swap replaces it safely)
 opencode-db shrinks [list [--tsv]|view <stamp>|verify [--tsv] [--yes]|remove <stamp> [--yes]|prune <N>]
                                       # manage the produced shrink copies
-opencode-db guide [--list]            # linear wizard: export -> shrink -> swap (type 'confirm' to swap)
 opencode-db deps [--check]            # idempotent dependency check/install (apt|pacman|dnf)
 opencode-db help
 ```
@@ -95,8 +97,8 @@ Every row carries one marker that says what it does:
   `[MISSING]`), how it compares to the live DB and how to use it with `--from-backup`; in
   **remove** mode the same row deletes it with confirmation. Shrink creation lives in its
   own **shrinks** picker.
-- **sessions** picker (details only) — one row per session; selecting one shows the full
-  info + compaction digests.
+- **sessions** picker (details only) — one row per session (short id in the label, full
+  id as the row key); selecting one shows the full info + compaction digests.
 - **shrinks** picker (create + manage) — rows: `[>] create shrink copy` (a 3-step wizard
   from the LIVE DB, own snapshot), `[>] swap a copy into the LIVE DB` (destructive,
   requires typing `confirm` — the copy is checked for staleness first), `[?] verify`,
@@ -151,8 +153,9 @@ or on the CLI (`--no-reasoning`, `--json`, `--sanitize`, `--tool-output full`, �
 ## Export
 
 Products: `transcript` (the conversation, markdown) · `memory` (RAG corpus,
-`corpus.jsonl`) · `compactions` (the compacted-context digests). `full` is accepted as
-an alias of `transcript`.
+`corpus.jsonl`) · `digest` (the compacted-context digests). `full` is accepted as
+an alias of `transcript`, and the old spelling `compactions` still resolves as a
+deprecated alias of `digest`.
 
 ```bash
 opencode-db export memory                  # full text, no truncation (default)
@@ -217,7 +220,7 @@ and the `exports list` line).
     },
     "notes": { "product": "transcript" },
     "rag":   { "product": "memory" },
-    "digest": { "product": "compactions" }
+    "digest": { "product": "digest" }
   }
 }
 ```
@@ -241,8 +244,9 @@ Both are **CLI-only, never preset keys**: the set they select changes every time
 run, so a plan that pinned one would not be reproducible. The rule that ran is recorded
 in `metadata.json` (`.selection`) and in the `Selection` row of `index.md`.
 
-- `export <name>` resolves to a preset; `export transcript|memory|compactions|full` always
-  mean the product. An unknown name fails listing the known presets.
+- `export <name>` resolves to a preset; `export transcript|memory|digest|full` always
+  mean the product (`compactions` still resolves to `digest`). An unknown name fails
+  listing the known presets.
 - Allowed preset keys: `product` + `sub`, `no_subagents`, `no_orphan_subagents`,
   `tool_output`, `tool_input_limit`,
   `tool_output_limit`, `patch`, `role`, `no_reasoning`, `mark_compactions`,
@@ -250,7 +254,7 @@ in `metadata.json` (`.selection`) and in the `Selection` row of `index.md`.
   `snapshot` = `"fresh"` (**single preset only**) and the selection `filter` (LIKE
   string) **or** `sessions` (list of ids, not both).
 - A **bundle preset** uses `products` instead of `product`: a map of
-  `{product: {flags}}` (products may only be `transcript|memory|compactions` and each
+  `{product: {flags}}` (products may only be `transcript|memory|digest` and each
   keeps its own flags, e.g. `cap`/`files` only matter for `memory`). The selection stays
   at the top level and is shared by every product; the whole bundle runs under **one
   stamp** (`exports/<stamp>/transcript`, `exports/<stamp>/memory`, plus an
@@ -273,7 +277,7 @@ The **menu** has no product-only flow: each preset is a first-class action (read
   the three products with defaults); without a presets file the export picker prints setup
   guidance (`cp presets.json.example …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.
-- `compactions` is a valid product (CLI or a plan) but is **not** part of the shipped example
+- `digest` is a valid product (CLI or a plan) but is **not** part of the shipped example
   plans: its digests are already inline in `transcript` and in the memory corpus
   (`compaction_digests`), so shipping it in a bundle would triple the same text.
 - `--sanitize` redacts high-confidence secret prefixes (sk-, ghp_, Bearer, JWT, PEM…) —
@@ -292,7 +296,7 @@ provenance (a bundle records the preset name in every product's metadata).
 Export folders accumulate; list, delete or prune them with `opencode-db exports` (also in the menu):
 
 ```bash
-opencode-db exports list              # date / profile / counts / size per run (multi-profile runs show 'full+compactions', counts are totals)
+opencode-db exports list              # date / profile / counts / size per run (bundle runs show 'transcript+memory', counts are totals)
 opencode-db exports view <stamp>      # detail: banner, per-product summary, aggregate totals, one field block per product
 opencode-db exports view <stamp> --files   # + the produced files with sizes
 opencode-db exports view <stamp> --json    # one metadata record per product as a JSON array
@@ -302,9 +306,10 @@ opencode-db exports prune 5           # keep only the 5 most recent runs
 
 ## Compaction digests
 
-`compactions <id> show` prints a session's digests; the `compactions` export product
-writes one markdown file per session with them. How a compaction digest is stored in the
-DB (markers vs. the following `mode=compaction` message) is explained in
+`digest <id> show` prints a session's digests; the `digest` export product
+writes one markdown file per session with them. `compactions <id> show` and the
+`compactions` product keyword still work as deprecated aliases. How a compaction digest
+is stored in the DB (markers vs. the following `mode=compaction` message) is explained in
 [docs/architecture.md](docs/architecture.md).
 
 ## shrink — a lighter DB copy to swap over opencode
@@ -358,7 +363,7 @@ rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
 > rolls back if the new DB does not open read-only (see
 > [docs/architecture.md](docs/architecture.md) §6).
 
-Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. Prefer the guided version: `opencode-db guide` walks the same steps with explanations.
+Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. The menu walks the same steps through its own pickers (`opencode-db menu`).
 
 Produced copies accumulate under `backups/shrink/`; manage them like export runs:
 
@@ -446,8 +451,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 175 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 102 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 307 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 280 OK / 0 FAIL
 ```
 
 ## Layout
@@ -456,17 +461,16 @@ bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 102 OK / 0 FAIL
 modules/
   opencode-db.sh   CLI dispatcher
   common.sh        config + helpers (always read-only)
-  view.sh          status / list / info / compactions (+ digests)
+  view.sh          status / list / info / digest (+ digests)
   backup.sh        consistent snapshots + sha256 + manifest.json
   export.sh        bash -> python bridge
-  exportlib/       Python renderer package (products transcript/memory/compactions,
+  exportlib/       Python renderer package (products transcript/memory/digest,
                    subagents, presets, --json/--sanitize, index.md, metadata;
                    cli.py is the self-bootstrapping CLI entry)
   exports.sh       list/remove/prune of past export runs
   shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
                    + the shrinks manager (list/view/remove/prune of produced copies)
   deps.sh          idempotent dependency check/install
-  guide.sh         step-by-step console wizard (safe workflow)
   menu.sh          interactive fzf menu (pickers, preset-only export flow, shrinks picker)
 docs/
   architecture.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)

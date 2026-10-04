@@ -51,7 +51,7 @@ oc_backups_picker() {
         sel=$(oc_backups_rows "$mode" | oc_fzf_sel "backups ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
-            __CREATE__)     run_oced_tool backup; continue ;;
+            __CREATE__)     run_oced_tool backup; menu_pause "New backup" || return 0; continue ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_backups_bulk all; continue ;;
             __KEEP_NEWEST__) oc_backups_bulk newest; continue ;;
@@ -62,7 +62,7 @@ oc_backups_picker() {
                     # backup can never look "fine" without validating it.
                     run_oced_tool backups view "$key"
                     menu_pause "Backups" || return 0
-                    return 0
+                    continue
                 fi
                 confirm_action "DELETE backup $key?" || continue
                 run_oced_tool backups remove "$key" --yes

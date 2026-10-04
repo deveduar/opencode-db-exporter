@@ -34,6 +34,7 @@ if MODULES_DIR not in sys.path:
 
 try:
     from exportlib.presets import load_presets
+    from exportlib.util import selection_phrase
     from exportlib.flags import (
         PRODUCT_KEYWORDS,
         PRODUCT_INTRO,
@@ -42,6 +43,7 @@ try:
 except ImportError:
     # fallback for in-place execution
     from presets import load_presets
+    from util import selection_phrase
     from flags import (
         PRODUCT_KEYWORDS,
         PRODUCT_INTRO,
@@ -64,7 +66,7 @@ PLAN_PURPOSE = {
 PRODUCT_PICKER_LABEL = {
     "transcript": "READ / SHARE / AUDIT — the full conversation as Markdown (per session)",
     "memory": "FEED ANOTHER AI — machine-readable corpus (corpus.jsonl, one line per session)",
-    "compactions": "QUICK KNOWLEDGE REVIEW — only the compaction summaries",
+    "digest": "QUICK KNOWLEDGE REVIEW — only the compaction summaries",
 }
 
 PRODUCT_PICKER_LEGEND = [
@@ -73,7 +75,7 @@ PRODUCT_PICKER_LEGEND = [
     "                and the code patches, compaction digests inline. Add --json for a faithful machine archive.",
     "   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL",
     "                compaction digests per session. For feeding another AI (RAG); streamed line by line.",
-    "   compactions  TINY extract: only the compaction summaries (the knowledge arc of a session). Already",
+    "   digest       TINY extract: only the compaction summaries (the knowledge arc of a session). Already",
     "                inside transcript AND memory — standalone is just a fast skim.",
     "Tune flags via the presets file (plans) or the CLI.",
 ]
@@ -381,8 +383,8 @@ def _preset_row(key: str, pdata: dict) -> str:
         tag = "· read (transcript defaults)"
     elif p == "memory":
         tag = "· RAG (memory defaults)"
-    elif p == "compactions":
-        tag = "· digest (compactions only)"
+    elif p == "digest":
+        tag = "· digest (summaries only)"
     disp = "+".join(p for p in products if p)
     if tag:
         return f"__PRESET_{key}\t{key}  [{disp}]  {sel}  {tag}"
@@ -469,6 +471,20 @@ def _cli() -> int:
             if args[1] not in presets:
                 return 1
             print(preset_selection(args[1], presets[args[1]]))
+            return 0
+        if cmd == "selection-meta":
+            # selection-meta <metadata.json> -> the human phrase for a stored
+            # run's `.selection`. Bash (exports.sh) asks python for it so the
+            # rules live in exactly one place: reading `.filter` there would
+            # mis-report a `--last`/`--since` run as "sessions: all".
+            if len(args) < 2:
+                return 1
+            try:
+                with open(args[1], encoding="utf-8") as fh:
+                    meta = json.load(fh)
+            except (OSError, ValueError):
+                return 1
+            print(selection_phrase(meta))
             return 0
         if cmd == "subagents":
             if len(args) < 2:

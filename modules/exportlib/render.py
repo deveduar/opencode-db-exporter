@@ -1,4 +1,4 @@
-# Markdown renderer: turns messages/parts into the transcript/compactions text.
+# Markdown renderer: turns messages/parts into the transcript/digest text.
 import json
 
 from exportlib.sanitize import sanitize
@@ -32,7 +32,7 @@ class Renderer:
 
     # ---- part inclusion ----
     def include_part(self, ptype: str) -> bool:
-        if self.profile == "compactions":
+        if self.profile == "digest":
             return ptype == "text"
         # transcript
         if ptype == "tool":

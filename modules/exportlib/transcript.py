@@ -1,11 +1,11 @@
-# Transcript / compactions writers (markdown files).
+# Transcript / digest writers (markdown files).
 from exportlib.db import load_messages
 from exportlib.util import model_str, ts_iso
 
 
 def _transcript_msgs(renderer, con, session: dict) -> list:
     msgs = load_messages(con, session["id"])
-    if renderer.profile == "compactions":
+    if renderer.profile == "digest":
         msgs = [(m, p) for (m, p) in msgs if m.get("mode") == "compaction"]
     if renderer.role != "all":
         msgs = [(m, p) for (m, p) in msgs if renderer.include_message(m)]
@@ -16,6 +16,7 @@ def write_transcript(con, renderer, session: dict, fpath):
     title = session["title"] or session["slug"]
     msgs = _transcript_msgs(renderer, con, session)
     n_comp = session["compactions"]
+    n_digest = session.get("digests") or 0
     n_msgs = len(msgs)
     model = model_str(session["model"])
     with fpath.open("w", encoding="utf-8") as f:
@@ -25,10 +26,15 @@ def write_transcript(con, renderer, session: dict, fpath):
         f.write(f"- **Model:** `{model or '?'}`\n")
         f.write(f"- **Directory:** `{session['directory'] or '?'}`\n")
         f.write(f"- **Created:** {ts_iso(session['time_created'])}\n")
-        if renderer.profile == "compactions":
-            f.write(f"- **Compaction digests:** {n_msgs} · **Compaction parts:** {n_comp}\n")
+        if renderer.profile == "digest":
+            f.write(
+                f"- **Digests:** {n_msgs} written · **Compaction markers:** {n_comp}\n"
+            )
         else:
-            f.write(f"- **Messages:** {n_msgs} · **Compaction parts:** {n_comp}\n")
+            f.write(
+                f"- **Messages:** {n_msgs} · **Digests:** {n_digest}"
+                f" · **Compaction markers:** {n_comp}\n"
+            )
         if session["parent_id"]:
             f.write(f"- **Subagent of:** `{session['parent_id']}`\n")
         f.write("\n---\n\n")

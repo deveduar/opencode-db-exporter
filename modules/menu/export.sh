@@ -48,8 +48,11 @@ oc_export_presets_picker() {
                 name="${key#__PRESET_}"
                 seldesc=$(oc_preset_descr "$name") || seldesc=""
                 if oc_preset_run "$name" "$seldesc" "$csv" "$hide"; then
-                    menu_pause "Export" || return 0
-                    return 0 # Exits the wizard back to main menu
+                    # The run is done: hand control back up (make_action ->
+                    # the session picker -> oc_export_picker -> __CREATE__ of the
+                    # exports picker), which owns the pause and decides whether
+                    # to redraw the exports list or close the submenu.
+                    return 0
                 fi
                 ;;
         esac
@@ -186,20 +189,18 @@ oc_export_sessions_pick() {
 oc_export_picker() {
     if [ -f "${OCED_PRESETS:-}" ]; then
         oc_export_sessions_pick
-        return 0
+        return $?   # 0 = ran, 130 = ESC'd out; the caller pauses
     fi
     # No presets file: the menu wizard is preset-only. The CLI still accepts
-    # raw product keywords and flags.
+    # raw product keywords and flags. rc 0 so __CREATE__ pauses and lets the
+    # user read this before redrawing the list.
     echo "Export from the menu needs a presets file (named plans = the source of truth)."
     echo "   missing: $OCED_PRESETS"
     echo "   create it from the shipped example:"
     echo "     cp \"$SCRIPT_DIR/../presets.json.example\" \"$OCED_PRESETS\""
-    echo "   meanwhile: opencode-db export transcript|memory|compactions [flags]"
+    echo "   meanwhile: opencode-db export transcript|memory|digest [flags]"
     return 0
 }
-
-# Globals used by oc_preset_run callbacks (reset on every call).
-# (No longer used, removed)
 
 #-----------------------------------------------------------------------
 # oc_export_sub_ids -> one id per line: every REAL subagent, i.e. a session with
@@ -333,7 +334,7 @@ oc_annotate_flags() {
 }
 
 # oc_export_plan <profile> -> the confirm's product block.
-# profile = preset name OR product keyword (transcript|memory|compactions).
+# profile = preset name OR product keyword (transcript|memory|digest).
 # FLAT, no label and no leading indentation: the caller owns the layout. Wrapped
 # at a FIXED width (not `tput cols`) so the screen is deterministic across
 # terminals and the smoke suite can assert the exact column count.

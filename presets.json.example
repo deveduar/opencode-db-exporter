@@ -24,7 +24,7 @@
       "product": "memory"
     },
     "digest": {
-      "product": "compactions"
+      "product": "digest"
     },
     "backup_then_full": {
       "product": "transcript",

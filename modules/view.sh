@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# view.sh — oced_status / oced_list / oced_info / oced_compactions (read-only, sqlite3 CLI).
+# view.sh — oced_status / oced_list / oced_info / oced_digest (read-only, sqlite3 CLI).
 set -uo pipefail
 
 o_like_literal() {
@@ -247,9 +247,17 @@ oced_list() {
 oced_info() {
     o_check_deps
     o_db_exists
-    local id="${1:-}" json_mode=0
-    [ -n "$id" ] || o_die "Usage: opencode-db info <session_id> [--json]"
-    [ "${2:-}" = "--json" ] && json_mode=1
+    local id="${1:-}" json_mode=0 want_digest=1
+    [ -n "$id" ] || o_die "Usage: opencode-db info <session_id> [--json] [--no-digest]"
+    # The digest block is a REPORT section, not part of the row: the browse
+    # screen offers a compactions toggle and it has to be able to hide it.
+    # --json never carries it either way, so the flag is ignored in that mode.
+    case "${2:-}" in
+        --json) json_mode=1 ;;
+        --no-digest) want_digest=0 ;;
+        "") ;;
+        *) o_die "Usage: opencode-db info <session_id> [--json] [--no-digest]" ;;
+    esac
     
     if [ "$json_mode" -eq 1 ]; then
         o_q -json "
@@ -317,33 +325,48 @@ oced_info() {
         return 1
     fi
     # Banner first: the raw `key = value` dump is unreadable without the id/title
-    # in front of it (same shape as the `== Compactions ($id) — $title ==` header).
+    # in front of it (same shape as the `== Digests ($id) — $title ==` header).
     local title
     title=$(sed -n 's/^ *title *= *//p' <<<"$row")
     [ -n "$title" ] || title=$(sed -n 's/^ *slug *= *//p' <<<"$row")
     echo "== Session ($id)${title:+ — $title} =="
     echo ""
     echo "$row"
+    [ "$want_digest" -eq 1 ] || return 0
     echo ""
-    oced_compactions "$id" || true
+    oced_digest "$id" || true
 }
 
-oced_compactions() {
+# oced_digest <id> [show [last|N|all]]
+# Two DIFFERENT things, labelled separately so they cannot be confused:
+#   a compaction MARKER is the event opencode records as a part with
+#     data.type='compaction' (when the history was compressed, auto/overflow,
+#     where the new queue starts) and carries no text of its own;
+#   a DIGEST is the summary the assistant wrote FOR that event: the `text` part
+#     of the next message, whose data.mode='compaction' (Objective, Next Moves…).
+# The default view lists the markers; `show` prints the digest text.
+oced_digest() {
     o_check_deps
     o_db_exists
     local id="${1:-}"
-    [ -n "$id" ] || o_die "Usage: opencode-db compactions <session_id> [show [last|N|all]]"
+    [ -n "$id" ] || o_die "Usage: opencode-db digest <session_id> [show [last|N|all]]"
     local title agent sess_row
     sess_row=$(o_q -separator $'\t' "SELECT coalesce(NULLIF(title,''),slug), coalesce(agent,'') FROM session WHERE id='${id//\'/\'\'}' LIMIT 1")
     if [ -n "$sess_row" ]; then
         IFS=$'\t' read -r title agent <<<"$sess_row"
     fi
-    local n rc
+    local n ndig
     n=$(o_q "SELECT count(*) FROM part WHERE session_id='${id//\'/\'\'}' AND json_extract(data,'\$.type')='compaction'")
-    echo "== Compactions ($id)${title:+ — $title} =="
-    [ -n "$agent" ] && printf '   %-10s %s\n' "Agent:" "$agent"
-    echo "   Total: $n"
-    [ "$n" = "0" ] && { echo "   (no compactions)"; return 0; }
+    ndig=$(o_q "SELECT count(*) FROM message WHERE session_id='${id//\'/\'\'}' AND json_extract(data,'\$.mode')='compaction'")
+    echo "== Digests ($id)${title:+ — $title} =="
+    [ -n "$agent" ] && printf '   %-19s %s\n' "Agent:" "$agent"
+    printf '   %-19s %s\n' "Compaction markers:" "$n"
+    printf '   %-19s %s\n' "Digests:" "$ndig"
+    if [ "$n" = "0" ]; then
+        echo "   (no compaction markers)"
+        [ "$ndig" != "0" ] && echo "   (but there are digests: run 'digest $id show')"
+        return 0
+    fi
     o_q -header -column "
         SELECT
             datetime(pt.time_created/1000,'unixepoch') AS DATE,
@@ -353,13 +376,13 @@ oced_compactions() {
         WHERE pt.session_id='${id//\'/\'\'}' AND json_extract(pt.data,'\$.type')='compaction'
         ORDER BY pt.time_created;"
     if [ "${2:-}" = "show" ]; then
-        oced_compactions_digest "$id" "${3:-all}"
+        oced_digest_text "$id" "${3:-all}"
     fi
 }
 
-# oced_compactions_digest <id> <last|N|all> -> the compacted-context summary
-# stored in the following "mode=compaction" assistant message.
-oced_compactions_digest() {
+# oced_digest_text <id> <last|N|all> -> the compacted-context summary stored in
+# the "mode=compaction" assistant message that follows each marker.
+oced_digest_text() {
     local id="${1//\'/\'\'}" sel="${2:-all}"
     local markers digests
     markers=$(o_q "SELECT json_group_array(

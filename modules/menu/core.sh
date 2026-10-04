@@ -41,8 +41,28 @@ oced_out() {
 }
 
 # run_oced_tool <command...> -> runs the dispatcher without breaking the menu.
+# A successful `export` / `shrink` publishes its run stamp in
+# OCED_LAST_EXPORT_STAMP / OCED_LAST_SHRINK_STAMP: the dispatcher already prints
+# the folder it wrote ("[OK] Exported … to: <dir>", "Copy ready: <dir>/<stamp>
+# /opencode.shrunk.db"), so we read the stamp from THAT line instead of guessing
+# "the newest folder by mtime" afterwards — a second run, a concurrent run or a
+# pre-existing newer run would all make the guess name the wrong one.
 run_oced_tool() {
-    bash "$OC_DISPATCHER" "$@" || true
+    local out
+    out=$(bash "$OC_DISPATCHER" "$@" 2>&1) || true
+    printf '%s\n' "$out"
+    local d
+    case "${1:-}" in
+        export)
+            d=$(sed -n 's/.*\[OK\] Exported.*to: //p' <<<"$out" | tail -1)
+            [ -n "$d" ] && { OCED_LAST_EXPORT_STAMP="$(basename "$d")"; export OCED_LAST_EXPORT_STAMP; }
+            ;;
+        shrink)
+            # Only the copy-building path prints "Copy ready:"; --swap returns early.
+            d=$(sed -n 's/.*Copy ready: //p' <<<"$out" | tail -1)
+            [ -n "$d" ] && { OCED_LAST_SHRINK_STAMP="$(basename "$(dirname "$d")")"; export OCED_LAST_SHRINK_STAMP; }
+            ;;
+    esac
     return 0
 }
 
@@ -66,12 +86,21 @@ oc_confirm_typed() {
     return 1
 }
 
-# menu_pause <label> -> light pause after a REPORT action so the user can copy
+# menu_pause <label> -> light pause after a REPORT/ACTION so the user can read
 # the output (fzf closed). Returns 0 (Enter) or 2 (ESC). Skipped when stdin is
 # not a TTY (scripts/tests never hang).
+#
+# THE navigation contract every picker follows:
+#   menu_pause "$x" || return 0   # ESC  -> leave the submenu (main menu)
+#   continue                       # Enter -> redraw THIS picker's list
+# run_menu has no back-stack: a picker function that RETURNS hands control back
+# to the root menu (core.sh), so "go back to the list I came from" can only be
+# expressed by `continue` inside the picker's own while-loop. Reports used to
+# `return 0` after the pause, which is why Enter jumped to the root while the
+# remove paths (confirm_action || continue) correctly stayed put.
 menu_pause() {
     [ -t 0 ] || return 0
-    printf '\n— %s · Enter: back to menu · Esc: exit this submenu — ' "$1"
+    printf '\n— %s · Enter: back to the list · Esc: main menu — ' "$1"
     local key
     read -r -s -n1 key || return 2
     [ "$key" = $'\e' ] && return 2
@@ -219,6 +248,18 @@ session_rows() {
     oced_out list "$@" --info 2>/dev/null | awk 'NR>2 && $1 ~ /^ses_/'
 }
 
+# oc_short_id <id> -> the id as it appears in a menu LABEL: the `ses_` prefix
+# dropped and the rest cut to ID_LABEL_W chars with a `_` truncation marker, so
+# the id column is a fixed ID_LABEL_W-wide field and the title/date columns stay
+# aligned (a real id is `ses_` + 32 hex, which was unreadable in every row).
+# DISPLAY ONLY: the row KEY keeps the full id, so marks, CSVs and every command
+# still use the real id. `f72115a_` for `ses_f72115a...`.
+ID_LABEL_W=8
+oc_short_id() {
+    local rest="${1#ses_}"
+    printf '%s_' "${rest:0:$((ID_LABEL_W - 1))}"
+}
+
 # session_ids -> one session id per line (all sessions, for "all sessions" loops).
 session_ids() {
     session_rows | awk '{print $1}'
@@ -293,6 +334,16 @@ oc_toggle_row() {
 # session row -> toggle 0 <-> 1
 # ESC in fzf  -> return 0 (caller climbs one level)
 #-----------------------------------------------------------------------
+# Session rows as `id<TAB>label`: the row format every session list uses. It
+# lives next to the picker (not in the screens) because the export ALL-rows and
+# the sessions browser are two consumers of the same list.
+oc_sessions_rows() {
+    session_rows | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '%s\t%s\n' "$(awk '{print $1}' <<<"$line")" "$line"
+    done
+}
+
 oc_session_picker() {
     local cfg_ref="$1"
     local -n cfg="$cfg_ref"
@@ -307,6 +358,18 @@ oc_session_picker() {
     local empty_guard_msg="${cfg[empty_guard_msg]:-Nothing is marked.}"
     local get_sub_count="${cfg[get_sub_count]:-}"
     local get_sub_ids="${cfg[get_sub_ids]:-}"
+    # `mode`: `select` (the default, unchanged) marks rows to build a selection;
+    # `view` is a BROWSE screen: nothing is selectable, so it renders no marks,
+    # no __MAKE__ and no mark-all/unmark-all rows, and a row just runs
+    # `view_action <id>`. It reuses this picker so both screens read, order and
+    # render sessions identically instead of growing a second implementation.
+    local view_mode=0
+    [ "${cfg[mode]:-select}" = "view" ] && view_mode=1
+    local view_action="${cfg[view_action]:-}"
+    local view_action_all="${cfg[view_action_all]:-}"
+    local view_all_header="${cfg[view_all_header]:-}"
+    [ "$view_mode" -eq 1 ] || view_action=""
+    local show_compactions=1
 
     local -a ids=() top=()
     local -A marks=() local_disp=() sub_n=() is_sub=()
@@ -365,39 +428,117 @@ oc_session_picker() {
         done
         # The active modes, on ONE line. A caveat line follows only when a mode
         # has a consequence the rows cannot show on their own.
-        subs_note="$marked_n/${#ids[@]} marked · $ord_mode"
-        [ -n "$header" ] && subs_note="$header · $subs_note"
-        if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "1" ]; then
-            subs_note+=" · subagents hidden, never exported"
+        subs_note=""
+        if [ "$view_mode" -eq 1 ]; then
+            subs_note="${#ids[@]} session(s) · $ord_mode · ESC: back"
+        else
+            subs_note="$marked_n/${#ids[@]} marked · $ord_mode"
+            [ -n "$header" ] && subs_note="$header · $subs_note"
+            if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "1" ]; then
+                subs_note+=" · subagents hidden, never exported"
+            fi
+            subs_note+=" · ESC: back"
         fi
-        subs_note+=" · ESC: back"
-        if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "0" ]; then
+        if [ "$view_mode" -eq 0 ] && [ -n "$get_sub_ids" ] && [ "$hide_subs" = "0" ]; then
             # The one rule a row cannot show: a shown subagent is marked on its
             # own, so un-marking its session does not take it along.
             subs_note+=$'\n'"subagents keep their own mark: un-marking a session does not remove them"
         fi
 
         sel=$( {
-                 printf '__MAKE__\t%s\n' "$make_label"
+                 if [ "$view_mode" -eq 0 ]; then
+                     printf '__MAKE__\t%s\n' "$make_label"
+                 fi
                  oc_toggle_row "$ord_mode" "$toggle_other"
-                 if [ -n "$get_sub_ids" ]; then
-                     if [ "$hide_subs" = "0" ]; then
+                 # Compactions and report-count are REPORT concepts: a select
+                 # screen has nothing to report, so the rows only exist in view
+                 # mode. Rendering them everywhere put dead keys in the export
+                 # and shrink pickers, where selecting one exited the loop.
+                  if [ "$view_mode" -eq 1 ]; then
+                     if [ "$show_compactions" -eq 1 ]; then
+                         oc_toggle_row "compactions in reports: shown" "hidden" "__TOGGLE_COMP__"
+                     else
+                         oc_toggle_row "compactions in reports: hidden" "shown" "__TOGGLE_COMP__"
+                     fi
+                 fi
+                  if [ -n "$get_sub_ids" ]; then
+                     if [ "$hide_subs" -eq 0 ]; then
                          oc_toggle_row "subagents: shown" "hidden" "__SUBS__"
                      else
                          oc_toggle_row "subagents: hidden" "shown" "__SUBS__"
                      fi
+                  fi
+                  if [ "$view_mode" -eq 1 ]; then
+                      printf '%s\t%s\n' "__REPORT_ALL__" "[>] details of all sessions"
+                  fi
+
+                 if [ "$view_mode" -eq 0 ]; then
+                     printf '__ALL__\t[mark all]\n'
+                     printf '__NONE__\t[unmark all]\n'
                  fi
-                 printf '__ALL__\t[mark all]\n'
-                 printf '__NONE__\t[unmark all]\n'
                  for id in "${ids[@]}"; do
+                     if [ "$view_mode" -eq 1 ]; then
+                         # [>] = opens a FLOW (the session detail). A browse row
+                         # is not selectable, so it must not wear a [x]/[ ] mark:
+                         # a mark there would promise a selection that is never
+                         # built.
+                         local id_short
+                         id_short="$(oc_short_id "$id")"
+                         printf '%s\t%s %s\n' "$id" "$id_short" "${local_disp[$id]:-}"
+                         continue
+                     fi
                      [ "${marks[$id]:-0}" = 1 ] && mark='[x]' || mark='[ ]'
                      local badge=''
                      [ -n "${sub_n[$id]:-}" ] && badge=" (${sub_n[$id]} sub)"
-                     printf '%s\t%s %s%s\n' "$id" "$mark" "${local_disp[$id]:-}" "$badge"
+                     id_short="$(oc_short_id "$id")"
+                     printf '%s\t%s %s %s%s\n' "$id" "$mark" "$id_short" "${local_disp[$id]:-}" "$badge"
                  done
                } | oc_fzf_sel "$title" "$subs_note") || return $?
 
         key=$(oc_sel_key "$sel")
+        if [ "$view_mode" -eq 1 ]; then
+            case "$key" in
+                __TOGGLE__)
+                    if [ "$ord_mode" = "newest first" ]; then
+                        ord=updated-asc; ord_mode="old first"
+                    else
+                        ord=updated-desc; ord_mode="newest first"
+                    fi
+                    ;;
+                __TOGGLE_COMP__)
+                    show_compactions=$((1 - show_compactions))
+                    ;;
+                 __SUBS__)
+                     if [ "$hide_subs" = "0" ]; then hide_subs=1; else hide_subs=0; fi
+                     ;;
+                 __REPORT_ALL__)
+                     # The group header belongs to the ITERATION, not to the
+                     # per-session callback: a callback cannot tell "first call"
+                     # from "last call" without state the picker already owns.
+                     if [ -n "${view_all_header:-}" ]; then
+                         printf '%s\n' "$view_all_header"
+                     fi
+                     if [ -n "$view_action_all" ]; then
+                         for idv in "${ids[@]}"; do
+                             "$view_action_all" "$idv" "$show_compactions" "$hide_subs"
+                         done
+                     elif [ -n "$view_action" ]; then
+                         for idv in "${ids[@]}"; do
+                             "$view_action" "$idv" "$show_compactions" "$hide_subs"
+                         done
+                     fi
+                     menu_pause "Sessions" || return 0
+                     ;;
+                 __NONE__|__ALL__|__MAKE__) continue ;;
+                "")
+                    return 0 ;;
+                *)  # A session row is a REPORT: view_action prints it and pauses
+                    # (that is the caller's contract, as in sessions.sh).
+                    [ -n "$view_action" ] && "$view_action" "$key" "$show_compactions" "$hide_subs"
+                    ;;
+            esac
+            continue
+        fi
         case "$key" in
             __MAKE__)
                 local marked_csv="" unmarked_csv="" marked_any=0

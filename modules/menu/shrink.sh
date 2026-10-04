@@ -326,7 +326,12 @@ oc_shrinks_swap_pick() {
     echo ""
     echo "   Swapping... (this may take a moment)"
     oced_shrink_swap "$snap" 1
-    [ $? -eq 0 ] && menu_pause "Shrink Swap" || :
+    local rc=$?
+    [ "$rc" -ne 0 ] && return $rc
+    # The pause rc travels to __SWAP__ so an ESC there closes the submenu
+    # instead of silently redrawing the list.
+    menu_pause "Shrink Swap"
+    return $?
 }
 
 oc_shrinks_picker() {
@@ -337,8 +342,16 @@ oc_shrinks_picker() {
         sel=$(oc_shrinks_rows "$mode" | oc_fzf_sel "shrinks ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
-            __CREATE__)     oc_pick_shrink; continue ;;
-            __SWAP__)       oc_shrinks_swap_pick; continue ;;
+            __CREATE__)
+                    # rc 0 = a copy was built (pause, then back to this list);
+                    # 130 = ESC'd out of the wizard (no pause). A pause ESC is
+                    # rc 2 and leaves the submenu, like every other report.
+                    oc_pick_shrink
+                    [ $? -eq 0 ] || continue
+                    menu_pause "Shrink copy" || return 0
+                    continue
+                    ;;
+            __SWAP__)       oc_shrinks_swap_pick; [ $? -eq 2 ] && return 0; continue ;;
             __VERIFY__)     run_oced_tool shrinks verify; menu_pause "Shrinks Verify" || return 0; continue ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_shrinks_bulk all; continue ;;
@@ -348,7 +361,7 @@ oc_shrinks_picker() {
                 if [ "$mode" = view ]; then
                     run_oced_tool shrinks view "$key"
                     menu_pause "Shrinks" || return 0
-                    return 0
+                    continue
                 fi
                 # Remove mode: check if this shrink is stale vs live DB
                 local stale
@@ -357,7 +370,7 @@ oc_shrinks_picker() {
                     echo ""
                     echo "⚠️  WARNING: $stale"
                     echo "   Swapping with this copy would LOSE recent sessions (or freshness is unknown)."
-                    echo "   You should create a new shrink (Step 2 in guide) before swapping."
+                    echo "   You should create a new shrink copy before swapping."
                     echo ""
                     if ! confirm_action "Continue with stale shrink anyway? (NOT RECOMMENDED)"; then
                         continue

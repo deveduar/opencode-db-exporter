@@ -102,6 +102,72 @@ oced_exports_prune() {
     o_log "exports prune keep=$keep removed=$n"
     echo "Prune: removed $n run(s); keeping $keep."
 }
+# The human phrase for a stored run's selection. It asks PYTHON, because the
+# rules live in util.selection_phrase() (the inverse of selection_meta()) and
+# bash must not grow a second copy: reading `.filter`/`.sessions_selected` here
+# reported a `--last 3`/`--since` run as "sessions: all", which is exactly the
+# lie this screen must not tell.
+oced_export_selection_phrase() {   # $1 = metadata.json
+    local meta="${1:-}" phrase=""
+    if [ -f "$meta" ]; then
+        phrase=$(python3 "$SCRIPT_DIR/exportlib/plan.py" selection-meta "$meta" 2>/dev/null) || phrase=""
+    fi
+    printf '%s' "${phrase:--}"
+}
+
+# One product's metadata as `label<TAB>value` pairs. The ORDER is fixed here (so
+# the screen never reorders between runs) and a field is only emitted when the
+# key actually exists, because a missing key used to be rendered as a value:
+# `Cap: 0 (unlimited)` and `Touched files: false` were printed for every
+# transcript even though `cap`/`touched_files` are memory-only keys.
+# Alignment is done by the caller (jq 1.7 has no ljust).
+oced_export_meta_pairs() {   # $1 = metadata.json
+    jq -r '
+        def pair($l; $v): ($l + "\t" + ($v | tostring));
+        [
+          pair("Product";             (.profile // "-")),
+          pair("Preset";              (.preset // "-")),
+          pair("Sub";                 (.sub // "-")),
+          (if ((.role // "all") != "all") then pair("Role"; .role) else empty end),
+          pair("Sanitize";            (.sanitize // false)),
+          pair("JSON archive";        (.json // false)),
+          pair("Reasoning";           (.reasoning // false)),
+          pair("Summary diffs";       (.summary_diffs // false)),
+          pair("Tokens backfilled";   (.tokens_backfilled // 0)),
+          pair("No subagents";        (.no_subagents // false)),
+          pair("No orphan subagents"; (.no_orphan_subagents // false)),
+          (if (.subagents_hidden // 0) > 0
+             then pair("Subagents hidden"; .subagents_hidden) else empty end),
+          (if has("cap") then
+             pair("Cap"; ((.cap | tostring) + (if .cap == 0 then " (unlimited)" else "" end)))
+             else empty end),
+          (if has("touched_files") then pair("Touched files"; .touched_files) else empty end),
+          pair("Files"; ((.files // []) | length))
+        ] | .[]
+    ' "$1"
+}
+
+# The sessions a run really contains. Printed ONCE per run (not once per
+# product): a bundle shares the selection, so the same list would otherwise be
+# repeated verbatim for every product. Falls back to `.sessions_selected` for a
+# legacy run written before `.session_records` existed.
+oced_export_session_rows() {   # $1 = metadata.json
+    if jq -e '(.session_records // []) | length > 0' "$1" >/dev/null 2>&1; then
+        jq -r '.session_records[]
+               | [ (.id // "-"), (.kind // "-"),
+                   ((.title // "") | if . == "" then "(no title)" else .[0:60] end),
+                   (.created // "-"), (.updated // "-") ]
+               | @tsv' "$1"
+        return 0
+    fi
+    local ids
+    ids=$(jq -r '(.sessions_selected // []) | if length == 0 then ["ALL (not recorded)"] else .[] end | @tsv' "$1")
+    [ -n "$ids" ] || return 0
+    local one
+    while IFS= read -r one; do
+        [ -n "$one" ] && printf '%s\t%s\t%s\t%s\t%s\n' "$one" "-" "(legacy record)" "-" "-"
+    done <<< "$ids"
+}
 
 oced_exports_view() {
     local stamp="${1:-}" show_files=0 json_mode=0
@@ -133,11 +199,12 @@ oced_exports_view() {
         return 0
     fi
 
-    # Pretty output (human readable) - aggregate across products like the old format
     echo "== Export run: $stamp =="
     echo ""
-    local tot_roots=0 tot_subs=0 tot_msgs=0 tot_comp=0 tot_files=0 first_meta=""
-    local prod r s m c f
+    # roots/subagents are a MAX (a bundle copies the same sessions per product)
+    # but messages/compactions/digests/files are a SUM.
+    local tot_roots=0 tot_subs=0 tot_msgs=0 tot_comp=0 tot_dig=0 tot_files=0
+    local first_meta="" prod r s m c d f
     for meta in "${metas[@]}"; do
         [ -f "$meta" ] || continue
         [ -n "$first_meta" ] || first_meta="$meta"
@@ -146,68 +213,82 @@ oced_exports_view() {
         s=$(jq -r '.sessions.subagents // 0' "$meta")
         m=$(jq -r '.messages // 0' "$meta")
         c=$(jq -r '.compactions // 0' "$meta")
+        d=$(jq -r '.digests // 0' "$meta")
         f=$(jq -r '.files // [] | length' "$meta")
         [ "$r" -gt "$tot_roots" ] && tot_roots="$r"
         [ "$s" -gt "$tot_subs" ] && tot_subs="$s"
         tot_msgs=$((tot_msgs + m))
         tot_comp=$((tot_comp + c))
+        tot_dig=$((tot_dig + d))
         tot_files=$((tot_files + f))
-        printf '  %-14s %s roots (%s subagent) · %s msgs · %s comp\n' \
-            "$prod" "$r" "$s" "$m" "$c"
+        printf '  %-12s %s roots (%s subagent) · %s msgs · %s comp · %s digests · %s files\n' \
+            "$prod" "$r" "$s" "$m" "$c" "$d" "$f"
     done
     echo ""
     local size
     size=$(du -sb "$target" 2>/dev/null | cut -f1); size=${size:-0}
-    echo "  totals: $tot_roots roots ($tot_subs subagent) · $tot_msgs msgs · $tot_comp comp · $(o_human_size "$size")"
+    printf '  %-11s %s roots (%s subagent) · %s msgs · %s comp · %s digests · %s\n' \
+        "totals:" "$tot_roots" "$tot_subs" "$tot_msgs" "$tot_comp" "$tot_dig" "$(o_human_size "$size")"
     if [ -n "$first_meta" ]; then
-        echo "  date:   $(jq -r '.date // "-"' "$first_meta")"
-        echo "  db:     $(jq -r '.db // "-"' "$first_meta")"
-        echo "  sha256: $(jq -r '.db_sha256 // "-"' "$first_meta")"
+        # The selection is a RUN-level fact (shared by a bundle), so it is
+        # printed once here and not repeated in every product block.
+        printf '  %-11s %s\n' "selection:" "$(oced_export_selection_phrase "$first_meta")"
+        printf '  %-11s %s\n' "date:" "$(jq -r '.date // "-"' "$first_meta")"
+        printf '  %-11s %s\n' "db:" "$(jq -r '.db // "-"' "$first_meta")"
+        printf '  %-11s %s\n' "sha256:" "$(jq -r '.db_sha256 // "-"' "$first_meta")"
     fi
 
     echo ""
     echo "== Details per product =="
-    local n=0
+    local n=0 k v
     for meta in "${metas[@]}"; do
         [ -f "$meta" ] || continue
         [ "$n" -eq 0 ] || echo ""
         n=$((n + 1))
-        jq -r '
-            "  Product:        " + (.profile // "?"),
-            "  Preset:         " + (.preset // "?"),
-            "  Selection:      " + (if .filter then "filter: " + .filter else "sessions: " + ((.sessions_selected // ["all"]) | join(",")) end),
-            "  Sub:            " + (.sub // "?"),
-            "  Role:           " + (.role // "all"),
-            "  Cap:            " + (.cap // 0 | tostring) + " (unlimited)",
-            "  Touched files:  " + (.touched_files // false | tostring),
-            "  Sanitize:       " + (.sanitize // false | tostring),
-            "  Tokens backfilled: " + (.tokens_backfilled // 0 | tostring),
-            "  No subagents:   " + (.no_subagents // false | tostring),
-            "  No orphan subagents: " + (.no_orphan_subagents // false | tostring),
-            "  Date:           " + (.date // "-"),
-            "  DB:             " + (.db // "-"),
-            "  DB sha256:      " + (.db_sha256 // "-"),
-            "  Sessions:       " + ((.sessions.total // ((.sessions.roots // 0) + (.sessions.subagents // 0))) | tostring) + " total (" + (.sessions.roots // 0 | tostring) + " roots · " + (.sessions.subagents // 0 | tostring) + " subagents)",
-            "  Stats:          " + (.messages // 0 | tostring) + " msgs · " + (.compactions // 0 | tostring) + " comp",
-            "  Files:          " + (.files // [] | length | tostring) + " files"
-        ' "$meta"
+        while IFS=$'\t' read -r k v; do
+            [ -n "$k" ] || continue
+            printf '  %-21s %s\n' "$k:" "$v"
+        done < <(oced_export_meta_pairs "$meta")
+    done
 
-        # Older/extended runs may carry the individual session ids.
-        if jq -e '.session_ids' "$meta" >/dev/null 2>&1; then
-            echo ""
-            echo "  Session ids:"
-            jq -r '.session_ids[]? | "    " + .' "$meta"
+    # WHICH sessions the run contains (identity only, straight from metadata).
+    # Any product of the run can carry the records, so look for the FIRST one
+    # that has them instead of assuming the first file found: in a bundle the
+    # products are sorted, and `memory` sorts before `transcript`.
+    local rec_meta=""
+    for meta in "${metas[@]}"; do
+        [ -f "$meta" ] || continue
+        if [ "$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)" != "0" ]; then
+            rec_meta="$meta"
+            break
         fi
     done
+    if [ -n "$rec_meta" ]; then
+        echo ""
+        echo "== Sessions =="
+        # The free-text title goes LAST and is never padded: bash printf counts
+        # BYTES in %-Ns, so a padded title column desynchronises the layout as
+        # soon as a title carries an accent or a CJK glyph.
+        local sid skind stitle screated supdated when
+        while IFS=$'\t' read -r sid skind stitle screated supdated; do
+            [ -n "$sid" ] || continue
+            if [ "$screated" = "$supdated" ]; then
+                when="${supdated:0:10}"
+            else
+                when="${screated:0:16} -> ${supdated:0:16}"
+            fi
+            printf '  %-22s %-8s  %-25s %s\n' "$sid" "$skind" "$when" "$stitle"
+        done < <(oced_export_session_rows "$rec_meta")
+    fi
 
     if [ "$show_files" -eq 1 ]; then
         echo ""
         echo "== Files =="
-        find "$target" -type f \( -name '*.md' -o -name '*.json' -o -name '*.jsonl' \) | while IFS= read -r f; do
-            local rel="${f#$target/}"
-            local sz
+        local rel sz
+        while IFS= read -r f; do
+            rel="${f#$target/}"
             sz=$(stat -c %s "$f" 2>/dev/null || echo 0)
             printf '  %-60s %s\n' "$rel" "$(o_human_size "$sz")"
-        done
+        done < <(find "$target" -type f \( -name '*.md' -o -name '*.json' -o -name '*.jsonl' \) | sort)
     fi
 }

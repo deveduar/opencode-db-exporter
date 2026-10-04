@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 from exportlib import TOOL_VERSION
 from exportlib.db import digests_for, load_messages, load_todos, touched_files
 from exportlib.sanitize import sanitize
-from exportlib.util import model_str, selection_meta, sha256_file, ts_iso
+from exportlib.util import (
+    model_str,
+    selection_meta,
+    session_record,
+    sha256_file,
+    ts_iso,
+)
 from exportlib.writers import last_backup_info
 
 
@@ -96,7 +102,9 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     n_subs = 0
     total_msgs = 0
     total_comp = 0
+    total_digest = 0
     total_backfilled = 0
+    records: list = []
     with (out_dir / "corpus.jsonl").open("w", encoding="utf-8") as corpus:
         for rid in roots:
             root = sessions[rid]
@@ -109,6 +117,15 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
             n_subs += len(subs)
             total_msgs += e["messages"]
             total_comp += e["compactions"]
+            # A marker (part.data.type='compaction') and a digest (the summary
+            # text opencode wrote for it) are two different things: count both
+            # so the metadata contract is the same for every product.
+            total_digest += len(e.get("compaction_digests") or [])
+            records.append(session_record(root, "root"))
+            # `subs` holds session IDS (memory_subagent_ref looks them up), so
+            # the record has to resolve them the same way.
+            for s_id in subs:
+                records.append(session_record(sessions[s_id], "subagent"))
             if e["tokens"]["backfilled"]:
                 total_backfilled += 1
 
@@ -130,7 +147,8 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         f"| Subagents (summarized inline) | {n_subs} |",
         f"| Subagents excluded | {hidden} |",
         f"| Messages (roots) | {total_msgs} |",
-        f"| Compactions | {total_comp} |",
+        f"| Compaction markers | {total_comp} |",
+        f"| Compaction digests | {total_digest} |",
         f"| Tuning | `--cap {'0 (unlimited)' if not args.cap else args.cap}` · `--files {'on' if args.files else 'off'}` |",
         f"| Sanitize | `{'on' if args.sanitize else 'off'}` |",
         f"| Tokens backfilled from step-finish | {total_backfilled} session(s) |",
@@ -172,6 +190,8 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "tokens_backfilled": total_backfilled,
         "sessions": {"total": len(sessions), "roots": n_root, "subagents": n_subs},
         "compactions": total_comp,
+        "digests": total_digest,
+        "session_records": records,
         "messages": total_msgs,
         "last_backup": lb,
         "files": ["corpus.jsonl", "index.md"],

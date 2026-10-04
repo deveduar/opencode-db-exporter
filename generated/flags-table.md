@@ -1,4 +1,4 @@
-| `product` | string | `transcript` \| `memory` \| `compactions` | single only (`full` is a CLI alias, **not** a preset product) |
+| `product` | string | `transcript` \| `memory` \| `digest` | single only (`full` is a CLI alias, **not** a preset product) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
 | Product flags (top level for single, per product for bundle): | | | |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
@@ -9,11 +9,11 @@
 | `tool_input_limit` | int | ≥ 0 | transcript |
 | `tool_output_limit` | int | ≥ 0 | transcript |
 | `patch` | string | `full` \| `omit` | transcript |
-| `no_reasoning` | bool | — | transcript, compactions |
-| `mark_compactions` | bool | — | transcript, compactions |
-| `summary_diffs` | bool | — | transcript, compactions |
-| `role` | string | `all` \| `user` \| `assistant` | transcript, compactions |
-| `json` | bool | — | transcript/compactions (faithful archive) |
+| `no_reasoning` | bool | — | transcript, digest |
+| `mark_compactions` | bool | — | transcript, digest |
+| `summary_diffs` | bool | — | transcript, digest |
+| `role` | string | `all` \| `user` \| `assistant` | transcript, digest |
+| `json` | bool | — | transcript/digest (faithful archive) |
 | `sanitize` | bool | — | any |
 | `snapshot` | string | `fresh` | any |
 | `cap` | int | 0 = unlimited (≥ 0) | memory |

@@ -73,6 +73,29 @@ def selection_label(args) -> str:
     return SELECTION_LABELS[rule].format(value=value, n=n)
 
 
+def session_record(sess: dict, kind: str) -> dict:
+    """One session identity for `metadata.json.session_records`.
+
+    IDENTITY ONLY, deliberately. `messages`/`compactions` are already totals at
+    the top level of the same file, so repeating them per session would create a
+    second set of numbers to keep in sync for no gain; what metadata did NOT have
+    anywhere was WHICH sessions the run actually contains.
+
+    Lives here, not in cli.py, because EVERY product records this: the memory
+    product writes its own metadata and must emit the same records, or a bundle
+    would carry the list in one product and not the other.
+    """
+    return {
+        "id": sess["id"],
+        "title": sess["title"] or sess["slug"],
+        "kind": kind,
+        # absent parent -> null, not "" (the machine-artifact rule)
+        "parent_id": sess["parent_id"] or None,
+        "created": ts_iso(sess["time_created"]),
+        "updated": ts_iso(sess["time_updated"]),
+    }
+
+
 def selection_meta(args) -> dict:
     """Machine provenance for metadata.json: the rule that produced the run.
     Stable keys per rule, so a consumer never has to guess what `value` means."""
@@ -82,6 +105,36 @@ def selection_meta(args) -> dict:
     if rule == "all":
         return {"rule": rule}
     return {"rule": rule, "value": value}
+
+
+def selection_phrase(meta) -> str:
+    """Human phrase for a metadata.json's `.selection`, i.e. the INVERSE of
+    selection_meta(). This is the one description of a stored selection, so the
+    export confirm, the index row and `exports view` can never disagree.
+
+    Read `.selection` and NOT `.filter`/`.sessions_selected`: those two only
+    describe a filter or an explicit id list, so a run selected by `--last N` or
+    `--since DATE` reads as "sessions: all" — flatly wrong, and wrong in the
+    screen whose whole job is to say what a run contains. Runs written before
+    `.selection` existed have none, and are labelled as legacy.
+    """
+    meta = meta or {}
+    sel = meta.get("selection")
+    if not isinstance(sel, dict) or "rule" not in sel:
+        # Legacy run (pre-.selection): reconstruct what we can, and say so.
+        if meta.get("filter"):
+            return f"filter {meta['filter']} (legacy record)"
+        ids = meta.get("sessions_selected")
+        if ids:
+            n = len(ids) if isinstance(ids, list) else 0
+            return SELECTION_LABELS["sessions"].format(n=n) + " (legacy record)"
+        return "all sessions (legacy record)"
+    rule = sel["rule"]
+    if rule == "sessions":
+        return SELECTION_LABELS[rule].format(n=len(sel.get("ids") or []))
+    if rule == "all":
+        return SELECTION_LABELS[rule]
+    return SELECTION_LABELS.get(rule, rule).format(value=sel.get("value"))
 
 
 def model_str(model) -> str:

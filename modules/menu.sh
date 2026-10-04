@@ -9,13 +9,11 @@ done
 # Root
 #-----------------------------------------------------------------------
 oc_root=(
-    "status|Status — DB, backups, deps, version|fn:oc_show_status"
-    "backups|Backups — create, details, remove|fn:oc_backups_picker"
-    "shrinks|Shrink copies — create, view, swap|fn:oc_shrinks_picker"
-    "sessions|Sessions — info, compactions|fn:oc_sessions_picker"
-    "export|Export — pick sessions, then a preset|fn:oc_export_picker"
-    "exports|Exports — view, remove|fn:oc_exports_picker"
-    "guide|Guide — inspect, backup, export, shrink|tool:guide|pause"
+    "exports|Exports|fn:oc_exports_picker"
+    "backups|Backups|fn:oc_backups_picker"
+    "shrinks|Shrinks|fn:oc_shrinks_picker"
+    "sessions|Sessions|fn:oc_sessions_picker"
+    "status|Status|fn:oc_show_status"
     "help|Help|tool:help|pause"
 )
 

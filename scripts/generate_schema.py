@@ -83,7 +83,7 @@ def generate_schema() -> dict:
         "properties": {
             "presets": {
                 "type": "object",
-                "description": "Name -> preset. Names conflict with product keywords (transcript|memory|compactions|full) are allowed as data, but `export <name>` always resolves a keyword first.",
+                "description": "Name -> preset. Names conflict with product keywords (transcript|memory|digest|full) are allowed as data, but `export <name>` always resolves a keyword first. 'compactions' is a deprecated alias of 'digest'.",
                 "additionalProperties": {"$ref": "#/definitions/preset"}
             }
         },
@@ -175,7 +175,7 @@ def _flag_applies(f) -> str:
     if f.products == ["*"]:
         return "any"
     if f.name == "json":
-        return "transcript/compactions (faithful archive)"
+        return "transcript/digest (faithful archive)"
     if f.name == "files":
         return "memory (touched files)"
     return ", ".join(f.products)
@@ -184,7 +184,7 @@ def _flag_applies(f) -> str:
 def flags_table() -> str:
     """Render the docs/schemas.md §1 per-key table from FLAGS (also written to generated/flags-table.md)."""
     rows = [
-        "| `product` | string | `transcript` \\| `memory` \\| `compactions` | "
+        "| `product` | string | `transcript` \\| `memory` \\| `digest` | "
         "single only (`full` is a CLI alias, **not** a preset product) |",
         "| `products` | object | keys restricted to the 3 products | "
         "bundle only (exclusive with `product`) |",

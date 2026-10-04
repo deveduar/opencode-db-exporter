@@ -21,6 +21,18 @@ pass=0; fail=0
 ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; fail=$((fail+1)); }
 run() { bash "$MOD/opencode-db.sh" "$@" 2>&1; }
+# stamp_of <run-output> -> the stamp the run itself reported.
+# NOT "newest metadata by mtime": two exports inside the same sub-second tick tie
+# on %T@, and the sort then picks by path, which can hand back the PREVIOUS run.
+# Every test that reads back what it just ran must use the run's own answer.
+# The reported path is <OUT>/<stamp>/<profile>; take THAT path verbatim instead
+# of rebuilding it (no basename round-trip, no mtime, no name mangling).
+out_dir_of() {   # $1 = run output -> the <OUT>/<stamp>/<profile> dir it wrote
+    printf '%s' "$1" | sed -n 's/.* to: //p' | tail -1 | sed 's:/*$::'
+}
+stamp_of() { out_dir_of "$1" | sed 's:/[^/]*$::' | xargs -r basename; }
+# The metadata sits INSIDE the reported profile dir: <OUT>/<stamp>/<profile>/metadata.json
+meta_of() { out_dir_of "$1" | xargs -r -I{} printf '%s/metadata.json' "{}"; }
 grep_run() { # $1=pattern, rest=CLI args: capture output before grep (avoids SIGPIPE/pipefail)
     local pat="$1"; shift
     local out; out=$(run "$@")
@@ -29,8 +41,12 @@ grep_run() { # $1=pattern, rest=CLI args: capture output before grep (avoids SIG
 last_transcript() { # $1=profile $2=title (newest by mtime)
     find "$OUT" -path "*/$1/*" -name "*$2*.md" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
 }
-last_meta() { # $1=profile (newest by mtime)
-    find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
+last_meta() { # $1=profile (newest by mtime, path breaks a tie)
+    # `sort -n` compares the WHOLE line numerically, so an equal %T@ left the
+    # order to chance and two exports in the same tick could hand back the older
+    # run. Sort by mtime first and by PATH second: deterministic.
+    find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) -printf '%T@ %p\n' \
+        | sort -k1,1n -k2,2 | tail -1 | cut -d' ' -f2-
 }
 
 echo "== status (incl. version/schema/deps sections) =="
@@ -70,29 +86,48 @@ PREC=$(OCED_CONF="$CONF" OCED_FROM_BACKUP="env-backup.db" bash -c '. "$1"; print
 PREC=$(env -u OCED_OUT OCED_CONF="$CONF" bash -c '. "$1"; printf "%s" "$OCED_OUT"' _ "$MOD/common.sh")
 [ "$PREC" = "$TMP/from-conf" ] && ok "conf value applies when the env does not set it" || bad "conf applies: $PREC"
 
-echo "== guide (wizard) =="
-G=$(run guide --list)
-printf '%s' "$G" | grep -q "opencode-db guide" && ok "guide --list header" || bad "guide header"
-printf '%s' "$G" | grep -q "Swap the copy manually" && ok "guide lists the manual swap step" || bad "guide steps"
-printf '%s' "$G" | grep -q "never modifies the live DB" && ok "guide states the live DB is untouched" || bad "guide safety note"
-printf '%s' "$G" | grep -qE "^  [0-9]+\. " && ok "guide numbers the steps" || bad "guide numbering"
+echo "== the guide is gone =="
+# The interactive guide was removed: its three steps are the pickers (exports /
+# shrinks / swap), and a linear read-stdin wizard nested inside fzf was both
+# fragile (run_oced_tool buffers stdout, so its prompts appeared out of order)
+# and redundant. The command must be GONE, not merely undocumented: a silent
+# alias would still leave the broken wizard on disk.
+HB=$(run help)
+printf '%s' "$HB" | grep -qi "guide" && bad "help still advertises guide" || ok "help no longer mentions guide"
+run guide >/dev/null 2>&1 && bad "guide subcommand still exists" || ok "guide subcommand is gone"
 
 echo "== list =="
 grep_run "Project" list --root && ok "list --root" || bad "list --root"
 grep_run "ORPHAN" list --sub --info && ok "list --sub includes orphan" || bad "list --sub"
 grep_run "Project Beta" list --filter 'Project Beta' && ok "list --filter" || bad "list --filter"
 
-echo "== info / compactions =="
-I=$(run info ses_A0001); grep_run "Compactions" info ses_A0001 && ok "info" || bad "info"
+echo "== info / digest =="
+I=$(run info ses_A0001); grep_run "Digests" info ses_A0001 && ok "info" || bad "info"
 printf "%s" "$I" | grep -q "1$" && ok "info counts 1 compaction" || bad "info count"
 # A detail screen must lead with a banner: the raw `key = value` dump is unreadable alone.
 printf "%s" "$I" | sed -n '1p' | grep -q "^== Session (ses_A0001)" \
     && ok "info leads with a session header" || bad "info header: $(printf '%s' "$I" | sed -n '1p')"
+# --no-digest is the REPORT filter behind the browse screen's compactions toggle:
+# `info` ends with the digest block, so hiding compactions means dropping it,
+# not calling `digest` a second time.
+IN=$(run info ses_A0001 --no-digest)
+printf "%s" "$IN" | grep -q "== Session (ses_A0001)" \
+    && ok "info --no-digest keeps the session dump" || bad "info --no-digest dump"
+printf "%s" "$IN" | grep -q "== Digests" && bad "info --no-digest still prints digests" \
+    || ok "info --no-digest drops the digest block"
+printf "%s" "$IN" | grep -q "parts_compaction = 1" \
+    && ok "info --no-digest keeps the compaction counter" || bad "info --no-digest counter"
+grep_run "Usage: opencode-db info" info ses_A0001 --bogus && ok "info rejects an unknown flag" \
+    || bad "info accepted an unknown flag"
 IJ=$(run info ses_A0001 --json)
 printf "%s" "$IJ" | jq -e '.[0].id == "ses_A0001"' >/dev/null \
     && ok "info --json is a structured row" || bad "info --json"
 printf '%s' "$IJ" | grep -q "== Session" && bad "info --json header" || ok "info --json has no header"
-C=$(run compactions ses_A0001); printf "%s" "$C" | grep -vq "no compactions" && ok "compactions detected" || bad "compactions"
+# `compactions` stays a working deprecated alias of `digest`.
+CA=$(run compactions ses_A0001)
+CB=$(run digest ses_A0001)
+[ "$CA" = "$CB" ] && ok "compactions is a deprecated alias of digest" || bad "alias compactions != digest"
+printf "%s" "$CB" | grep -q "Digests:" && ok "digest detected" || bad "digest"
 
 echo "== backup =="
 grep_run "No backups recorded yet." backups list && ok "backups list w/o manifest" || bad "backups list w/o manifest"
@@ -170,21 +205,24 @@ TC=$(cat "$(last_transcript transcript 'Project Alpha')")
 echo "$TC" | grep -q "Done\." && bad "--role user kept the assistant answer" || ok "--role user excludes assistant messages"
 echo "$TC" | grep -q "Still working" && ok "--role user keeps the prompts" || bad "--role user lost prompts"
 
-echo "== compactions show (digest) =="
-CS=$(run compactions ses_A0001 show last)
-printf '%s' "$CS" | grep -q "Total: 1" && ok "compactions total" || bad "compactions total"
-printf '%s' "$CS" | grep -q "DIGEST_A" && ok "compactions show last digest" || bad "compactions show digest"
+echo "== digest show =="
+CS=$(run digest ses_A0001 show last)
+# A marker and a digest are two different things and must be counted separately.
+printf '%s' "$CS" | grep -qE "Compaction markers: +1" && ok "digest counts markers" || bad "digest markers"
+printf '%s' "$CS" | grep -qE "Digests: +1" && ok "digest counts digests" || bad "digests count"
+printf '%s' "$CS" | grep -q "DIGEST_A" && ok "digest show last" || bad "digest show"
 
-echo "== compactions show (digest) =="
-CS=$(run compactions ses_A0001 show last)
-printf '%s' "$CS" | grep -q "Total: 1" && ok "compactions total" || bad "compactions total"
-printf '%s' "$CS" | grep -q "DIGEST_A" && ok "compactions show last digest" || bad "compactions show digest"
-
-echo "== export compactions profile =="
-run export compactions --filter ses_A0001 >/dev/null
-CC=$(cat "$(last_transcript compactions 'Project Alpha')")
-echo "$CC" | grep -q "DIGEST_A" && ok "compactions digest exported" || bad "compactions profile digest"
-echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "compactions profile has tools" || ok "compactions profile no tools"
+echo "== export digest profile =="
+# 'compactions' is the deprecated alias of 'digest' and must resolve to the SAME
+# product (same folder, same metadata), not a second product.
+ALIASOUT=$(run export compactions --filter ses_A0001 --stamp "digest-alias")
+ALIASMETA=$(meta_of "$ALIASOUT")
+jq -e '.profile == "digest"' "$ALIASMETA" >/dev/null \
+    && ok "the compactions alias normalises to the digest profile" || bad "alias profile: $(jq -r '.profile' "$ALIASMETA")"
+DIGRUN=$(run export digest --filter ses_A0001 --stamp "digest-run")
+CC=$(cat "$(out_dir_of "$DIGRUN")"/*/'Project Alpha'*.md)
+echo "$CC" | grep -q "DIGEST_A" && ok "digest profile exported" || bad "digest profile"
+echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "digest profile has tools" || ok "digest profile no tools"
 
 echo "== long output truncation =="
 run export transcript --filter ses_B0001 >/dev/null
@@ -243,14 +281,14 @@ echo "== shared-stamp bundle (products share one run folder) =="
 BSTAMP="stplug-$(date -u +%s)"
 SELRUN="selrun-$(date -u +%s)"
 run export transcript --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
-run export compactions --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
-[ -f "$OUT/$BSTAMP/transcript/metadata.json" ] && [ -f "$OUT/$BSTAMP/compactions/metadata.json" ] \
+run export digest --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
+[ -f "$OUT/$BSTAMP/transcript/metadata.json" ] && [ -f "$OUT/$BSTAMP/digest/metadata.json" ] \
     && ok "same stamp = one run with two products" || bad "stamp bundle dirs"
 ALROW=$(run exports list | awk -v s="$BSTAMP" '$0 ~ s {print; exit}')
-printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "compactions" \
+printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "digest" \
     && ok "exports list aggregates products joined with +" || bad "exports list aggregate: $ALROW"
 VIEW=$(run exports view "$BSTAMP")
-printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "compactions" && printf '%s' "$VIEW" | grep -q "totals:" \
+printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "digest" && printf '%s' "$VIEW" | grep -q "totals:" \
     && ok "exports view shows every product of the run" || bad "exports view aggregate: $(printf '%s' "$VIEW" | sed -n '1,6p')"
 # A detail screen must lead with a banner, like info/backups/shrinks.
 printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
@@ -258,7 +296,7 @@ printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
 printf '%s' "$VIEW" | grep -c "== Export run:" | grep -qx "1" \
     && ok "exports view repeats the run header once (per product)" || bad "exports view header repeated"
 VJSON=$(run exports view "$BSTAMP" --json)
-printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["compactions","transcript"]' >/dev/null \
+printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["digest","transcript"]' >/dev/null \
     && ok "exports view --json is one metadata record per product" || bad "exports view --json: $VJSON"
 printf '%s' "$VJSON" | grep -q "== Export run" && bad "exports view --json header" || ok "exports view --json has no header"
 # sessions_selected is an ARRAY: the Selection line must join it, never concat it.
@@ -268,8 +306,21 @@ jq -n '{profile:"transcript",filter:null,sessions_selected:["ses_A0001","ses_B00
     > "$OUT/$SELRUN/transcript/metadata.json"
 SELV=$(run exports view "$SELRUN")
 printf '%s' "$SELV" | grep -q "jq: error" && bad "exports view selection array: jq error" || ok "exports view renders an array sessions_selected"
-printf '%s' "$SELV" | grep -q "Selection:      sessions: ses_A0001,ses_B0001" \
+# The selection is read from `.selection` (the inverse of selection_meta), so an
+# array sessions_selected WITHOUT .selection degrades to a legacy record.
+printf '%s' "$SELV" | grep -qE "selection: +2 explicit session id\(s\) \(legacy record\)" \
     && ok "exports view joins an array sessions_selected" || bad "exports view selection array: $(printf '%s' "$SELV" | grep -i 'selection')"
+# It must NOT be printed per product: it is a run-level fact.
+[ "$(printf '%s' "$SELV" | grep -ci 'selection:')" -eq 1 ] \
+    && ok "exports view prints the selection once per run" || bad "exports view repeats the selection"
+# Keys a product does not have must not be invented: `cap`/`touched_files` are
+# memory-only, and this fixture is a transcript.
+printf '%s' "$SELV" | grep -qE "^  (Cap|Touched files):" \
+    && bad "exports view invents memory-only keys: $(printf '%s' "$SELV" | grep -E "^  (Cap|Touched)")" \
+    || ok "exports view omits keys the product does not have"
+# Field labels must align on one column.
+BADALIGN=$(printf '%s' "$SELV" | sed -n '/== Details per product ==/,$p' | grep -E '^  [A-Za-z].*[A-Za-z]+: ' | grep -vcE '^  [A-Za-z][A-Za-z ()]*: {2,}')
+[ "$BADALIGN" -eq 0 ] && ok "exports view field labels align" || bad "exports view label alignment ($BADALIGN ragged)"
 # Legacy runs wrote metadatos.json; readers must keep aggregating them.
 LEGACY="legacy-$(date -u +%s)"
 mkdir -p "$OUT/$LEGACY/transcript"
@@ -279,8 +330,10 @@ printf '%s' "$EXL" | grep -q "$LEGACY" && ok "exports list aggregates legacy met
 LEGACYV=$(run exports view "$LEGACY")
 # No sessions.total in legacy metadata: it must be derived from roots + subagents.
 printf '%s' "$LEGACYV" | grep -q "jq: error" && bad "legacy sessions total: jq error" || ok "exports view renders a legacy metadatos.json run"
-printf '%s' "$LEGACYV" | grep -q "Sessions:       1 total (1 roots · 0 subagents)" \
-    && ok "exports view derives Sessions total for legacy runs" || bad "legacy sessions total: $(printf '%s' "$LEGACYV" | grep -i 'sessions:')"
+printf '%s' "$LEGACYV" | grep -qE "^  totals: +1 roots \(0 subagent\)" \
+    && ok "exports view aggregates a legacy run" || bad "legacy totals: $(printf '%s' "$LEGACYV" | grep -i 'totals:')"
+printf '%s' "$LEGACYV" | grep -q "legacy record" \
+    && ok "exports view labels a legacy run's selection" || bad "legacy selection label"
 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null
@@ -360,7 +413,7 @@ jq -e '.sessions.total == 1 and .sessions.roots == 1 and .no_orphan_subagents ==
     && ok "a lone subagent is exported standalone (default)" || bad "lone subagent: $(jq -c .sessions "$ORPH")"
 # --no-subagents drops every real subagent from ALL products; the orphan (its
 # parent row is gone) survives because it is a root.
-for prod in transcript memory compactions; do
+for prod in transcript memory digest; do
     run export "$prod" --no-subagents >/dev/null
     M=$(last_meta "$prod")
     jq -e '.no_subagents == true and .subagents_hidden == 3 and .sessions.subagents == 0
@@ -612,6 +665,69 @@ IX=$(last_meta transcript); IX="${IX%/metadata.json}/index.md"
 grep -q "## Sessions" "$IX" && ok "index.md sessions section" || bad "index.md"
 grep -q "](" "$IX" && ok "index.md links" || bad "index.md links"
 
+echo "== metadata: compactions (markers) vs digests (summaries) =="
+# The two are different things and must never share a number: a marker is the
+# event opencode records (part.data.type='compaction'), a digest is the summary
+# text it wrote for it (message.data.mode='compaction').
+DIGOUT=$(run export digest --filter "%" --stamp "meta-digests")
+DM=$(meta_of "$DIGOUT")
+jq -e '.compactions | type == "number"' "$DM" >/dev/null \
+    && ok "metadata.compactions counts the markers" || bad "metadata.compactions"
+jq -e '.digests | type == "number" and . > 0' "$DM" >/dev/null \
+    && ok "metadata.digests counts the summaries" || bad "metadata.digests"
+# The transcript header must name both, not call the marker count a digest.
+DT=$(cat "$(last_transcript digest 'Project Alpha')")
+echo "$DT" | grep -q "Digests:" && echo "$DT" | grep -q "Compaction markers:" \
+    && ok "transcript header separates digests from markers" || bad "transcript header"
+DT2=$(cat "$(last_transcript transcript 'Project Alpha')")
+echo "$DT2" | grep -q "Compaction markers:" \
+    && ok "transcript header reports markers too" || bad "transcript markers"
+
+echo "== exports view: the selection comes from .selection, not from .filter =="
+# THE BUG THIS FIXES: reading `.filter`/`.sessions_selected` reported a
+# `--last N` / `--since DATE` run as "sessions: all", i.e. the detail screen of
+# a run lied about the rule that produced it. Both rules are CLI-only, so no
+# preset key could cover them -- only `.selection` can.
+# NOTE: each run reads its OWN stamp back (stamp_of), never "newest by mtime":
+# two exports in the same sub-second tick tie on %T@ and the sort hands back the
+# previous run, which made this block fail intermittently.
+SELOUT=$(run export transcript --last 2 --stamp "sel-last")
+LASTV=$(run exports view "$(stamp_of "$SELOUT")")
+printf '%s' "$LASTV" | grep -qE "selection: +last 2 session\(s\) by last update" \
+    && ok "exports view reports a --last run as --last" || bad "exports view --last: $(printf '%s' "$LASTV" | grep -i 'selection:')"
+printf '%s' "$LASTV" | grep -q "ALL sessions" \
+    && bad "exports view reports a --last run as ALL sessions" || ok "exports view never collapses a rule into ALL"
+SELOUT=$(run export transcript --since 2026-09-10 --stamp "sel-since")
+SINCEV=$(run exports view "$(stamp_of "$SELOUT")")
+printf '%s' "$SINCEV" | grep -qE "selection: +updated on or after 2026-09-10" \
+    && ok "exports view reports a --since run as --since" || bad "exports view --since: $(printf '%s' "$SINCEV" | grep -i 'selection:')"
+SELOUT=$(run export transcript --filter "%Alpha%" --stamp "sel-filter")
+FILV=$(run exports view "$(stamp_of "$SELOUT")")
+printf '%s' "$FILV" | grep -qE "selection: +filter %Alpha%" \
+    && ok "exports view reports a --filter run as --filter" || bad "exports view --filter: $(printf '%s' "$FILV" | grep -i 'selection:')"
+
+echo "== exports view: WHICH sessions the run contains =="
+RECOUT=$(run export transcript --filter "%" --stamp "view-recs")
+RECV=$(run exports view "$(stamp_of "$RECOUT")")
+printf '%s' "$RECV" | grep -q "== Sessions ==" && ok "exports view lists the sessions" || bad "exports view sessions block"
+printf '%s' "$RECV" | grep -q "ses_ORPHAN01.*root" \
+    && ok "an orphan session is listed as a root" || bad "exports view orphan kind"
+printf '%s' "$RECV" | grep -q "ses_A0002.*subagent" \
+    && ok "a subagent is listed as a subagent" || bad "exports view subagent kind"
+printf '%s' "$RECV" | grep -q "Project Alpha" \
+    && ok "exports view shows the session title" || bad "exports view session title"
+# The titles are the only free-text column: they must line up on one column, so
+# a `subagent` (8) kind cannot shift the date of a `root` (4) row.
+SESSROW=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep -E "^  ses_" | wc -l)
+SESSCOL=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep -E "^  ses_" | awk '{print index($0,"2026-")}' | sort -u | wc -l)
+[ "$SESSROW" -gt 0 ] && [ "$SESSCOL" -eq 1 ] \
+    && ok "exports view session rows share one column ($SESSROW rows)" || bad "exports view session alignment ($SESSCOL distinct columns)"
+# A run that dropped a subagent must NOT list it.
+NOSUBOUT=$(run export transcript --no-subagents --filter "%" --stamp "view-nosub")
+NOSUBV=$(run exports view "$(stamp_of "$NOSUBOUT")")
+printf '%s' "$NOSUBV" | grep -q "ses_A0002" \
+    && bad "exports view lists a subagent that was not exported" || ok "exports view session list matches the run"
+
 echo "== metadata.session_records (WHICH sessions the run actually contains) =="
 # NOTE: the UNFILTERED run is the meaningful one. A title filter like
 # "%Project Alpha%" matches NO subagent (their titles differ), so a filtered run
@@ -782,7 +898,7 @@ cat > "$TMP/presets-bundle.json" <<'EOF'
   "everything": {"products": {"transcript": {"json": true, "tool_output": "full"},
                               "memory": {"files": true}}},
   "debugmsg":   {"products": {"transcript": {"json": true}, "memory": {"files": true},
-                              "compactions": {"json": true}}},
+                              "digest": {"json": true}}},
   "badmix":     {"product": "transcript", "products": {"memory": {}}},
   "badprod":    {"products": {"scribble": {}}}
 }}
@@ -790,8 +906,8 @@ EOF
 export OCED_PRESETS="$TMP/presets-bundle.json"
 run export everything >/dev/null
 BT="$(last_meta transcript)"; BT="${BT%/metadata.json}"; BSTAMP="${BT%/*}"
-[ -d "$BSTAMP/transcript" ] && [ -d "$BSTAMP/memory" ] && [ ! -d "$BSTAMP/compactions" ] \
-    && ok "bundle 'everything' = one stamp with transcript+memory (no compactions)" \
+[ -d "$BSTAMP/transcript" ] && [ -d "$BSTAMP/memory" ] && [ ! -d "$BSTAMP/digest" ] \
+    && ok "bundle 'everything' = one stamp with transcript+memory (no digest)" \
     || bad "bundle dirs: $BSTAMP"
 jq -e '.preset == "everything" and .profile == "transcript" and .json == true and .tool_output == "full"' "$BSTAMP/transcript/metadata.json" >/dev/null \
     && ok "bundle transcript runs with its preset flags + provenance" || bad "bundle transcript meta"
@@ -811,18 +927,18 @@ jq -e '.tool_output == "omit"' "$BSTAMP2/transcript/metadata.json" >/dev/null \
     && ok "bundle CLI flag overrides the per-product preset config" || bad "bundle override flag: $(jq -r .tool_output "$BSTAMP2/transcript/metadata.json")"
 jq -e '.cap == 100' "$BSTAMP2/memory/metadata.json" >/dev/null \
     && ok "bundle CLI --cap reaches memory too" || bad "bundle cap: $(jq -r .cap "$BSTAMP2/memory/metadata.json")"
-# A bundle may include the standalone compactions product.
+# A bundle may include the standalone digest product.
 run export debugmsg >/dev/null
 BT3="$(last_meta transcript)"; BT3="${BT3%/metadata.json}"; BSTAMP3="${BT3%/*}"
-[ -d "$BSTAMP3/compactions" ] && ok "bundle with compactions product writes its folder" || bad "bundle compactions dir"
-jq -e '.profile == "compactions" and .preset == "debugmsg"' "$BSTAMP3/compactions/metadata.json" >/dev/null \
-    && ok "compactions product metadatos records bundle provenance" || bad "compactions meta"
+[ -d "$BSTAMP3/digest" ] && ok "bundle with digest product writes its folder" || bad "bundle digest dir"
+jq -e '.profile == "digest" and .preset == "debugmsg"' "$BSTAMP3/digest/metadata.json" >/dev/null \
+    && ok "digest product metadata records bundle provenance" || bad "digest meta"
 # Error cases, each with a helpful message.
 BAD1=$(run export badmix); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$BAD1" | grep -q "use either 'product' or 'products'" \
     && ok "bundle rejects product+products mix" || bad "badmix: $(printf '%s' "$BAD1" | tail -1)"
 BAD2=$(run export badprod); rc=$?
-[ "$rc" -ne 0 ] && printf '%s' "$BAD2" | grep -q "must be transcript, memory or compactions (got 'scribble')" \
+[ "$rc" -ne 0 ] && printf '%s' "$BAD2" | grep -q "must be transcript, memory or digest (got 'scribble')" \
     && ok "bundle rejects an invalid product" || bad "badprod: $(printf '%s' "$BAD2" | tail -1)"
 export OCED_PRESETS="$PRESETS"
 
@@ -856,14 +972,14 @@ echo "== shipped presets.json.example end-to-end (archive/quick/share) =="
 export OCED_PRESETS="$EXAMPLE"
 run export archive >/dev/null
 EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
-[ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ ! -d "$EJSTAMP/compactions" ] \
+[ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ ! -d "$EJSTAMP/digest" ] \
     && ok "example 'archive' runs transcript+memory under one stamp" || bad "example archive dirs"
 jq -e '.preset == "archive" and .tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
     && ok "example archive transcript flags applied" || bad "example archive meta"
 run export quick >/dev/null
 DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}"
-[ -d "$DBUGSTAMP/transcript" ] && [ -d "$DBUGSTAMP/memory" ] && [ ! -d "$DBUGSTAMP/compactions" ] \
-    && ok "example 'quick' is a light transcript+memory bundle (no redundant compactions)" || bad "example quick dirs"
+[ -d "$DBUGSTAMP/transcript" ] && [ -d "$DBUGSTAMP/memory" ] && [ ! -d "$DBUGSTAMP/digest" ] \
+    && ok "example 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "example quick dirs"
 jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcript/metadata.json" >/dev/null \
     && ok "example quick uses truncated tool output (light variant)" || bad "example quick meta"
 run export share >/dev/null

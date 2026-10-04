@@ -3,12 +3,15 @@
 #-----------------------------------------------------------------------
 oc_exports_rows() {
     local mode="$1"
+    # [>] = opens a FLOW, and creating a run IS one (sessions -> preset). It is
+    # the first row so "make an export" is the primary action of the screen.
+    printf '__CREATE__\t[>] create export\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$mode" = "remove" ]; then
         printf '__DELETE_ALL__\t[delete all]\n'
         printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
-    [ -d "$OCED_OUT" ] || { printf '__NONE__\t(no export runs yet)\n'; return 0; }
+    [ -d "$OCED_OUT" ] || return 0
     local run
     exports_runs_find | while IFS= read -r run; do
         [ -d "$run" ] || continue
@@ -83,10 +86,21 @@ oc_exports_picker() {
     local mode="view" sel key
     while true; do
         local header
-        header="Export runs — mode: $mode"
+        header="Export runs — [>] create export, or inspect a run · mode: $mode"
         sel=$(oc_exports_rows "$mode" | oc_fzf_sel "exports ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
+            __CREATE__)
+                # The create flow owns the screen until it finishes. rc 0 = it
+                # ran (pause here, then back to this list); rc 130 = the user
+                # ESC'd out of the wizard (no pause: they asked to move on).
+                # A pause ESC (rc 2) is swallowed by `menu_pause || return 0`
+                # and leaves the submenu, like every other report.
+                oc_export_picker
+                [ $? -eq 0 ] || continue
+                menu_pause "Export" || return 0
+                continue
+                ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_exports_bulk all; continue ;;
             __KEEP_NEWEST__) oc_exports_bulk newest; continue ;;
@@ -95,7 +109,7 @@ oc_exports_picker() {
                 if [ "$mode" = view ]; then
                     run_oced_tool exports view "$key"
                     menu_pause "Manage exports" || return 0
-                    return 0
+                    continue
                 fi
                 confirm_action "Remove export run $key? It deletes the generated files." || continue
                 run_oced_tool exports remove "$key" --yes

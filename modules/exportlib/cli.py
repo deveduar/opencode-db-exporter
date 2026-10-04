@@ -1,8 +1,8 @@
 # CLI entry: argument parsing, read-only DB access and run orchestration.
-# Products (transcript | memory | compactions):
+# Products (transcript | memory | digest):
 # transcript  markdown transcript with verbosity toggles (+ optional faithful JSON)
 #   memory      RAG corpus (corpus.jsonl, one entry per root session)
-#   compactions the compacted-context digests (markdown)
+#   digest      the compacted-context digests (markdown)
 # Global flags: --filter, --json (faithful archive alongside), --sanitize (redact
 # secrets), --stamp. Transcript toggles: --sub, --tool-output, --patch,
 # --no-reasoning, --mark-compactions, --summary-diffs, --role.
@@ -30,7 +30,15 @@ from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile
 from exportlib.render import Renderer
 from exportlib.transcript import append_transcript_inline, write_transcript
-from exportlib.util import die, safe_filename, selection_label, selection_meta, sha256_file, ts_iso
+from exportlib.util import (
+    die,
+    safe_filename,
+    selection_label,
+    selection_meta,
+    session_record,
+    sha256_file,
+    ts_iso,
+)
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
 from exportlib.flags import FLAGS
 
@@ -138,7 +146,7 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("profile", nargs="?", default="transcript",
-                    help="product or named preset: transcript | memory | compactions | full | <preset from the presets file>")
+                    help="product or named preset: transcript | memory | digest | full | <preset from the presets file>")
 
     # Selection + output root come from FLAGS (single source of truth): exactly
     # ONE selection rule per run (--filter | --sessions | --last | --since, all in
@@ -168,25 +176,6 @@ def build_argparser() -> argparse.ArgumentParser:
     return ap
 
 
-def _session_record(sess: dict, kind: str) -> dict:
-    """One session identity for `metadata.json.session_records`.
-
-    IDENTITY ONLY, deliberately. `messages`/`compactions` are already totals at
-    the top level of the same file, so repeating them per session would create a
-    second set of numbers to keep in sync for no gain; what metadata did NOT have
-    anywhere was WHICH sessions the run actually contains.
-    """
-    return {
-        "id": sess["id"],
-        "title": sess["title"] or sess["slug"],
-        "kind": kind,
-        # absent parent -> null, not "" (the machine-artifact rule)
-        "parent_id": sess["parent_id"] or None,
-        "created": ts_iso(sess["time_created"]),
-        "updated": ts_iso(sess["time_updated"]),
-    }
-
-
 def _session_records(written: list, sessions: dict) -> list[dict]:
     """One record per session actually WRITTEN, in export order.
 
@@ -198,9 +187,9 @@ def _session_records(written: list, sessions: dict) -> list[dict]:
     """
     out: list[dict] = []
     for root, subs, _folder in written:
-        out.append(_session_record(root, "root"))
+        out.append(session_record(root, "root"))
         for sid in subs:
-            out.append(_session_record(sessions[sid], "subagent"))
+            out.append(session_record(sessions[sid], "subagent"))
     return out
 
 
@@ -357,6 +346,7 @@ def main() -> None:
     # ------- write sessions -------
     written = []
     total_comp = 0
+    total_digest = 0
     total_msgs = 0
     for root_id in roots:
         root = sessions[root_id]
@@ -371,6 +361,7 @@ def main() -> None:
             write_session_json(con, root, rfolder / f"{stem}.json", renderer.sanitize)
         total_msgs += n_msgs
         total_comp += n_comp
+        total_digest += root.get("digests") or 0
 
         if args.sub == "separate":
             for sid_ in subs:
@@ -383,6 +374,7 @@ def main() -> None:
                     write_session_json(con, sub, sfile.with_suffix(".json"), renderer.sanitize)
                 total_msgs += sn
                 total_comp += sc
+                total_digest += sub.get("digests") or 0
         elif args.sub == "inline":
             for sid_ in subs:
                 sub = sessions[sid_]
@@ -392,6 +384,7 @@ def main() -> None:
                     write_session_json(con, sub, rfolder / f"{stem}.sub-{sid_[:8]}.json", renderer.sanitize)
                 total_msgs += m
                 total_comp += c
+                total_digest += sub.get("digests") or 0
 
         written.append((root, subs, rfolder))
 
@@ -430,7 +423,11 @@ def main() -> None:
             "roots": len(written),
             "subagents": sum(len(s[1]) for s in written),
         },
+        # Two different things, never interchangeable: `compactions` counts the
+        # markers opencode wrote (part.data.type='compaction'), `digests` the
+        # summary texts it produced for them (message.data.mode='compaction').
         "compactions": total_comp,
+        "digests": total_digest,
         "messages": total_msgs,
         "last_backup": last_bkp,
         "files": [str(p.relative_to(out_dir)) for p in sorted(out_dir.rglob("*")) if p.is_file()],
@@ -445,7 +442,7 @@ def main() -> None:
     if n_hidden:
         flag = "--no-subagents" if args.no_subagents else "--no-orphan-subagents"
         print(f"   Excluded      : {n_hidden} subagent(s) ({flag})")
-    print(f"   Compactions   : {total_comp}")
+    print(f"   Compaction markers: {total_comp} · digests: {total_digest}")
     if n_backfilled:
         print(f"   Tokens        : {n_backfilled} session(s) backfilled from step-finish")
     print(f"   Last backup   : {last_bkp['file'] if last_bkp else 'none'}")
