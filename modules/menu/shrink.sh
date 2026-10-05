@@ -261,6 +261,12 @@ oc_shrinks_rows() {
     local -a runs=()
     mapfile -t runs < <(shrinks_runs_find)
     [ "${#runs[@]}" -gt 0 ] || { printf '__NONE__\t(no shrink copies yet)\n'; return 0; }
+    # [>] = the all-details report: every copy's shrink.json in one go, the same
+    # `shrinks view` a row runs, so nothing can drift between the two. VIEW ONLY
+    # (never next to [delete all]) and only when there is a copy to show.
+    if [ "$mode" = "view" ]; then
+        printf '__REPORT_ALL__\t[>] details of all copies\n'
+    fi
     for run in "${runs[@]}"; do
         shrinks_run_row "$run"
     done
@@ -353,6 +359,21 @@ oc_shrinks_picker() {
                     ;;
             __SWAP__)       oc_shrinks_swap_pick; [ $? -eq 2 ] && return 0; continue ;;
             __VERIFY__)     run_oced_tool shrinks verify; menu_pause "Shrinks Verify" || return 0; continue ;;
+            __REPORT_ALL__)
+                # One header, then one `shrinks view` per copy and a SINGLE pause:
+                # a report, not a row that opens a flow.
+                local -a stamps=() rdirs=()
+                mapfile -t rdirs < <(shrinks_runs_find)
+                local rd
+                for rd in "${rdirs[@]}"; do
+                    [ -n "$rd" ] && stamps+=( "${rd##*/}" )
+                done
+                oc_shrinks_view_all "${stamps[@]}"
+                # rc 2 = ESC at the report pause -> close the submenu (see the
+                # exports picker: a report ESC never redraws the list).
+                [ $? -eq 2 ] && return 0
+                continue
+                ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_shrinks_bulk all; continue ;;
             __KEEP_NEWEST__) oc_shrinks_bulk newest; continue ;;

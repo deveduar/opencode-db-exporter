@@ -53,7 +53,8 @@ opencode-db digest <session_id> [show [last|N|all]]
                                       # compaction MARKERS (points); 'show' prints
                                       # the DIGEST written for each one
                                       # ('compactions' is the deprecated alias)
-opencode-db backup [--no-compress]    # consistent snapshot (.backup), gzip + sha256 + manifest
+opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (.backup), gzip + sha256 + manifest
+                                       # --dry-run prints the plan (source/target/est. size) and writes nothing
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | digest
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
@@ -92,6 +93,9 @@ Every row carries one marker that says what it does:
 - **backups** picker (create + manage) — rows: `[>] create backup`, then the
   `[*] view  →  remove` toggle, then in remove mode `[delete all]` / `[delete olds]`, then one
   row per backup (date/size/sessions/msgs/sha).
+  `[>] create backup` prints the **plan first** (`opencode-db backup --dry-run`: source, target,
+  estimated size), asks its own `y/N`, and only then runs the backup non-interactively — the
+  menu never asks you something you cannot see, and a declined gate creates nothing.
   In **view** mode a row shows that backup's details — `backups view <file>` prints the
   manifest record, **runs the sha256 check** (`[OK]` / `[FAIL]` with both hashes /
   `[MISSING]`), how it compares to the live DB and how to use it with `--from-backup`; in
@@ -371,7 +375,7 @@ Produced copies accumulate under `backups/shrink/`; manage them like export runs
 opencode-db shrinks list              # date / criteria / kept-deleted / sizes per copy
 opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
 opencode-db shrinks view <stamp> [--json]  # show a copy's shrink.json (--json = raw)
-opencode-db shrinks verify [--yes]    # audit: orphan dirs, old pre-shrinks, stale copy vs live DB
+opencode-db shrinks verify [--yes]    # audit: orphan dirs, old pre-shrinks, and the freshness of EVERY copy vs the live DB
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
 ```
@@ -451,8 +455,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 307 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 280 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 322 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 296 OK / 0 FAIL
 ```
 
 ## Layout

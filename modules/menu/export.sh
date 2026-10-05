@@ -76,7 +76,8 @@ oc_preset_run() {
             echo "   Preset '$name' pins 'snapshot: fresh' — the export doubles as a reference"
             echo "   archive, so the last backup should match the live DB (currently: $align)."
             if confirm_action "Create a fresh backup first? (recommended)"; then
-                run_oced_tool backup
+                run_oced_tool backup --dry-run
+                run_oced_tool backup --yes
             fi
         fi
     fi

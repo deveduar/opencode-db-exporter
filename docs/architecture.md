@@ -249,6 +249,23 @@ pauses after the action (`Export`/`New backup`/`Shrink copy`), so they can never
 confused. `oc_shrinks_swap_pick` is the one exception that already owned its pause: it
 returns the pause rc so `__SWAP__` can propagate an ESC.
 
+**A menu action is not done when the command returns.** `run_oced_tool` pipes the
+dispatcher through `tee` instead of capturing it, because a captured command talks to a
+pipe: anything it asks on stdin (its plan, its `[y/N]`) stays invisible while it blocks on
+`read`, so `create backup` looked frozen and the blind keypress that ended the freeze was
+an empty line — i.e. a cancelled backup. The general rule follows: **the frame that owns
+the list owns the gate**. `__CREATE__` in the backups picker is plan → our `confirm_action`
+→ non-interactive run, the shrink wizard's shape, which is why `backup --dry-run` (the
+mirror of `shrink --dry-run`) had to exist: it prints the plan and returns, and the menu
+then passes `--yes` so no command ever asks anything from inside a menu call. The
+`snapshot: fresh` offer follows the same rule — it already had a `confirm_action`, and the
+backup it launched used to ask a second, invisible one. This is untestable by stubs and by
+non-TTY runs (`run_oced_tool` is stubbed in `menu_flow.sh`, and every real prompt sits
+behind `[ -t 0 ]`), so it is guarded structurally — no `out=$(bash "$OC_DISPATCHER"`, no
+bare `run_oced_tool backup` in `modules/menu/` — plus by a `script -t` pty test that
+measures *when* the first output chunk reaches the screen (~0.01 s streaming vs ~2 s
+captured).
+
 **The label is a short id; the key is the full id.** `oc_short_id` renders
 `ses_f72115a…` as `f72115a_` in a fixed `ID_LABEL_W`=8 column (`ses_` dropped, cut with
 a `_` truncation marker), and every session row does it the same way across the three
@@ -330,14 +347,19 @@ schema probe fails, so it is scriptable as a health check. A second `check` row 
 reprint it. What `status` genuinely does *not* cover is verifying stored **artifacts**
 (`backups verify`'s sha256 vs the manifest, `shrinks verify`'s staleness): the first is
 deliberately folded into `backups view` (§4) because a details screen must not show an
-unvalidated backup, and the second is exposed as the shrinks picker's `[?] verify` row.
+unvalidated backup, and the second is exposed as the shrinks picker's `[?] verify` row,
+which audits **every** copy (§6). The `backups` picker has no `verify all` row on
+purpose: hashing a backup costs ~0.5 s per 163 MB `.gz` (~3 s for a full 1.1 GiB copy),
+so validating the whole shelf belongs to `backups verify <file>` / a script, not to a
+menu row that would look like a hang.
 
 **Create + manage in one picker.** Shrink lives in its own root entry: `oc_shrinks_picker`
 offers `[>] create shrink copy` (a **3-step wizard**: sessions → recipe → read-only
 plan, see §5; LIVE DB, own snapshot), a `[>] swap a copy into the LIVE DB` row
 (`__SWAP__`) that swaps the picked copy into the LIVE DB behind
 `oc_confirm_typed "confirm"` (staleness checked via `o_shrink_stale` first), a
-`[?] verify` row, plus a `[*] view  →  remove` toggle with per-run rows and the
+`[?] verify` row, a `[>] details of all copies` row (view mode only), plus a
+`[*] view  →  remove` toggle with per-run rows and the
 `[delete all]` / `[delete olds]` bulk rows. Rows come from the shrink.sh helpers
 (`shrinks_runs_find`/`shrinks_run_row`) — the same source as `shrinks list --tsv`,
 so the menu never re-aggregates jq. This removed the old `__SHRINK__` row from the backups
@@ -355,6 +377,26 @@ optional file for that: no argument keeps the "last backup" default every other 
 wants, a file makes the view of a *non-newest* copy correct. The check is not a separate
 `[?] verify` row in the backups picker because it is not optional information; `verify`
 stays available in the CLI for scripted use.
+
+**One screen, every entry: `[>] details of all …`.** The sessions browse got
+`[>] details of all sessions`; the exports and shrinks pickers have the same row
+(`[>] details of all runs` / `[>] details of all copies`), because "what exactly do I
+have stored?" is the question a list cannot answer and N round-trips through a nested
+screen answer worse. It is **view mode only** (never rendered next to `[delete all]`)
+and it exists only when the list has at least one entry. `oc_view_all <header>
+<pause-label> <manager> <stamp>…` in `menu/core.sh` is the one implementation: ONE global
+header, then the *same* `exports view`/`shrinks view` a row runs, once per stamp, and a
+single pause labelled after the list — so the all-report and the per-row report cannot
+drift, and a report pause can never be mistaken for a create pause. That pause **returns
+its rc**: ESC (2) travels to the caller's `__REPORT_ALL__` branch and closes the submenu
+like every other report, instead of silently redrawing the list. The two wrappers
+(`oc_exports_view_all`, `oc_shrinks_view_all`) exist only to name the header and the
+label. The key is `__REPORT_ALL__`, the same key the sessions screen uses, and the token
+is `[>]` even though no flow opens: it prints the screens a row prints, all of them at
+once, and inventing a fourth token for it would be worse than the small stretch of the
+`[>]` contract (the symbol guard's allow-list admits `__REPORT_ALL__` explicitly).
+Backups deliberately has **no** such row: its per-row view already hashes the file, and
+hashing the whole shelf would take seconds per gigabyte.
 
 The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|digest`). Usage and the decision matrix:
@@ -462,10 +504,18 @@ while opencode is running can lose the WAL tail. `opencode-db shrink
 can be skipped with `--yes`.
 
 `shrinks verify [--tsv] [--yes]` audits the produced copies: orphan run dirs (no
-valid `shrink.json`), old `pre-shrink/*` copies, and a last shrink stale vs the live
-DB. `shrink.json` records `sessions.max_updated` (newest kept session `time_updated`)
+valid `shrink.json`), old `pre-shrink/*` copies, and **every copy's** freshness vs
+the live DB. Freshness is asked once per run, not once for the newest: a stale
+answer for `runs[0]` was a half-verification — a 3-copy shelf reported the orphan in
+the third directory but never that copies 1 and 2 were stale, which is the one thing
+you want to know before choosing one to swap. `shrink.json` records
+`sessions.max_updated` (newest kept session `time_updated`)
 so the freshness check runs in-database; a legacy shrink.json without that field is
-flagged as unverifiable rather than silently "up to date".
+flagged as unverifiable rather than silently "up to date". An orphan dir is reported
+once, as an orphan, never also as a stale copy. The clean verdict names how many copies
+were asked (`all 7 shrink copies are up to date`): the count is the only visible proof
+that the loop ran, and a fresh-looking verdict over three unchecked copies is exactly
+the answer that hid the other two.
 
 ## 7. Links
 

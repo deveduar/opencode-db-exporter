@@ -32,10 +32,12 @@ Usage: opencode-db.sh [command]
                        new queue); a DIGEST is the summary it wrote for it, in the
                        following "mode=compaction" message (last / N / all).
                        'compactions' still works: deprecated alias of 'digest'
-  backup [--no-compress] [--yes]   consistent snapshot (sqlite .backup) with timestamp
+  backup [--no-compress] [--dry-run] [--yes]
+                       consistent snapshot (sqlite .backup) with timestamp
                        + sha256 + stats in backups/manifest.json (gzip by default);
                        shows the plan (source/target/estimated size) and asks to
-                       confirm before starting (--yes skips the confirmation)
+                       confirm before starting (--yes skips the confirmation,
+                       --dry-run prints the plan and writes nothing)
   backups list         list stored backups
   backups view <file>  a backup's details + its sha256 check vs the live DB
   backups verify <file>   check sha256 of a backup against the manifest
@@ -65,8 +67,8 @@ exports list         list past export runs (date/profile/counts/size);
   shrinks list [--tsv]   list the produced shrink copies (criteria/counts/size)
   shrinks view <stamp> [--json]   show the shrink.json of a run (--json = raw)
   shrinks verify [--yes] [--tsv]   check for orphan run dirs, old pre-shrink
-                       copies and a shrink that is stale vs the live DB; --yes
-                       auto-removes orphan dirs + old pre-shrinks
+                       copies and every shrink copy that is stale vs the live
+                       DB; --yes auto-removes orphan dirs + old pre-shrinks
   shrinks remove <stamp> [--yes]   delete a shrink run (the pruned + VACUUMed copy)
   shrinks prune <N> [--yes]   keep only the N most recent shrink runs
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)

@@ -51,7 +51,18 @@ oc_backups_picker() {
         sel=$(oc_backups_rows "$mode" | oc_fzf_sel "backups ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
-            __CREATE__)     run_oced_tool backup; menu_pause "New backup" || return 0; continue ;;
+            # Plan first, then OUR gate, then run non-interactively — the same
+            # shape as the shrink wizard (read-only plan -> y/N -> run). The command
+            # used to ask its own [y/N] on stdin from inside a captured call: the
+            # prompt never reached the screen and the menu looked frozen until a
+            # keypress arrived, which (being an empty line) cancelled the backup.
+            __CREATE__)
+                run_oced_tool backup --dry-run
+                confirm_action "Create this backup now?" || { echo "   cancelled."; continue; }
+                run_oced_tool backup --yes
+                menu_pause "New backup" || return 0
+                continue
+                ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
             __DELETE_ALL__) oc_backups_bulk all; continue ;;
             __KEEP_NEWEST__) oc_backups_bulk newest; continue ;;

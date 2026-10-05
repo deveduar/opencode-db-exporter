@@ -6,7 +6,11 @@ set -uo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOD="$TESTS_DIR/../modules"
 TMP="$(mktemp -d /tmp/opencode-db-smoke-XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# Only the TOP-LEVEL shell may delete $TMP: bash runs an inherited EXIT trap in
+# EVERY subshell, so one dying subshell would otherwise `rm -rf` the fixture
+# mid-run and the suite would keep asserting against a deleted TMP.
+smoke_cleanup() { [ "${BASH_SUBSHELL:-0}" -eq 0 ] && rm -rf -- "$TMP"; return 0; }
+trap smoke_cleanup EXIT
 
 FAKE="$TMP/fake.db"
 OUT="$TMP/out"
@@ -131,6 +135,30 @@ printf "%s" "$CB" | grep -q "Digests:" && ok "digest detected" || bad "digest"
 
 echo "== backup =="
 grep_run "No backups recorded yet." backups list && ok "backups list w/o manifest" || bad "backups list w/o manifest"
+
+# --dry-run: the plan and NOTHING else. The menu prints it BEFORE its own y/N and
+# then runs `backup --yes`, so a dry-run that wrote a file (or asked something) would
+# create a backup the user never confirmed.
+NFILES_BEFORE=$(find "$BK" -maxdepth 1 -name 'opencode-*' 2>/dev/null | wc -l)
+NMANIFEST_BEFORE=$(jq -r '.backups | length' "$BK/manifest.json" 2>/dev/null || echo 0)
+DRY=$(run backup --dry-run)
+printf '%s' "$DRY" | grep -q "Backup plan" && printf '%s' "$DRY" | grep -q "Est\. size:" \
+    && ok "backup --dry-run prints the plan (source/target/est. size)" || bad "backup dry-run plan: [$(printf '%s' "$DRY" | tail -3)]"
+printf '%s' "$DRY" | grep -q "nothing written" && ok "backup --dry-run says it wrote nothing" \
+    || bad "backup dry-run note: [$(printf '%s' "$DRY" | tail -2)]"
+printf '%s' "$DRY" | grep -q 'Create this backup?' && bad "backup --dry-run still asks to confirm" \
+    || ok "backup --dry-run asks nothing (the menu owns the gate)"
+[ "$(find "$BK" -maxdepth 1 -name 'opencode-*' 2>/dev/null | wc -l)" -eq "$NFILES_BEFORE" ] \
+    && ok "backup --dry-run wrote no backup file" || bad "backup dry-run wrote a file"
+[ "$(jq -r '.backups | length' "$BK/manifest.json" 2>/dev/null || echo 0)" -eq "$NMANIFEST_BEFORE" ] \
+    && ok "backup --dry-run added no manifest entry" || bad "backup dry-run touched the manifest"
+# --dry-run wins over --yes (it is the stronger "write nothing" promise), and the
+# prompt is skipped either way: an unknown flag must still be refused.
+DRY2=$(run backup --dry-run --yes)
+[ "$(find "$BK" -maxdepth 1 -name 'opencode-*' 2>/dev/null | wc -l)" -eq "$NFILES_BEFORE" ] \
+    && ok "backup --dry-run --yes still writes nothing" || bad "backup dry-run --yes wrote a file"
+grep_run "Unknown argument: --nope" backup --nope && ok "backup refuses an unknown flag" || bad "backup unknown flag"
+
 B=$(run backup --yes)
 printf "%s" "$B" | grep -qE "opencode-[0-9-]+\.db\.gz" && ok "compressed backup" || bad "backup"
 printf "%s" "$B" | grep -q "Backup plan" && ok "backup shows the plan" || bad "backup plan"
@@ -1014,21 +1042,74 @@ LIVE_MU=$(sqlite3 "file:$FAKE?mode=ro" "SELECT coalesce(max(time_updated),0) FRO
 [ -n "$MU" ] && [ "$MU" != "0" ] && ok "shrink.json records sessions.max_updated ($MU)" || bad "shrink.json max_updated missing: [$MU]"
 [ "$MU" = "$LIVE_MU" ] && ok "shrink max_updated == live DB max_updated" || bad "shrink max_updated ($MU) vs live ($LIVE_MU)"
 
-# shrinks verify — clean when the copy is newer than the (swapped) live DB.
-VCLEAN=$(run shrinks verify)
-printf '%s' "$VCLEAN" | grep -q "All clean" && ok "shrinks verify: up-to-date copy is clean" || bad "shrinks verify clean: [$(printf '%s' "$VCLEAN" | tail -2)]"
+# shrinks verify — EVERY copy is asked, not just the newest.
+# This check gets its OWN backup dir on purpose. The shelf the selection tests
+# above built cannot answer it: those copies are genuinely OLDER than the DB the
+# --swap test just installed (keeping 1 root makes the live DB newer than every
+# copy that kept more), so "no copy is stale" is not a property that shelf has.
+# Two aligned copies make every count below deterministic, and the stamps are
+# forced 1s apart because the stamp is second-resolution: two shrinks inside the
+# same second would SHARE one dir and halve the copy count.
+CBK="$TMP/verify-bk"; rm -rf "$CBK"; mkdir -p "$CBK"
+OCED_BACKUP_DIR="$CBK" run shrink --keep-all >/dev/null
+sleep 1
+OCED_BACKUP_DIR="$CBK" run shrink --keep-all >/dev/null
+NCOPIES=$(find "$CBK/shrink" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+[ "$NCOPIES" -eq 2 ] && ok "verify fixture: 2 shrink copies, 1s apart" || bad "verify fixture: $NCOPIES copies (stamp collision?)"
 
-# Make the live DB newer than the copy -> verify must flag the stale shrink.
+VCLEAN=$(OCED_BACKUP_DIR="$CBK" run shrinks verify)
+printf '%s' "$VCLEAN" | grep -q "All clean" && ok "shrinks verify: up-to-date copies are clean" || bad "shrinks verify clean: [$(printf '%s' "$VCLEAN" | tail -2)]"
+printf '%s' "$VCLEAN" | grep -q "all $NCOPIES shrink copies are up to date" \
+    && ok "shrinks verify: 'All clean' names every copy ($NCOPIES), not just the last" \
+    || bad "shrinks verify clean wording: [$(printf '%s' "$VCLEAN" | tail -2)]"
+
+# Make the live DB newer than the copies -> verify must flag BOTH, one row each,
+# keyed by that copy's own stamp (the row used to be the literal live_vs_shrink).
 sqlite3 "$FAKE" "UPDATE session SET time_updated=time_updated+1000000;" >/dev/null 2>&1
-VSTALE=$(run shrinks verify)
+VSTALE=$(OCED_BACKUP_DIR="$CBK" run shrinks verify)
 printf '%s' "$VSTALE" | grep -q "has newer sessions" && ok "shrinks verify flags a stale shrink vs live" || bad "shrinks verify stale: [$(printf '%s' "$VSTALE" | tail -2)]"
-VT=$(run shrinks verify --tsv)
+printf '%s' "$VSTALE" | grep -q "2 of 2 vs the live DB" \
+    && ok "shrinks verify counts BOTH copies as stale (2 of 2), not just the newest" \
+    || bad "shrinks verify stale count: [$(printf '%s' "$VSTALE" | tail -3)]"
+VT=$(OCED_BACKUP_DIR="$CBK" run shrinks verify --tsv)
 printf '%s' "$VT" | grep -q '^stale' && ok "shrinks verify --tsv emits a stale row" || bad "shrinks verify tsv stale: [$(printf '%s' "$VT" | tail -2)]"
 
+NSTALE=$(printf '%s' "$VT" | grep -c '^stale')
+[ "$NSTALE" -eq "$NCOPIES" ] \
+    && ok "shrinks verify flags ALL $NCOPIES copies as stale, not just the newest" \
+    || bad "shrinks verify stale rows: $NSTALE of $NCOPIES copies"
+BADKEY=0
+while IFS=$'\t' read -r k st _; do
+    [ "$k" = stale ] || continue
+    [ -d "$CBK/shrink/$st" ] || BADKEY=1
+done <<< "$VT"
+[ "$BADKEY" -eq 0 ] \
+    && ok "every stale row is keyed by its OWN copy's stamp" \
+    || bad "a stale row is not keyed by a real stamp: [$(printf '%s' "$VT" | grep '^stale')]"
+
+# An orphan dir (no valid shrink.json) is reported ONCE, as an orphan: never
+# re-listed as a stale copy, which is what o_shrink_stale would answer for a
+# missing file (and that duplication is exactly why the loop skips orphans).
+ORPH="$CBK/shrink/20990101-000000"
+mkdir -p "$ORPH"
+printf 'junk\n' > "$ORPH/shrink.json"
+VORPH=$(OCED_BACKUP_DIR="$CBK" run shrinks verify --tsv)
+printf '%s' "$VORPH" | grep -q "^orphan	20990101-000000	" \
+    && ok "shrinks verify: an invalid shrink.json is an orphan row" \
+    || bad "shrinks verify orphan row: [$(printf '%s' "$VORPH" | tail -3)]"
+[ "$(printf '%s' "$VORPH" | grep -c '^stale	20990101-000000	')" -eq 0 ] \
+    && ok "shrinks verify: an orphan dir is never also a stale copy" \
+    || bad "shrinks verify reported the orphan dir twice"
+rm -rf "$ORPH"
+
 # A legacy shrink.json without sessions.max_updated is flagged (unverifiable), not silently clean.
+LASTSTAMP=$(basename "$(dirname "$LASTSJ")")
 jq 'del(.sessions.max_updated)' "$LASTSJ" > "$LASTSJ.bak" && mv "$LASTSJ.bak" "$LASTSJ"
 VLEGACY=$(run shrinks verify)
 printf '%s' "$VLEGACY" | grep -q "cannot verify freshness" && ok "shrinks verify flags a legacy shrink.json (no max_updated)" || bad "shrinks verify legacy: [$(printf '%s' "$VLEGACY" | tail -2)]"
+printf '%s' "$VLEGACY" | grep -q "  $LASTSTAMP  —  cannot verify freshness" \
+    && ok "a per-copy warning carries the stamp it belongs to ($LASTSTAMP)" \
+    || bad "per-copy stale line has no stamp: [$(printf '%s' "$VLEGACY" | grep -A3 'Stale shrink' | head -4)]"
 
 echo "== shrinks (manager of the produced shrink copies) =="
 SL=$(run shrinks list)

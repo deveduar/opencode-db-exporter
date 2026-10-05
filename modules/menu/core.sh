@@ -41,6 +41,16 @@ oced_out() {
 }
 
 # run_oced_tool <command...> -> runs the dispatcher without breaking the menu.
+#
+# IT STREAMS, IT NEVER CAPTURES. Capturing the output (`out=$(… 2>&1)`) makes the
+# dispatcher talk to a PIPE, so anything it writes — including a question it
+# asks on stdin — stays invisible until the process exits: `backup` printed its
+# plan and then "Create this backup? [y/N]", blocked on `read`, and the menu
+# looked FROZEN; the keypress that eventually arrived was an empty line, so the
+# plan appeared and the backup was cancelled. Same failure class as the removed
+# guide wizard (a stdin prompt inside the menu). `tee` keeps the output on the
+# terminal AND in a log, which is all the stamp extraction below needs.
+#
 # A successful `export` / `shrink` publishes its run stamp in
 # OCED_LAST_EXPORT_STAMP / OCED_LAST_SHRINK_STAMP: the dispatcher already prints
 # the folder it wrote ("[OK] Exported … to: <dir>", "Copy ready: <dir>/<stamp>
@@ -48,10 +58,17 @@ oced_out() {
 # "the newest folder by mtime" afterwards — a second run, a concurrent run or a
 # pre-existing newer run would all make the guess name the wrong one.
 run_oced_tool() {
-    local out
-    out=$(bash "$OC_DISPATCHER" "$@" 2>&1) || true
-    printf '%s\n' "$out"
-    local d
+    local log d out
+    log=$(mktemp "${TMPDIR:-/tmp}/oced-tool.XXXXXX" 2>/dev/null) || log=""
+    if [ -z "$log" ]; then
+        # No log available: run it plainly rather than hide the output. The stamp
+        # helpers are best-effort (a missing OCED_LAST_* only costs a hint).
+        bash "$OC_DISPATCHER" "$@" 2>&1 || true
+        return 0
+    fi
+    bash "$OC_DISPATCHER" "$@" 2>&1 | tee "$log" || true
+    out=$(<"$log")
+    rm -f "$log"
     case "${1:-}" in
         export)
             d=$(sed -n 's/.*\[OK\] Exported.*to: //p' <<<"$out" | tail -1)
@@ -292,13 +309,57 @@ oc_sel_key() { printf '%s\n' "$1" | cut -f1; }
 # The mode-switch row: '[*] <current>  →  <other>'. ONE symbol for every toggle
 # in the menu (view/remove, sort order, subagent visibility) — the bracket token
 # says what the row does, so the words only have to name the two states. `[>]` is
-# reserved for rows that OPEN A FLOW (create, swap, choose preset). The caller
+# reserved for rows that OPEN A FLOW (create, swap, choose preset) plus the
+# all-details report `__REPORT_ALL__`, the one row that prints EVERY entry of the
+# list at once — it opens the same screens a per-row report opens, just all of
+# them, which is why it shares the token instead of inventing one. The caller
 # passes the label it wants to see (a picker has ONE such row unless it passes an
 # explicit key for a second switch, e.g. the subagent visibility row).
 oc_toggle_row() {
     local mode="$1" other="$2" key="${3:-__TOGGLE__}"
     printf '%s\t[*] %s  →  %s\n' "$key" "$mode" "$other"
 }
+
+#-----------------------------------------------------------------------
+# oc_view_all <header> <pause-label> <manager> <stamp>...
+#
+# The "details of all" report of the artifact pickers (exports, shrinks): ONE
+# global header, then the SAME view command the per-row branch runs, once per
+# stamp, with NO pause in between, then the picker's usual report pause. It is
+# the counterpart of the sessions screen's __REPORT_ALL__ iterator, for the
+# screens that are not driven by oc_session_picker.
+#
+# <manager> is the subcommand namespace whose verb is `view` (`exports`,
+# `shrinks`), because that is the only shape both screens need: spelling the
+# command here would mean every call site composing "run_oced_tool … view".
+#
+# The header belongs to the ITERATION, exactly like view_all_header in
+# oc_session_picker: a callback cannot tell "first call" from "last call"
+# without state the picker owns, and one header per stamp would be noise.
+#-----------------------------------------------------------------------
+oc_view_all() {
+    local header="$1" label="$2" mgr="$3"; shift 3
+    local -a keys=( "$@" )
+    printf '%s\n' "$header"
+    if [ "${#keys[@]}" -eq 0 ]; then
+        echo "   (none)"
+        return 0
+    fi
+    local k
+    for k in "${keys[@]}"; do
+        run_oced_tool "$mgr" view "$k"
+        echo ""
+    done
+    # Same labels the per-row reports use, so an all-report pause can never be
+    # read as a create/swap pause ("Export" / "Shrink copy"). The pause rc is
+    # RETURNED, not swallowed: ESC (2) has to travel to the caller's __REPORT_ALL__
+    # branch so it closes the submenu instead of silently redrawing the list —
+    # the same rule as __SWAP__.
+    menu_pause "$label"
+}
+
+oc_exports_view_all() { oc_view_all "== Details of all export runs ==" "Manage exports" exports "$@"; }
+oc_shrinks_view_all() { oc_view_all "== Details of all shrink copies ==" "Shrinks" shrinks "$@"; }
 
 #-----------------------------------------------------------------------
 # oc_session_picker <cfg_ref> — generic multi-mark session picker.

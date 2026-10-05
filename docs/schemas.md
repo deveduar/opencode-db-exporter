@@ -424,10 +424,24 @@ The same closed keep-set is used to derive deleted counts. `--swap` additionally
 snapshots the live DB to `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db`
 (WAL-safe, newest-copy-only auto-cleanup) and performs the atomic swap — the one
 opt-in path that ever writes the live DB. `shrinks verify [--tsv] [--yes]` checks
-for orphan run dirs, old pre-shrink copies, and a last shrink that is stale vs the
-live DB (or unverifiable: a legacy shrink.json without `sessions.max_updated` is
-always flagged; the TTL rule is re-run-shrink-before-swap whenever opencode was
+for orphan run dirs, old pre-shrink copies, and the freshness of **every** copy vs
+the live DB (or unverifiable: a legacy shrink.json without `sessions.max_updated`
+is always flagged; the TTL rule is re-run-shrink-before-swap whenever opencode was
 used in between).
+
+Freshness is asked **once per run**, never once for the newest: a stale answer for
+`runs[0]` left every older copy unverified, which is the one thing a copy shelf
+needs to know. The `--tsv` rows are `type<TAB>key<TAB>display`:
+
+| row | key | when |
+|---|---|---|
+| `orphan` | the run dir | no valid `shrink.json` |
+| `preshrink` | the file name | an old `pre-shrink` copy |
+| `stale` | **the copy's stamp** | that copy is stale or unverifiable vs the live DB |
+
+An orphan dir is reported **once**, as an orphan: it is never also a `stale` row
+(`o_shrink_stale` would answer "shrink.json missing" for it, which would count the
+same broken dir twice).
 
 ---
 

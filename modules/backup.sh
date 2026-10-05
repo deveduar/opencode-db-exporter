@@ -103,10 +103,11 @@ oced_backups_view() {
 oced_backup() {
     o_check_deps
     o_db_exists
-    local compress="$OCED_COMPRESS" yes=0
+    local compress="$OCED_COMPRESS" yes=0 dry=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --no-compress) compress=0 ;;
+            --dry-run) dry=1 ;;
             --yes) yes=1 ;;
             *) o_die "Unknown argument: $1" ;;
         esac
@@ -122,6 +123,13 @@ oced_backup() {
     printf '   %-11s %s\n' "Source:" "$OPENCODE_DB"
     printf '   %-11s %s/opencode-<timestamp>.db%s\n' "Target:" "$OCED_BACKUP_DIR" "$([ "$compress" -eq 1 ] && echo ' (gzipped)')"
     printf '   %-11s ~%s raw snapshot (sqlite .backup; gzip compresses on save)\n' "Est. size:" "$(o_human_size "$est_raw")"
+    # The plan and nothing else — the same contract as `shrink --dry-run`, and what
+    # the menu prints BEFORE asking for the y/N (so the gate belongs to the frame
+    # that owns the list, not to a prompt hidden inside a captured command).
+    if [ "$dry" -eq 1 ]; then
+        echo "   (dry-run, nothing written)"
+        return 0
+    fi
     if [ "$yes" -ne 1 ] && [ -t 0 ]; then
         printf '   Create this backup? [y/N] '
         read -r ans || ans=""

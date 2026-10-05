@@ -8,7 +8,13 @@ set -uo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOD="$TESTS_DIR/../modules"
 TMP="$(mktemp -d /tmp/opencode-db-menu-XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# Only the TOP-LEVEL shell may delete $TMP. bash runs an inherited EXIT trap in
+# EVERY subshell, so one dying subshell (an unbound variable under `set -u`, an
+# early return, `set -e`) used to fire `rm -rf $TMP` mid-run and wipe the
+# fixture: the suite kept going with a deleted TMP and 100 asserts failed for
+# reasons that had nothing to do with the code under test.
+menu_cleanup() { [ "${BASH_SUBSHELL:-0}" -eq 0 ] && rm -rf -- "$TMP"; return 0; }
+trap menu_cleanup EXIT
 
 FAKE="$TMP/fake.db"
 OUT="$TMP/out"
@@ -182,14 +188,31 @@ printf '%s\n' "$RROWS" | grep -qxF "__KEEP_NEWEST__${TAB}[delete olds]" \
 confirm_action() { return 0; }
 qset "__CREATE__"
 oc_backups_picker >/dev/null
-grep -qx "backup" "$CALLS" && ok "backups picker offers create backup" || bad "backups create: $(cat "$CALLS")"
+# The create flow is plan -> OUR gate -> run: the command must never be the one
+# asking (a captured command hides its own prompt and blocks on stdin forever).
+[ "$(sed -n 1p "$CALLS")" = "backup --dry-run" ] && [ "$(sed -n 2p "$CALLS")" = "backup --yes" ] \
+    && [ "$(wc -l < "$CALLS")" -eq 2 ] \
+    && ok "backups create: prints the plan (--dry-run), THEN runs --yes (2 calls)" \
+    || bad "backups create: $(cat "$CALLS")"
+grep -qx "backup" "$CALLS" && bad "backups create still calls a bare backup (it would ask on stdin)" \
+    || ok "backups create: no bare 'backup' call left (no hidden prompt)"
 
 : > "$CALLS"
+qset "__CREATE__" "fake-0.db"
+confirm_action() { return 1; }
+oc_backups_picker >/dev/null
+[ "$(sed -n 1p "$CALLS")" = "backup --dry-run" ] && ! grep -qx "backup --yes" "$CALLS" \
+    && ok "backups create declined: the plan is shown, nothing is created" \
+    || bad "backups create declined: $(cat "$CALLS")"
+
+: > "$CALLS"
+confirm_action() { return 0; }
 qset "__TOGGLE__" "__DELETE_ALL__"
 oc_backups_picker >/dev/null
 grep -qx "backups remove fake-0.db --yes" "$CALLS" && grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups delete-all removes every backup (confirmed)" || bad "backups delete-all: $(cat "$CALLS")"
 
 : > "$CALLS"
+confirm_action() { return 0; }
 qset "__TOGGLE__" "__KEEP_NEWEST__"
 oc_backups_picker >/dev/null
 grep -qx "backups remove fake-3.db --yes" "$CALLS" && ! grep -qx "backups remove fake-4.db --yes" "$CALLS" && ok "backups delete olds removes all but the newest" || bad "backups keep-newest: $(cat "$CALLS")"
@@ -465,6 +488,21 @@ qset "ccc"
 oc_exports_picker >/dev/null
 grep -qx "exports view ccc" "$CALLS" && ok "exports view dispatches for the run" || bad "exports view: $(cat "$CALLS")"
 grep -q "exports (view)" "$FZF_HIST" && ok "exports picker starts in view mode" || bad "exports initial mode"
+
+# [>] details of all runs: ONE header + one `exports view` per run + ONE pause.
+# The row and the per-row branch must run the SAME command, or the two screens
+# can drift; that is why the assertion is on the dispatched calls.
+printf '%s\n' "$ER_VIEW" | grep -qxF "__REPORT_ALL__${TAB}[>] details of all runs" \
+    && ok "exports rows have the [>] details of all runs row" || bad "exports all-report row: $(printf '%s\n' "$ER_VIEW" | grep -c .)"
+printf '%s\n' "$ER_REM" | grep -q '^__REPORT_ALL__' \
+    && bad "exports REMOVE mode renders the all-report row" || ok "exports remove mode has no all-report row"
+: > "$CALLS"; call_log
+qset "__REPORT_ALL__"
+oc_exports_picker > "$TMP/exports-view-all.txt"
+grep -qx "exports view aaa" "$CALLS" && grep -qx "exports view bbb" "$CALLS" && grep -qx "exports view ccc" "$CALLS" \
+    && ok "the all-report views every run, newest first" || bad "exports all-report calls: $(cat "$CALLS")"
+[ "$(grep -c '^== Details of all export runs ==$' "$TMP/exports-view-all.txt")" -eq 1 ] \
+    && ok "the all-report prints ONE header, not one per run" || bad "exports all-report header count"
 
 : > "$CALLS"
 qset "__TOGGLE__" "aaa"
@@ -807,7 +845,9 @@ confirm_action() { return 0; }
 [ "$(oc_plan_py snapshot snappy 2>/dev/null)" = "fresh" ] && ok "plan.py snapshot exposes the snapshot flag" || bad "plan snapshot"
 qset "__ALL__" "__MAKE__" "__PRESET_snappy"
 oc_export_sessions_pick >/dev/null
-grep -qx "backup" "$CALLS" && ok "snapshot preset offers a fresh backup (no backups yet)" || bad "snap backup offer: $(cat "$CALLS")"
+grep -qx "backup --dry-run" "$CALLS" && grep -qx "backup --yes" "$CALLS" \
+    && ok "snapshot preset offers a fresh backup (plan + non-interactive run)" \
+    || bad "snap backup offer: $(cat "$CALLS")"
 grep -qx "export snappy" "$CALLS" && ok "snapshot preset exports after the fresh backup" || bad "snap export: $(cat "$CALLS")"
 
 : > "$CALLS"
@@ -945,6 +985,10 @@ reset
   { oc_backups_rows view; oc_backups_rows remove;
     oc_exports_rows view; oc_exports_rows remove;
     oc_shrinks_rows view; oc_shrinks_rows remove; } >> "$TMP/symbols.txt" 2>/dev/null
+  # The sessions BROWSE is in the sample on purpose: its __REPORT_ALL__ row is
+  # the same vocabulary as the exports/shrinks ones, and until now nothing
+  # sampled it, so a [>]/[*] leak there could not fail this guard.
+  oc_sessions_picker >/dev/null 2>&1
   oc_export_sessions_pick >/dev/null 2>&1
   oc_shrink_sessions_pick >/dev/null 2>&1 )
 reset
@@ -957,8 +1001,8 @@ ok "the symbol sample covers $SEEN"
 BADTOKEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | grep -vxE "$ALLOWED")
 [ -z "$BADTOKEN" ] && ok "no invented bracket tokens ($(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' '))" \
     || bad "unknown bracket tokens: $BADTOKEN"
-BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__')
-[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset)" || bad "[>] leaked onto: $BADFLOW"
+BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__|__REPORT_ALL__')
+[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report)" || bad "[>] leaked onto: $BADFLOW"
 BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__')
 [ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify)" || bad "[?] leaked onto: $BADINSPECT"
 NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
@@ -1079,6 +1123,23 @@ qset "20260103-110000"
 oc_shrinks_picker >/dev/null
 grep -qx "shrinks view 20260103-110000" "$CALLS" && ok "shrinks view dispatches for the run" || bad "shrinks view: $(cat "$CALLS")"
 grep -q "shrinks (view)" "$FZF_HIST" && ok "shrinks picker starts in view mode" || bad "shrinks initial mode"
+
+# [>] details of all copies: ONE header + one `shrinks view` per copy + ONE pause.
+printf '%s\n' "$ROWS" | grep -qxF "__REPORT_ALL__${TAB}[>] details of all copies" \
+    && ok "shrinks rows have the [>] details of all copies row" || bad "shrinks all-report row missing"
+ROWS_REM=$(oc_shrinks_rows remove)
+printf '%s\n' "$ROWS_REM" | grep -q '^__REPORT_ALL__' \
+    && bad "shrinks REMOVE mode renders the all-report row" || ok "shrinks remove mode has no all-report row"
+: > "$CALLS"; call_log
+qset "__REPORT_ALL__"
+oc_shrinks_picker > "$TMP/shrinks-view-all.txt"
+NCOPY=$(find "$SHR" -mindepth 1 -maxdepth 1 -type d | wc -l)
+grep -c '^shrinks view ' "$CALLS" | grep -qx "$NCOPY" \
+    && ok "the all-report views every copy ($NCOPY)" || bad "shrinks all-report calls ($(cat "$CALLS"))"
+grep -qx "shrinks view 20251231-120000" "$CALLS" \
+    && ok "the all-report covers the stale copy too, not just the newest" || bad "shrinks all-report skipped a copy"
+[ "$(grep -c '^== Details of all shrink copies ==$' "$TMP/shrinks-view-all.txt")" -eq 1 ] \
+    && ok "the all-report prints ONE header, not one per copy" || bad "shrinks all-report header count"
 
 echo "== shrinks SWAP (destructive, typed confirm; fresh + stale copy) =="
 reset
@@ -1263,6 +1324,31 @@ rc=$?
     && ok "shrinks: ESC at the pause closes the submenu (no redraw)" \
     || bad "shrinks ESC pause (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
 
+# Same rule for the all-details report: it pauses ONCE, and its ESC closes the
+# submenu like any other report. It returned 0 unconditionally at first, so an
+# ESC silently redrew the list — the bug the pause-rc rule exists to prevent.
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { return 2; }
+qset "__REPORT_ALL__" "nav-0"
+oc_shrinks_picker >/dev/null
+rc=$?
+grep -qx "shrinks view nav-0" "$CALLS" || grep -qx "shrinks view nav-1" "$CALLS"
+seen=$?
+[ "$rc" -eq 0 ] && [ "$(wc -l < "$FZF_HIST")" -eq 1 ] && [ "$seen" -eq 0 ] && ! grep -qx 'shrinks view __REPORT_ALL__' "$CALLS" \
+    && ok "shrinks all-report: ESC at its single pause closes the submenu" \
+    || bad "shrinks all-report ESC (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
+
+reset; nav_fixtures
+: > "$CALLS"; call_log
+menu_pause() { return 2; }
+qset "__REPORT_ALL__" "aaa"
+oc_exports_picker >/dev/null
+rc=$?
+[ "$rc" -eq 0 ] && [ "$(wc -l < "$FZF_HIST")" -eq 1 ] \
+    && ok "exports all-report: ESC at its single pause closes the submenu" \
+    || bad "exports all-report ESC (rc=$rc, renders=$(wc -l < "$FZF_HIST")): $(cat "$CALLS")"
+
 echo "== navigation: a finished create/swap pauses, then returns to its own list =="
 # The pause (and its ESC) belong to the frame that OWNS the list, so a deep
 # wizard only reports "did it run?" through its rc: 0 = ran (pause), 130 = ESC
@@ -1300,10 +1386,12 @@ rc=$?
 
 reset; nav_fixtures
 : > "$CALLS"; call_log
+confirm_action() { return 0; }
 menu_pause() { printf 'pause:%s\n' "$1" >> "$CALLS"; return 0; }
 qset "__CREATE__" "nav-0.db"
 oc_backups_picker >/dev/null
-grep -qx "backup" "$CALLS" && grep -qx "pause:New backup" "$CALLS" && grep -qx "backups view nav-0.db" "$CALLS" \
+grep -qx "backup --dry-run" "$CALLS" && grep -qx "backup --yes" "$CALLS" \
+    && grep -qx "pause:New backup" "$CALLS" && grep -qx "backups view nav-0.db" "$CALLS" \
     && ok "backups: a created backup pauses, then stays in the list" || bad "backups create nav: $(cat "$CALLS")"
 
 reset; nav_fixtures
@@ -1335,6 +1423,45 @@ printf 'confirm\n' | oc_shrinks_picker >/dev/null 2>&1
 rc=$?
 grep -q 'swap:' "$CALLS" && [ "$rc" -eq 0 ] \
     && ok "swap: ESC at the post-swap pause closes the submenu" || bad "swap pause ESC (rc=$rc): $(cat "$CALLS")"
+
+echo "== run_oced_tool must STREAM: a captured command hides its own questions =="
+# The bug this section exists for: run_oced_tool used `out=$(dispatcher 2>&1)`,
+# so `backup`'s "Create this backup? [y/N]" went into the capture buffer, the
+# command blocked on read, and the menu showed NOTHING until a blind keypress
+# arrived — which, being empty, cancelled the backup. run_oced_tool now tees.
+# No behavioural test in this suite can see it: run_oced_tool is stubbed here, and
+# the real prompt is behind `[ -t 0 ]`. Hence a structural guard + a pty test.
+CAPTURE=$(grep -n 'out=\$(bash "\$OC_DISPATCHER"' "$MOD/menu/core.sh")
+[ -z "$CAPTURE" ] && ok "run_oced_tool does not capture the dispatcher output" \
+    || bad "run_oced_tool captures the dispatcher output again (line $(cut -d: -f1 <<<"$CAPTURE")): prompts would be invisible"
+
+BARE=$(grep -rn 'run_oced_tool backup\s*\($\|;\)' "$MOD/menu/" | grep -v -- '--yes\|--dry-run')
+[ -z "$BARE" ] && ok "no bare 'run_oced_tool backup' in the menu (it would ask on stdin)" \
+    || bad "menu calls a bare backup: $BARE"
+
+if ! command -v script >/dev/null 2>&1; then
+    echo "  [SKIP] pty streaming test: util-linux 'script' not available"
+else
+    # A pty is the ONLY way to test this: without a TTY the fake dispatcher cannot
+    # ask anything, and with a pipe the capture bug is invisible. `script -t<file>`
+    # records WHEN each output chunk reached the terminal, so streaming (first
+    # chunk at ~0s) is distinguishable from capturing (everything at exit, ~2s).
+    PTY_TS="$TMP/pty.ts"; PTY_TM="$TMP/pty.timing"
+    printf '#!/usr/bin/env bash\necho "PTY_MARK_1 plan visible"\nread -r a\necho "PTY_GOT:$a"\n' > "$TMP/fake-dispatcher"
+    chmod +x "$TMP/fake-dispatcher"
+    printf '#!/usr/bin/env bash\nset -uo pipefail\nexport OCED_DISPATCHER=%s\n. %s\nrun_oced_tool probe\n' \
+        "$TMP/fake-dispatcher" "$MOD/menu/core.sh" > "$TMP/pty-probe.sh"
+    chmod +x "$TMP/pty-probe.sh"
+    rm -f "$PTY_TS" "$PTY_TM"
+    ( sleep 2; printf 'y\n' ) | script -q -t"$PTY_TM" -e -c "$TMP/pty-probe.sh" "$PTY_TS" >/dev/null 2>&1
+    FIRST=$(awk 'NR==1{print $1; exit}' "$PTY_TM" 2>/dev/null)
+    GOT=$(grep -c 'PTY_GOT:y' "$PTY_TS" 2>/dev/null)
+    if [ -n "$FIRST" ] && [ "${FIRST%.*}" -lt 1 ] 2>/dev/null && [ "$GOT" -eq 1 ]; then
+        ok "run_oced_tool streams: the plan reached the screen at ${FIRST}s, before the answer"
+    else
+        bad "run_oced_tool does NOT stream (first chunk at ${FIRST:-?}s, got=$GOT): the question is invisible"
+    fi
+fi
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

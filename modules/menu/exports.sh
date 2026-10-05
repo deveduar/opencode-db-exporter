@@ -7,6 +7,13 @@ oc_exports_rows() {
     # the first row so "make an export" is the primary action of the screen.
     printf '__CREATE__\t[>] create export\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
+    # [>] = the all-details report: every run's detail screen in one go, the same
+    # `exports view` a row runs, so nothing can drift between the two. VIEW ONLY
+    # and only when there is something to show: a report row next to [delete all]
+    # is a mistake waiting to happen, and an empty list already says it has none.
+    if [ "$mode" = "view" ] && [ "$(exports_run_count)" -gt 0 ]; then
+        printf '__REPORT_ALL__\t[>] details of all runs\n'
+    fi
     if [ "$mode" = "remove" ]; then
         printf '__DELETE_ALL__\t[delete all]\n'
         printf '__KEEP_NEWEST__\t[delete olds]\n'
@@ -102,6 +109,20 @@ oc_exports_picker() {
                 continue
                 ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
+            __REPORT_ALL__)
+                # One header, then one `exports view` per run and a SINGLE pause:
+                # this is a report, not a row that opens a flow, so it must not
+                # drop the user into a nested picker per run.
+                local -a stamps=() rd
+                while IFS= read -r rd; do
+                    [ -n "$rd" ] && stamps+=( "${rd##*/}" )
+                done < <(exports_runs_find)
+                oc_exports_view_all "${stamps[@]}"
+                # rc 2 = ESC at the report pause -> close the submenu, exactly
+                # like every other report. `continue` alone would redraw the list.
+                [ $? -eq 2 ] && return 0
+                continue
+                ;;
             __DELETE_ALL__) oc_exports_bulk all; continue ;;
             __KEEP_NEWEST__) oc_exports_bulk newest; continue ;;
             __NONE__)       continue ;;

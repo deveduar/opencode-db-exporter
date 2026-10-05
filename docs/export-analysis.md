@@ -945,3 +945,127 @@ decided then; §30 supersedes them) rather than rewriting history.
 **Guarded by:** `tests/export_smoke.sh` — `run compactions ses_A0001` equals
 `run digest ses_A0001` for the CLI alias, and `export compactions --filter …` writes the same run
 with `.profile == "digest"` for the product keyword.
+
+---
+
+## §31 `verify` means every copy, and a list can say it all at once (current)
+
+**The question behind the change.** With `status` deliberately being *the* check (§28) — read-only,
+alignment of the **last** backup, schema probe, deps — the remaining gap was not "is my DB
+healthy?" but "are my stored artifacts still worth anything?". Measured on the real install:
+sha256 of a 163 MB `.gz` backup = 0.46 s (≈3 s for a full 1.1 GiB uncompressed copy), while
+`exports view <run>` = ~0.2 s and `exports list` over 7 runs = 0.29 s. That single set of numbers
+settled the whole design, because it splits the three managers by cost.
+
+**`shrinks verify` was half a verification.** Its first two checks (orphan dirs, old `pre-shrink`
+files) already walked *every* run directory, and the third one — freshness — asked
+`o_shrink_stale "${runs[0]}/shrink.json"`, i.e. only the newest. So a shelf of three copies
+reported the orphan living in the third directory and stayed silent about copies 1 and 2 being
+stale: precisely the rows you would be choosing between. It now asks once **per copy**, keyed by
+that copy's stamp in `--tsv` (`stale<TAB>20260927-162759<TAB>…`, was the literal `live_vs_shrink`),
+and the clean verdict names the number it checked ("all 7 shrink copies are up to date"). An orphan
+is reported **once**, as an orphan: `o_shrink_stale` on a missing `shrink.json` answers
+"shrink.json missing", which would have counted the same broken directory twice.
+
+**Why per-copy freshness and not "verify every copy when you open it".** The freshness of a shrink
+copy only matters for the copy you are about to *swap*, and that path already asks about the one
+picked copy (`o_shrink_stale` in `oc_shrinks_swap_pick`, plus the same check before a removal
+warns). What was genuinely missing was the inventory question — "which of the copies I am keeping
+are stale?" — which is cheaper to answer all at once than by opening N detail screens.
+
+**Why backups did not get the same row.** `backups view` already folds its sha256 into the details
+screen on purpose (§28: a details screen must not show an unvalidated backup), so the all-details
+row would add nothing except the seconds per gigabyte above — a menu row that looks like a hang.
+`backups verify <file>` stays the per-file CLI form; a whole-shelf hash belongs to a script. This
+is also why no root `check`/`verify all` row appeared: `status` already covers health and deps, and
+the only thing a global row would have added is the expensive half.
+
+**`[>] details of all …`.** The sessions browse already had `[>] details of all sessions`; the
+exports and shrinks pickers answered "what exactly do I have stored?" one screen at a time. Both
+gained the same row (`__REPORT_ALL__`, view mode only, only when the list is non-empty, never
+beside `[delete all]`), rendered by `oc_view_all` — one global header, then the *same*
+`<manager> view <stamp>` the per-row branch runs, once per entry, and a single pause labelled after
+the list. Using the per-row command is the point: a report assembled differently from the row it
+summarises is how the two drift apart. The token stays `[>]` even though no flow opens, because it
+prints the screens a row prints, all of them at once, and a fourth bracket token would have been
+worse than the documented stretch; the symbol guard's allow-list admits `__REPORT_ALL__` explicitly.
+
+**A trap found on the way, worth recording.** `tests/menu_flow.sh` (and `export_smoke.sh`) ended
+with `trap 'rm -rf "$TMP"' EXIT`. bash runs an **inherited** EXIT trap in *every* subshell, so one
+dying subshell — a single unbound variable under `set -u`, which is what a typo in a new assert
+produced — fired `rm -rf "$TMP"` **mid-run**: the suite kept executing against a deleted fixture and
+reported 100 failures that had nothing to do with the change. The trap is now guarded by
+`[ "${BASH_SUBSHELL:-0}" -eq 0 ]`, so only the top-level shell can clean up. A test harness that
+lets a subshell delete its own fixtures is not a harness, it is a coin flip.
+
+**A flake that was the fixture's fault, not the code's.** Once `verify` asked about *every*
+copy, an assert that had been green for months started failing about one run in three: "All
+clean" after the `--swap` test. The cause is a plain fact about the suite — the copies left by
+the selection tests are genuinely older than the DB the swap installed (`--keep 1` makes the
+live DB newer than every copy that kept more), and the old one-copy check had simply never
+noticed because it only ever asked about the newest dir. The `All clean` assert was therefore
+never testing freshness; it was testing "the newest dir happens to be fresh". It now builds its
+own backup dir with two aligned copies and asks about those, and the stamps are forced 1 s
+apart because **the stamp is second-resolution**: two shrinks inside one second share a dir,
+which silently halves the copy count. A green assert that leans on a shelf another test built is
+not an assert, it is a coin flip.
+
+**Guarded by:** `tests/export_smoke.sh` — one `stale` row per run dir, an orphan reported once and
+never as stale, the stamp on each per-copy warning, and the "All clean" line naming the copy count.
+`tests/menu_flow.sh` — the row in view mode and absent in remove mode for both pickers, one
+dispatched `<manager> view` per entry, exactly one header, and the symbol guard with the sessions
+browse **in the sample** (it was unsampled, so its existing `__REPORT_ALL__` had never passed
+through the guard).
+
+---
+
+## §32 A captured command hides its own question (current)
+
+**The report.** `[>] create backup` in the backups picker "froze, showing nothing": press the
+row and the screen stays as it was until you press a key — and *then* the plan appears, followed
+by `Backup cancelled.` Nothing had crashed; the backup simply never happened. This is the same
+failure class as the guide wizard removed in §27 (a stdin prompt inside a menu), which is why it
+is worth writing down twice: the first time we removed the culprit, the second time we removed
+the *mechanism* that let it hide.
+
+**Mechanism.** `run_oced_tool` ran `out=$(bash "$OC_DISPATCHER" "$@" 2>&1)` and printed `$out`
+afterwards. The command substitution pointed the dispatcher's stdout at a **pipe**, so its plan
+*and* its `Create this backup? [y/N]` went into the capture buffer instead of the screen; the
+child then blocked in `read` waiting for a keypress the user could not see it was being asked
+for. The keypress arrived (people press Enter when a UI looks stuck), reached the child's stdin,
+and an empty line is not `y` — so the one thing that ended the freeze was the thing that
+cancelled the work. A silent failure and a wrong answer, from one line of plumbing.
+
+**Two blind spots, and that is why it survived.** `tests/menu_flow.sh` stubs `run_oced_tool` with
+`call_log`, so the suite only ever sees the *call*, never the plumbing; and the real prompt is
+behind `[ -t 0 ]`, false in every automated run. A bug in the interaction between a stub and a
+TTY check cannot be caught by either. The second call site was worse than the reported one:
+`oc_preset_run`'s `snapshot: fresh` offer already asked with `confirm_action`, then launched
+`backup`, which asked a *second*, invisible question — and after pressing Enter it carried on and
+exported **without** the fresh snapshot it had just been told to take.
+
+**Fix, in the order the failure demanded.** First the mechanism: `run_oced_tool` now pipes the
+dispatcher through `tee` (visible on the terminal, still captured in a log for the
+`OCED_LAST_*_STAMP` extraction), so a command can never again hide a question. Then the contract:
+**the frame that owns the list owns the gate.** `__CREATE__` became plan → our gate →
+non-interactive run, which is exactly the shrink wizard's shape, and it needed a flag to exist —
+`backup --dry-run` prints the plan and returns, the mirror of `shrink --dry-run`. No `[y/N]` of
+the command's own is ever reached from the menu now, because the menu passes `--yes`.
+
+**Why the pty test exists even though it is awkward.** The property is "output reaches the screen
+before the process exits", which no stub can fake and no pipe can show. `script -t<file>` records
+*when* each chunk arrived: with `tee` the plan lands at ~0.01 s, with `out=$(…)` it lands at
+~2.0 s, together with the answer — 4 ms and 2 s apart, unambiguous. It is skipped loudly when
+`script` is missing, and two structural guards back it up (`core.sh` may not contain
+`out=$(bash "$OC_DISPATCHER"`, and no bare `run_oced_tool backup` may exist in `modules/menu/`),
+because a guard that only runs where `script` exists would be a guard that silently does not.
+
+**The general rule.** *A menu action is not done when the command returns; it is done when the
+user has seen the answer and the menu has asked its own question.* If the frame cannot see the
+output, it cannot own the gate — which is the deeper half of why `guide.sh` had to go.
+
+**Guarded by:** `tests/menu_flow.sh` — create flow is exactly `backup --dry-run` then
+`backup --yes` (order and count), a declined gate shows the plan and creates nothing, no bare
+`backup` call survives anywhere in the menu, plus the structural and pty guards. `tests/export_smoke.sh`
+— `--dry-run` prints the plan and writes no file, no manifest entry, asks nothing;
+`--dry-run --yes` still writes nothing.

@@ -677,7 +677,9 @@ o_shrink_stale() {
     return 0
 }
 
-# oced_shrinks_verify — checks for orphan dirs, old pre-shrinks, stale shrinks vs live DB
+# oced_shrinks_verify — audits the produced copies: orphan run dirs (no valid
+# shrink.json), old pre-shrink files, and the freshness of EVERY copy vs the
+# live DB (o_shrink_stale, once per run — not once for the newest).
 oced_shrinks_verify() {
     local yes=0
     [ "${1:-}" = "--yes" ] && yes=1
@@ -710,11 +712,23 @@ oced_shrinks_verify() {
         )
     fi
 
-    # 3) Stale shrink vs live DB
-    local stale_msg=""
-    if [ ${#runs[@]} -gt 0 ]; then
-        stale_msg=$(o_shrink_stale "${runs[0]}/shrink.json")
-    fi
+    # 3) Stale shrinks vs live DB -- EVERY copy, not just the newest one.
+    # A single freshness answer was a half-verification: 1 and 2 already walked
+    # every run dir, so a 3-run shelf reported the orphan in the third dir but
+    # never that copies 1 and 2 were stale. Each entry is "stamp<TAB>message".
+    # An orphan is NOT re-reported here (o_shrink_stale would answer "shrink.json
+    # missing" for it), so a broken dir shows up exactly once, as an orphan.
+    local -a stale_copies=()
+    local sc run
+    for run in "${runs[@]}"; do
+        local is_orphan=0 od
+        for od in "${orphan_dirs[@]}"; do
+            [ "$od" = "$run" ] && { is_orphan=1; break; }
+        done
+        [ "$is_orphan" -eq 1 ] && continue
+        sc=$(o_shrink_stale "$run/shrink.json") || true
+        [ -n "$sc" ] && stale_copies+=("${run##*/}"$'\t'"$sc")
+    done
 
     # Output
     if [ "$tsv" -eq 1 ]; then
@@ -725,8 +739,10 @@ oced_shrinks_verify() {
         for p in "${old_preshrinks[@]}"; do
             printf 'preshrink\t%s\t%s\n' "${p##*/}" "Old pre-shrink (auto-cleaned on swap): $p"
         done
-        if [ -n "$stale_msg" ]; then
-            printf 'stale\t%s\t%s\n' "live_vs_shrink" "$stale_msg"
+        if [ ${#stale_copies[@]} -gt 0 ]; then
+            for sc in "${stale_copies[@]}"; do
+                printf 'stale\t%s\t%s\n' "${sc%%$'\t'*}" "${sc#*$'\t'}"
+            done
         fi
         return 0
     fi
@@ -754,17 +770,25 @@ oced_shrinks_verify() {
         issues=1
     fi
 
-    if [ -n "$stale_msg" ]; then
-        echo "⚠️  Stale shrink warning:"
-        echo "   $stale_msg"
-        echo "   If you swap with this shrink, you will lose recent sessions."
-        echo "   The pre-shrink copy is your only rollback."
+    if [ ${#stale_copies[@]} -gt 0 ]; then
+        echo "⚠️  Stale shrink copies (${#stale_copies[@]} of ${#runs[@]} vs the live DB):"
+        for sc in "${stale_copies[@]}"; do
+            echo "  ${sc%%$'\t'*}  —  ${sc#*$'\t'}"
+        done
+        echo ""
+        echo "   Swapping any of these loses the sessions added since; each one is"
+        echo "   only as fresh as its own shrink.json says. Create a new copy instead."
+        echo "   The pre-shrink safety copy is your only rollback."
         echo ""
         issues=1
     fi
 
     if [ "$issues" -eq 0 ]; then
-        echo "All clean: no orphan dirs, no old pre-shrinks, last shrink is up to date."
+        # The count is the point (it says how many were asked), but "all 0
+        # copies are up to date" is a sentence nobody should have to read.
+        local scope="no shrink copies yet"
+        [ "${#runs[@]}" -gt 0 ] && scope="all ${#runs[@]} shrink copies are up to date"
+        echo "All clean: no orphan dirs, no old pre-shrinks, $scope."
         return 0
     fi
 
@@ -781,6 +805,6 @@ oced_shrinks_verify() {
         echo "Cleanup complete."
     else
         echo "Run with --yes to auto-clean orphan dirs and old pre-shrinks."
-        echo "Stale shrink warning requires manual decision (re-run shrink or swap carefully)."
+        echo "Stale copies need a manual decision (re-run shrink; swap only on purpose)."
     fi
 }
