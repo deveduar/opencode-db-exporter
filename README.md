@@ -29,13 +29,13 @@ opencode-db deps # install what's missing (apt/pacman/dnf, prompts for sudo)
 ## Install
 
 ```bash
-./install.sh            # copies modules+tests(+uninstall.sh) to ~/.local/share/opencode-db-exporter,
+./install.sh            # copies src/+uninstall.sh to ~/.local/share/opencode-db-exporter,
                         # symlinks ~/.local/bin/opencode-db, creates the config if missing
 export PATH="$HOME/.local/bin:$PATH"
 opencode-db status      # first check
 ```
 
-No installation is strictly required: you can run it straight from the repo with `bash modules/opencode-db.sh`.
+No installation is strictly required: you can run it straight from the repo with `bash src/opencode-db.sh`.
 
 ## Commands
 
@@ -142,7 +142,7 @@ Every row carries one marker that says what it does:
   `Menu adds:` line names only what the menu itself contributes (subagent cascade in
   hidden mode, nothing in shown mode), and a `Note:` line warns about consequences
   the rows cannot show. Without a presets file the export entry prints the setup guidance
-  (`cp presets.json.example …`) and points at the raw CLI — there is no manual
+  (`cp presets.json …`) and points at the raw CLI — there is no manual
   session→product picker anymore.
 - **Export runs** picker (mode `view` / `remove`) — rows: the `[*] view  →  remove`
   toggle, then in remove mode `[delete all]` / `[delete olds]`, then one row per run
@@ -173,7 +173,7 @@ opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 
 ```
 
 The full flag list (name/choices/default per product) is generated from the single
-source of truth — `modules/exportlib/flags.py` — shown by `opencode-db export --help`
+source of truth — `src/exportlib/flags.py` — shown by `opencode-db export --help`
 (`opencode-db help` prints the product/flags summary) and tabulated in
 [`generated/flags-table.md`](generated/flags-table.md). The purpose/size of every product and the
 decision matrix live in [docs/export-guide.md](docs/export-guide.md).
@@ -197,7 +197,7 @@ Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per sess
 Running the export by raw flags is fine for one-offs, but the recurring combinations
 are better pinned in a **presets file** (JSON, path in `OCED_PRESETS`, default
 `~/.config/opencode-db/presets.json`, same env>conf precedence as the rest; `install.sh`
-auto-creates it from `presets.json.example` when missing). The file is the **source of
+auto-creates it from the shipped `presets.json` when missing). The file is the **source of
 truth** for both the CLI and the menu: a preset names a product (or a *bundle* of
 products run under one stamp), its config flags and optionally the selection (`filter`
 or exact `sessions`). The contract (exact keys/types/choices) is machine-checkable in
@@ -240,7 +240,7 @@ and the `exports list` line).
 }
 ```
 
-That is the shipped `presets.json.example`, verbatim. Note that `share` does **not**
+That is the shipped `presets.json`, verbatim. Note that `share` does **not**
 bake in `--sanitize`: redaction is best-effort (high-confidence prefixes only), so it
 stays an explicit per-run flag you ask for on purpose — a plan that silently redacted
 part of the content would promise a safety it cannot keep.
@@ -294,12 +294,12 @@ The **menu** has no product-only flow: each preset is a first-class action (read
   state, so it is asked before the plan and simply applied (a plan runs **ad-hoc** just like raw
   flags do). Marking **every** session runs the preset as configured (keeping its embedded
   selection); a partial selection becomes a `--sessions` override shared by every product of a
-  bundle (CLI wins, see above). **No `Manual…` row** (the shipped default plans `notes`/`rag`/`digest` cover
+  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`share` cover
   the three products with defaults); without a presets file the export picker prints setup
-  guidance (`cp presets.json.example …`) and the raw CLI as fallback — the manual session →
+  guidance (`cp presets.json …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.
-- `digest` is a valid product (CLI or a plan) but is **not** part of the shipped example
-  plans: its digests are already inline in `transcript` and in the memory corpus
+- `digest` is a valid product (CLI or a plan) but is **not** part of the shipped
+  presets: its digests are already inline in `transcript` and in the memory corpus
   (`compaction_digests`), so shipping it in a bundle would triple the same text.
 - `--sanitize` redacts high-confidence secret prefixes (sk-, ghp_, Bearer, JWT, PEM…) —
   **best-effort; review the output before sharing**.
@@ -363,7 +363,7 @@ So `shrink lean` means "the default selection, plus strip reasoning", and
 `shrink lean --keep 30` keeps 30 and still strips. A keep rule inside a recipe is
 rejected (it points at the flag to use instead). The built-ins always exist; a **shrink
 recipes file** (`OCED_SHRINK_PRESETS`, default `~/.config/opencode-db/shrink-presets.json`,
-auto-created from `shrink-presets.json.example`) extends/overrides them with operations
+auto-created from the shipped `shrink-presets.json`) extends/overrides them with operations
 only — see [`generated/shrink.schema.json`](generated/shrink.schema.json) and
 `shrink --list-presets`. `--keep-sessions`/`--discard-sessions` are exact-id selections
 (comma-separated). `shrink --help` lists everything.
@@ -401,7 +401,7 @@ opencode-db shrinks prune 3           # keep only the 3 most recent copies
 
 ## Activity log (opt-in)
 
-`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG` (default `~/.local/state/opencode-db/activity.log`), one tab-separated line per event. Nothing is ever logged by default.
+`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG` (default `~/.local/state/opencode-db/activity.log`, or `./activity.log` when running portably from the repo), one tab-separated line per event. Nothing is ever logged by default.
 
 ## Reading from a backup
 
@@ -437,10 +437,13 @@ faithful archive, backup/shrink manifests). This README covers usage only.
 
 A few facts that are good to know anyway:
 
-- Config precedence is **environment > conf file > built-in default**: an explicitly
-  exported `OPENCODE_DB`/`OCED_OUT`/`OCED_ACTIVITY_LOG`/... is never clobbered by the conf.
+- Config precedence is **environment > conf file > per-file default**, where the default
+  is `~/.config/opencode-db/<file>` if present, else the repo-shipped copy, else the
+  built-in: an explicitly exported `OPENCODE_DB`/`OCED_OUT`/`OCED_ACTIVITY_LOG`/... is
+  never clobbered by the conf.
 - Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf`
-  (see `opencode-db.conf.example`).
+  (that is `opencode-db.conf`). Running from the repo, the shipped
+  `opencode-db.conf`/`presets.json`/`shrink-presets.json` are read directly (see below).
 
 ## Portability (WSL / Windows / portable)
 
@@ -453,33 +456,33 @@ A few facts that are good to know anyway:
 | WSL, opencode is native Windows | Yes, with config | Set `OPENCODE_DB=/mnt/c/Users/<user>/.local/share/opencode/opencode.db`. Residual risk: SQLite WAL file locking over `drvfs`. |
 | Native Windows | No | Bash-only (no `.bat`/`.ps1`); `sqlite3`, `python3`, `jq`, `gzip`, `fzf` are absent. Use WSL. |
 | Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`/`pacman`/`dnf`). |
-| Portable (no install) | Yes | Run `bash modules/opencode-db.sh …` straight from the repo. No config is created; defaults are used. |
+| Portable (no install) | Yes | Run `bash src/opencode-db.sh …` straight from the repo. The repo-shipped config is read directly; exports/backups/activity log default into the repo (`./exports`, `./backups`, `./activity.log`, gitignored). |
 
-- **Portable run**: if `~/.config/opencode-db/opencode-db.conf` does *not* exist it is never created, so nothing on your config is touched; exports/backups still go to `~/.local/share/opencode-db-exporter/{exports,backups}` by default (override with `OCED_OUT`/`OCED_BACKUP_DIR`). If the conf *does* exist it is only read (and `chmod 600`).
-- **Removing data**: `uninstall.sh --all` deletes the config, backups and exports even if you only ever ran it portably.
+- **Portable run**: the repo ships three real config files — `opencode-db.conf`, `presets.json`, `shrink-presets.json` — the single source of truth (there are no `.example` copies anymore). Running from the checkout auto-discovers them; `~/.config/opencode-db/` is only consulted when it already has a file there (your config wins over the repo's, never the reverse). Exports/backups/activity log default into the repo (`./exports`, `./backups`, `./activity.log` — gitignored), so a clone sandbox stays fully local. The repo's shipped conf is read, never chmod'ed; a conf under `~/.config/opencode-db/` still gets `chmod 600` as before.
+- **Removing data**: portable data lives in the repo (`./exports`, `./backups`, `./activity.log`) and is gitignored — `uninstall.sh --all` only knows the installed `~/.local/share/opencode-db-exporter/` and does not reach repo data. Delete those directories yourself (or keep them; they are yours).
 
 ### Portable configuration
 
-In portable mode you do not need `install.sh`, but you can still keep your settings in any file: copy `opencode-db.conf.example` next to the repo and point `OCED_CONF` at it (no auto-discovery; nothing is created for you):
+In portable mode you do not need `install.sh` and nothing is created for you: running the CLI from the checkout reads the repo-shipped files. Per config file the resolution is `~/.config/opencode-db/<file>` if present, else the repo-shipped copy (a prefix that ships no config at all, like an install, never goes portable). You can still point `OCED_CONF`/`OCED_PRESETS`/`OCED_SHRINK_PRESETS` at any file on your machine:
 
 ```bash
-cp opencode-db.conf.example ./portable.conf
-OCED_CONF=./portable.conf bash modules/opencode-db.sh status
+cp opencode-db.conf ./portable.conf
+OCED_CONF=./portable.conf bash src/opencode-db.sh status
 ```
 
-Environment variables still win over that file, which in turn wins over the built-in default: **environment > conf > default**.
+Environment variables still win over that file, which in turn wins over the per-file default: **environment > conf file > `~/.config` > repo-shipped > built-in default**.
 
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 369 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 377 OK / 0 FAIL
 bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 312 OK / 0 FAIL
 ```
 
 ## Layout
 
 ```
-modules/
+src/
   opencode-db.sh   CLI dispatcher
   common.sh        config + helpers (always read-only)
   view.sh          status / list / info / digest (+ digests)
@@ -496,7 +499,7 @@ modules/
 docs/
   architecture.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
   export-analysis.md  decision log of the export redesign
-install.sh         copies modules+tests, symlinks the CLI
+install.sh         copies src/, symlinks the CLI
 uninstall.sh       removes the install (keeps data unless --all)
 tests/
   make_fake_db.sh  generates a fake DB for the tests

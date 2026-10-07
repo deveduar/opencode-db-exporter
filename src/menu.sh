@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# menu.sh — fzf TUI for opencode-db. Split into modules/menu/.
+# menu.sh — fzf TUI for opencode-db. Split into src/menu/.
 
 for _m in core backups sessions export exports shrink; do
     . "$SCRIPT_DIR/menu/${_m}.sh"

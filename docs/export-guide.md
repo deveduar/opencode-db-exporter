@@ -94,11 +94,11 @@ Products run, by default, with their plain defaults:
 
 These are the defaults a plan that configures nothing inherits. To repeat a configured
 combination again and again (and to run **several products under one stamp**) define a **plan** in
-`~/.config/opencode-db/presets.json` (created from `presets.json.example` at install;
+`~/.config/opencode-db/presets.json` (created from the shipped `presets.json` at install;
 schema documented in `docs/schemas.md` and machine-checkable in
 `generated/presets.schema.json`).
 
-The **shipped plans** (exactly what `presets.json.example` contains) are named after
+The **shipped plans** (exactly what the repo's `presets.json` contains) are named after
 their purpose:
 
 | plan | products | purpose | relative size |

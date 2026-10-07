@@ -77,6 +77,15 @@ def merged_presets() -> dict:
     return presets
 
 
+def operation_flags(cfg: dict) -> list[str]:
+    """Return the list of CLI flags representing the operations in a cfg dict.
+    Single source of truth for mapping cfg keys to --flags (last-wins on CLI)."""
+    args: list[str] = []
+    if cfg.get("strip_reasoning"):
+        args.append("--strip-reasoning")
+    return args
+
+
 def bake_args(name: str) -> list[str]:
     """Resolve a recipe into raw cross-flag arguments for the bash parser
     (operations only). `shrink <name>` prepends these BEFORE the user's flags
@@ -86,10 +95,7 @@ def bake_args(name: str) -> list[str]:
         known = ", ".join(sorted(presets))
         die(f"unknown shrink recipe/preset '{name}' — known: {known}")
     cfg = presets[name]
-    args: list[str] = []
-    if cfg.get("strip_reasoning"):
-        args.append("--strip-reasoning")
-    return args
+    return operation_flags(cfg)
 
 
 def selection_lines(cfg: dict) -> list[str]:

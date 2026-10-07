@@ -40,20 +40,20 @@ if MODULES_DIR not in sys.path:
 try:
     from shrinklib.presets import (
         bake_args,
-        load_shrink_presets,
         merged_presets,
         op_lines,
+        operation_flags,
         rule_lines,
         rule_tags,
     )
     from shrinklib.flags import SHRINK_PRESET_PURPOSE
 except ImportError:
-    # fallback for in-place execution (python3 modules/shrinklib/plan.py ...)
+    # fallback for in-place execution (python3 src/shrinklib/plan.py ...)
     from presets import (
         bake_args,
-        load_shrink_presets,
         merged_presets,
         op_lines,
+        operation_flags,
         rule_lines,
         rule_tags,
     )
@@ -103,19 +103,12 @@ def plan_text(name: str) -> str:
 
 def ops_flags(strip: bool) -> str:
     """Raw flags for a toggled operation set (the space to forward to `shrink`)."""
-    return " ".join(bake_args_from_cfg(ops_cfg(strip)))
+    return " ".join(operation_flags(ops_cfg(strip)))
 
 
 def ops_text(strip: bool) -> str:
     """Human lines for a toggled operation set (empty = no operation)."""
     return " + ".join(op_lines(ops_cfg(strip)))
-
-
-def bake_args_from_cfg(cfg: dict) -> list[str]:
-    args: list[str] = []
-    if cfg.get("strip_reasoning"):
-        args.append("--strip-reasoning")
-    return args
 
 
 def _cli() -> int:

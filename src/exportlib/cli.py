@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Self-bootstrapping entry (like shrinklib/plan.py): running this file directly
-# adds modules/ to sys.path so the `exportlib` imports below resolve. The old
-# modules/export.py shim existed only for this; it has been removed.
+# adds src/ to sys.path so the `exportlib` imports below resolve. The old
+# src/export.py shim existed only for this; it has been removed.
 MODULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)

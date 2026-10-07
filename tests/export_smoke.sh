@@ -4,7 +4,7 @@
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MOD="$TESTS_DIR/../modules"
+MOD="$TESTS_DIR/../src"
 TMP="$(mktemp -d /tmp/opencode-db-smoke-XXXXXX)"
 # Only the TOP-LEVEL shell may delete $TMP: bash runs an inherited EXIT trap in
 # EVERY subshell, so one dying subshell would otherwise `rm -rf` the fixture
@@ -20,6 +20,10 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$BK"
+# Hermetic config: a missing OCED_CONF keeps the suite independent of the
+# developer's ~/.config AND of the repo-shipped portable conf (env > conf; the
+# portable-detection tests below override this with env -u OCED_CONF ...).
+export OCED_CONF="$TMP/missing-conf.conf"
 
 pass=0; fail=0
 ok() { echo "  [OK]   $1"; pass=$((pass+1)); }
@@ -89,6 +93,64 @@ PREC=$(OCED_CONF="$CONF" OCED_FROM_BACKUP="env-backup.db" bash -c '. "$1"; print
 [ "$PREC" = "env-backup.db" ] && ok "env OCED_FROM_BACKUP beats conf" || bad "precedence from-backup: $PREC"
 PREC=$(env -u OCED_OUT OCED_CONF="$CONF" bash -c '. "$1"; printf "%s" "$OCED_OUT"' _ "$MOD/common.sh")
 [ "$PREC" = "$TMP/from-conf" ] && ok "conf value applies when the env does not set it" || bad "conf applies: $PREC"
+
+echo "== portable: repo-shipped config (no install) =="
+# The shipped real files are the SOLE source of truth (there are no .example
+# copies to drift from anymore), so the guards validate them directly.
+PORT_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+PORT_JSON="$PORT_ROOT/presets.json"
+PORT_CONF="$PORT_ROOT/opencode-db.conf"
+python3 "$TESTS_DIR/validate_schema.py" "$TESTS_DIR/../generated/presets.schema.json" "$PORT_JSON" >/dev/null 2>&1 \
+    && ok "shipped presets.json satisfies presets.schema.json" || bad "shipped presets.json vs schema"
+[ -s "$PORT_JSON" ] && [ -s "$PORT_ROOT/shrink-presets.json" ] && [ -s "$PORT_CONF" ] \
+    && ok "shipped conf/presets are non-empty files" || bad "shipped config files missing/empty"
+
+# Fake HOME with NO .config/opencode-db: the repo files are the defaults and the
+# data dirs live inside the repo (gitignored). OCED_CONF must be unset so the
+# default resolution runs; env -u strips the hermetic export above.
+FAKEHOME="$TMP/fakehome"
+mkdir -p "$FAKEHOME"
+PORT_DEFAULTS=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS -u OCED_SHRINK_PRESETS \
+    bash -c '. "$1"; printf "%s\n%s\n%s\n" "$OCED_CONF" "$OCED_OUT" "$OCED_BACKUP_DIR"' _ "$MOD/common.sh")
+POC=$(printf '%s\n' "$PORT_DEFAULTS" | sed -n 1p)
+POUT=$(printf '%s\n' "$PORT_DEFAULTS" | sed -n 2p)
+PBK=$(printf '%s\n' "$PORT_DEFAULTS" | sed -n 3p)
+[ "$POC" = "$PORT_CONF" ] && ok "portable OCED_CONF resolves to the repo conf" || bad "portable OCED_CONF: $POC"
+[ "$POUT" = "$PORT_ROOT/exports" ] && ok "portable OCED_OUT defaults into the repo" || bad "portable OCED_OUT: $POUT"
+[ "$PBK" = "$PORT_ROOT/backups" ] && ok "portable OCED_BACKUP_DIR defaults into the repo" || bad "portable OCED_BACKUP_DIR: $PBK"
+
+# End-to-end: the repo presets are actually usable — `archive` exists only in the
+# shipped presets.json, so resolving it proves the portable default kicked in.
+PO="$TMP/po"
+mkdir -p "$PO"
+PORT_RUN=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS -u OCED_SHRINK_PRESETS \
+    OPENCODE_DB="$FAKE" OCED_OUT="$PO" bash "$MOD/opencode-db.sh" export archive --sessions ses_A0001 2>&1)
+[ -n "$(find "$PO" -name metadata.json 2>/dev/null | head -1)" ] \
+    && ok "portable export resolves the repo presets (archive)" \
+    || bad "portable export: $(printf '%s' "$PORT_RUN" | tail -2)"
+
+# A user ~/.config presets file beats the repo-shipped one (the repo is only the
+# no-install fallback, exactly what the precedence promise says).
+mkdir -p "$FAKEHOME/.config/opencode-db"
+printf '{"presets":{"myhome":{"product":"memory"}}}\n' > "$FAKEHOME/.config/opencode-db/presets.json"
+PO2="$TMP/po2"
+mkdir -p "$PO2"
+PORT_HOME=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS -u OCED_SHRINK_PRESETS \
+    OPENCODE_DB="$FAKE" OCED_OUT="$PO2" bash "$MOD/opencode-db.sh" export myhome --sessions ses_A0001 2>&1)
+[ -n "$(find "$PO2" -name metadata.json 2>/dev/null | head -1)" ] \
+    && ok "a user ~/.config preset wins over the repo file" \
+    || bad "home preset precedence: $(printf '%s' "$PORT_HOME" | tail -2)"
+
+# An install prefix ships the src tree only, never a repo-config copy, so it must
+# NOT go portable: defaults stay in ~/. local/share/opencode-db-exporter/.
+PFX2="$TMP/prefix"
+mkdir -p "$PFX2"
+cp -r "$TESTS_DIR/../src" "$PFX2/src"
+NPFX=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS \
+    bash -c '. "$1"; printf "%s" "$OCED_OUT"' _ "$PFX2/src/common.sh")
+[ "$NPFX" = "$FAKEHOME/.local/share/opencode-db-exporter/exports" ] \
+    && ok "an install prefix without the repo conf stays non-portable" \
+    || bad "prefix portable leak: $NPFX"
 
 echo "== the guide is gone =="
 # The interactive guide was removed: its three steps are the pickers (exports /
@@ -634,9 +696,9 @@ echo "== shrink discard hint: the CASCADE, not the roots =="
 # exports 1 session and 0 subagents). Handing over only the roots exported 2 of
 # the 7 sessions the copy was about to drop — silently, because the export still
 # succeeded with plausible counts. So the hint (and the menu offer) must carry
-# the closed set. OCED_PRESETS is pinned to the shipped example so `archive`
+# the closed set. OCED_PRESETS is pinned to the shipped presets so `archive`
 # resolves deterministically instead of depending on ~/.config.
-EX_PRESETS="$TESTS_DIR/../presets.json.example"
+EX_PRESETS="$TESTS_DIR/../presets.json"
 drun() { # drun <profile|-> <args...> -> shrink run output with that profile
     local p="$1"; shift
     if [ "$p" = "-" ]; then
@@ -750,9 +812,9 @@ run shrink nosuchrecipe >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] && ok "unknown shrink recipe -> non-zero rc ($rc)" || bad "unknown recipe rc"
 run shrink lean >/dev/null || bad "shrink lean still works with a custom file"
 unset OCED_SHRINK_PRESETS
-# the shipped example must satisfy the generated schema
-python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json shrink-presets.json.example >/dev/null 2>&1 \
-    && ok "shipped shrink-presets.json.example satisfies shrink.schema.json" || bad "example vs shrink schema"
+# the shipped shrink-presets.json must satisfy the generated schema
+python3 "$TESTS_DIR/validate_schema.py" generated/shrink.schema.json "$TESTS_DIR/../shrink-presets.json" >/dev/null 2>&1 \
+    && ok "shipped shrink-presets.json satisfies shrink.schema.json" || bad "shipped shrink presets vs schema"
 
 # A KEEP RULE inside a recipe is rejected (a recipe carries operations ONLY) and
 # the schema rejects it too. It gets its own file: an invalid recipe poisons all.
@@ -1082,9 +1144,9 @@ export OCED_PRESETS="$PRESETS"
 
 echo "== presets.schema.json contract (generated/) =="
 SCHEMA="$TESTS_DIR/../generated/presets.schema.json"
-EXAMPLE="$TESTS_DIR/../presets.json.example"
+EXAMPLE="$TESTS_DIR/../presets.json"
 python3 "$TESTS_DIR/validate_schema.py" "$SCHEMA" "$EXAMPLE" >/dev/null 2>&1 \
-    && ok "presets.json.example satisfies presets.schema.json" || bad "example vs schema"
+    && ok "shipped presets.json satisfies presets.schema.json" || bad "shipped presets vs schema"
 # Anti-drift: generated/presets.schema.json + generated/flags-table.md must equal what
 # scripts/generate_schema.py produces (imported directly, so stdout stays clean)
 python3 -c "
@@ -1102,7 +1164,7 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 sys.exit(0 if open('$TESTS_DIR/../generated/flags-table.md').read() == m.flags_table() + '\n' else 1)
 " >/dev/null 2>&1 && ok "generated/flags-table.md matches scripts/generate_schema.py --docs (no drift)" || bad "flags-table drift vs generate_schema.py --docs"
 # Anti-drift #3: the presets snippet the README prints must EQUAL the shipped
-# example. The README claimed `share` was sanitized for months after the example
+# presets.json. The README claimed `share` was sanitized for months after the file
 # dropped `sanitize` (docs/export-analysis.md §33): a user could have published
 # secrets believing they were redacted. A doc cannot be allowed to lie about a
 # flag, so the two files are compared instead of trusted.
@@ -1111,29 +1173,29 @@ import json, re, sys
 md = open('$TESTS_DIR/../README.md').read()
 blocks = [b for b in re.findall(r'\`\`\`json\n(.*?)\`\`\`', md, re.S) if '\"presets\"' in b]
 sys.exit(0 if len(blocks) == 1 and json.loads(blocks[0]) == json.load(open('$EXAMPLE')) else 1)
-" >/dev/null 2>&1 && ok "the README presets snippet equals presets.json.example (no doc drift)" || bad "README presets snippet drifted from presets.json.example"
+" >/dev/null 2>&1 && ok "the README presets snippet equals the shipped presets.json (no doc drift)" || bad "README presets snippet drifted from the shipped presets.json"
 cat > "$TMP/schema-bad.json" <<'EOF'
 {"presets": {"double": {"product": "transcript", "products": {"memory": {}}}}}
 EOF
 python3 "$TESTS_DIR/validate_schema.py" "$SCHEMA" "$TMP/schema-bad.json" >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] && ok "schema rejects a product+products mix" || bad "schema negative"
-echo "== shipped presets.json.example end-to-end (archive/quick/share) =="
+echo "== shipped presets.json end-to-end (archive/quick/share) =="
 export OCED_PRESETS="$EXAMPLE"
 run export archive >/dev/null
 EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
 [ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ ! -d "$EJSTAMP/digest" ] \
-    && ok "example 'archive' runs transcript+memory under one stamp" || bad "example archive dirs"
+    && ok "shipped 'archive' runs transcript+memory under one stamp" || bad "shipped archive dirs"
 jq -e '.preset == "archive" and .tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
-    && ok "example archive transcript flags applied" || bad "example archive meta"
+    && ok "shipped archive transcript flags applied" || bad "shipped archive meta"
 run export quick >/dev/null
 DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}"
 [ -d "$DBUGSTAMP/transcript" ] && [ -d "$DBUGSTAMP/memory" ] && [ ! -d "$DBUGSTAMP/digest" ] \
-    && ok "example 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "example quick dirs"
+    && ok "shipped 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "shipped quick dirs"
 jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcript/metadata.json" >/dev/null \
-    && ok "example quick uses truncated tool output (light variant)" || bad "example quick meta"
+    && ok "shipped quick uses truncated tool output (light variant)" || bad "shipped quick meta"
 run export share >/dev/null
 jq -e '.preset == "share" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
-    && ok "example 'share' applies its single-product flags (no sanitize)" || bad "example share meta"
+    && ok "shipped 'share' applies its single-product flags (no sanitize)" || bad "shipped share meta"
 export OCED_PRESETS="$PRESETS"
 
 echo "== shrink --swap (guarded replacement of the live fake DB) =="

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the versioned artifacts under generated/ from FLAGS (+ SHRINK_FLAGS).
 
-Single source of truth: modules/exportlib/flags.py (presets) and
-modules/shrinklib/flags.py (shrink). Whenever FLAGS/SHRINK_FLAGS change, run
+Single source of truth: src/exportlib/flags.py (presets) and
+src/shrinklib/flags.py (shrink). Whenever FLAGS/SHRINK_FLAGS change, run
 this script and commit the generated artifacts:
     python3 scripts/generate_schema.py            # rewrites the schema .json files
     python3 scripts/generate_schema.py --docs     # rewrites the flags-table .md files (also prints them)
@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "modules"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from exportlib.flags import (
     CLI_ONLY_KEYS,
     FLAGS,

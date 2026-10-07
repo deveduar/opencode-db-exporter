@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# opencode-db.sh — dispatcher: wires the subcommands to the modules in this folder.
+# opencode-db.sh — dispatcher: wires the subcommands to the shell modules in this folder.
 # A standalone tool to inspect, back up and export the local opencode database,
 # useful also when opencode itself fails or sessions disappear.
 
@@ -106,16 +106,22 @@ Named presets (presets file, source of truth for the menu and the CLI):
                      override the preset. 'export transcript'/'memory'/'digest'
                      always mean the product (its aliases and flags are unchanged).
 
-Configuration (env > conf file > built-in default):
+Configuration (env > conf file > per-file default; running from a repo checkout,
+the repo-shipped conf/presets are used unless ~/.config/opencode-db has its own):
   OPENCODE_DB       SQLite database (default ~/.local/share/opencode/opencode.db;
                     WSL with native-Windows opencode: /mnt/c/Users/<user>/.../opencode.db)
-  OCED_OUT          export output root (default ~/.local/share/opencode-db-exporter/exports)
-  OCED_BACKUP_DIR   backup folder (default ~/.local/share/opencode-db-exporter/backups)
+  OCED_OUT          export output root (default ~/.local/share/opencode-db-exporter/exports,
+                    or ./exports in the repo)
+  OCED_BACKUP_DIR   backup folder (default ~/.local/share/opencode-db-exporter/backups,
+                    or ./backups in the repo)
   OCED_COMPRESS     1 gzip backups (default) / 0 raw
   OCED_LOG         1 appends an activity log (backup/prune/shrink) to OCED_ACTIVITY_LOG
-  OCED_CONF         config file (default ~/.config/opencode-db/opencode-db.conf)
-  OCED_PRESETS      export presets file (default ~/.config/opencode-db/presets.json)
-  OCED_SHRINK_PRESETS shrink presets file (default ~/.config/opencode-db/shrink-presets.json)
+  OCED_CONF         config file (default ~/.config/opencode-db/opencode-db.conf,
+                    else the repo-shipped opencode-db.conf)
+  OCED_PRESETS      export presets file (default ~/.config/opencode-db/presets.json,
+                    else the repo-shipped presets.json)
+  OCED_SHRINK_PRESETS shrink presets file (default ~/.config/opencode-db/shrink-presets.json,
+                    else the repo-shipped shrink-presets.json)
 
 Global flag (must precede subcommand):
   --from-backup <file>   use a stored backup as the DB source (read-only).

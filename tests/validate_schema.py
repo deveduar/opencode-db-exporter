@@ -9,7 +9,7 @@ boolean/array), `properties`, `patternProperties`, `additionalProperties`,
 Usage: validate_schema.py <schema.json> <instance.json>  (exit 0/1)
 
 Test-only tool: keeps the smoke suite dependency-free (stdlib only) while still
-verifying that presets.json.example and shrink-presets.json.example satisfy the
+verifying that presets.json and shrink-presets.json satisfy the
 generated schemas.
 """
 import json

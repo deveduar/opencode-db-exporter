@@ -6,7 +6,7 @@
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MOD="$TESTS_DIR/../modules"
+MOD="$TESTS_DIR/../src"
 TMP="$(mktemp -d /tmp/opencode-db-menu-XXXXXX)"
 # Only the TOP-LEVEL shell may delete $TMP. bash runs an inherited EXIT trap in
 # EVERY subshell, so one dying subshell (an unbound variable under `set -u`, an
@@ -23,6 +23,7 @@ export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$TMP/backups"
 export OCED_PRESETS="$TMP/no-presets.json" # hermetic: ignore any real ~/.config presets
 export OCED_SHRINK_PRESETS="$TMP/no-shrink-presets.json" # hermetic: built-in shrink recipes only
+export OCED_CONF="$TMP/missing-conf.conf" # hermetic: ignore the repo-shipped portable conf
 export OCED_DISPATCHER="$MOD/opencode-db.sh"
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
@@ -381,7 +382,7 @@ export OCED_PRESETS="$TMP/no-presets.json"
 rm -f "$OCED_PRESETS"
 GUIDE=$(oc_export_picker)
 [ ! -s "$CALLS" ] && ok "no-presets export picker dispatches nothing" || bad "no-presets export picker ran a command: $(cat "$CALLS")"
-printf '%s' "$GUIDE" | grep -q 'presets.json.example' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
+printf '%s' "$GUIDE" | grep -q 'presets.json' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
 printf '%s' "$GUIDE" | grep -q 'export transcript|memory|digest' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
 [ -z "$(oc_export_rows)" ] && ok "export rows empty without presets (no manual fallback)" || bad "export rows: $(oc_export_rows)"
 

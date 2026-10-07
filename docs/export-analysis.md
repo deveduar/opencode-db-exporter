@@ -51,12 +51,12 @@ Implemented with `--sessions` (query `sessions IN (…)`) and `metadata.json.pre
 
 ## 9. Refactor to the `exportlib` package (later decision)
 
-`modules/export.py` went from a monolith (~1075 lines) to an **entry shim** (4 lines) +
-the package `modules/exportlib/` (`util`/`config`/`sanitize`/`presets`/`db`/`render`/
+`src/export.py` went from a monolith (~1075 lines) to an **entry shim** (4 lines) +
+the package `src/exportlib/` (`util`/`config`/`sanitize`/`presets`/`db`/`render`/
 `transcript`/`faithful`/`memory`/`writers`/`cli`; version in `exportlib/__init__.py`).
 Purely mechanical refactor: same behavior, same test suites, zero new dependencies.
-`export.sh` calls `modules/exportlib/cli.py` directly — the entry is self-bootstrapping
-(it adds `modules/` to `sys.path` when run as a script), so the `export.py` shim has since
+`export.sh` calls `src/exportlib/cli.py` directly — the entry is self-bootstrapping
+(it adds `src/` to `sys.path` when run as a script), so the `export.py` shim has since
 been removed. This document keeps §1 as the historical state of the code before
 the redesign.
 
@@ -106,7 +106,7 @@ bundle subfolder is byte-identical to a standalone run (own `index.md` + `metada
 recording the preset name) and `exports list` aggregates the stamp as
 `transcript+memory`. The parent writes an `index.md` at the stamp root. The menu gets it
 for free: the preset-first picker renders bundle presets as `[transcript+memory]` and runs
-`export <name>`. `presets.json.example` ships `archive` (lossless transcript+memory),
+`export <name>`. The shipped `presets.json` provides `archive` (lossless transcript+memory),
 `quick` (the light transcript+memory variant: json, *truncated* tool output) and `share`
 (sanitize/publish) — this replaces the removed `__FULLMEM__` bundle with the same capability,
 but expressed as data (source of truth) instead of menu code.
@@ -236,7 +236,7 @@ folder, extracting archivable info) is deferred too — "proceed with the plan".
 
 - **Export menu is preset-ONLY (no manual fallback)** — §14 shipped the manual flow still
   as the no-presets fallback; this iteration closes that gap: `oc_export_picker` without a
-  presets file now prints setup guidance (`cp "$SCRIPT_DIR/../presets.json.example"
+  presets file now prints setup guidance (`cp "$SCRIPT_DIR/../presets.json"
   "$OCED_PRESETS"`) and the raw CLI line, and dispatches nothing. `oc_pick_product`,
   `oc_export_flow` and `oc_export_manual_picker` are deleted; `oc_export_manual_rows` was
   renamed `oc_selection_rows` (the session/ALL rows reused by every preset run).
@@ -314,7 +314,7 @@ The shrink recipes (`lean`/`recent`/`full`/`bare` + custom) were extracted from
 `shrink.sh`/`menu.sh` literals into a python SSoT mirroring the export-presets
 architecture (user confirmed the 4-decision plan: "procede"):
 
-- **`modules/shrinklib/` — the shrink SSoT** — `flags.py` owns the recipe flags
+- **`src/shrinklib/` — the shrink SSoT** — `flags.py` owns the recipe flags
   (`keep`/`older_than`/`since`/`keep_all`/`keep_sessions`/`discard_sessions` +
   `strip_reasoning`) + the built-in plans (`DEFAULT_SHRINK_PRESETS`:
   `lean`=`keep 10 + strip`, `recent`=`older_than 90`, `full`=`keep_all + strip`,
@@ -390,8 +390,8 @@ and the export entry/naming + shrink help strings were unified.
   `oc_confirm_typed "confirm"` (extracted from the now-removed guide.sh, now reused by both) hands the
   path to `oced_shrink_swap` (pre-shrink WAL-safe snapshot + rollback unchanged).
   `__VERIFY__` stays as the manager's `shrinks verify`.
-- **Naming** — `modules/export.py` (a 4-line shim) is **gone**: `exportlib/cli.py` is
-  self-bootstrapping (adds `modules/` to sys.path when run directly, mirroring
+- **Naming** — `src/export.py` (a 4-line shim) is **gone**: `exportlib/cli.py` is
+  self-bootstrapping (adds `src/` to sys.path when run directly, mirroring
   `shrinklib/plan.py`), `export.sh` calls `python3 "$SCRIPT_DIR/exportlib/cli.py"`, and
   `run_bundle()` re-executes `exportlib/cli.py <product> …`. The `shrink --help` +
   `shrink presets` block is now single-sourced in python: `shrinklib/flags.py` gained
@@ -399,8 +399,8 @@ and the export entry/naming + shrink help strings were unified.
   back in the dispatcher before), and the bash `criteria` case in `shrink.sh` delegates
   to the new `plan.py rule-line <rule> [value] [strip]` (same human phrases as
   `rule_lines()`).
-- **Misc** — `install.sh` ships `shrink-presets.json.example` to the prefix;
-  `presets.json.example` showcases `snapshot:"fresh"` + `sessions`/`filter` selection.
+- **Misc** — `install.sh` ships only `src/` (no tests/docs/generated, no config — §38);
+  the shipped `presets.json` showcases `snapshot:"fresh"` + `sessions`/`filter` selection.
 - **Verified** — `tests/menu_flow.sh` gained the custom base+tunings flows, the
   sessions toggle matrix (ALL/NONE/LAST-2/OLDEST-1/single-toggle/EMPTY guard),
   the SWAP fresh/stale/typo cases (`oced_shrink_swap` stubbed, `opencode.shrunk.db`
@@ -595,7 +595,7 @@ were designed. They are gone now, and the reason is worth keeping:
   value. Three shapes of the same fact, all derived from `util.selection_rule()`.
 - **The confirmation stopped being decorative.** `Filter: (preset as configured)` was
   true only when the preset had no selection of its own — the exact case the shipped
-  `presets.json.example` does not contain (`this_week` pins a `filter`, `one_session`
+  shipped `presets.json` does not contain (`this_week` pins a `filter`, `one_session`
   pins `sessions`), so a user who marked everything and picked `this_week` got a plan
   that said "ALL sessions" and a run that was neither. `oc_preset_run` now asks
   `plan.py selection` / `plan.py subagents` and prints `Sessions:` (who wins, and that
@@ -779,7 +779,7 @@ phrase is on a line of its own. Mutation-checked: restoring the `+`, restoring t
 
 ## §27 The guide is removed; the pickers ARE the workflow (current)
 
-The interactive `guide` (`opencode-db guide` + the root menu entry) is **deleted**: `modules/guide.sh`,
+The interactive `guide` (`opencode-db guide` + the root menu entry) is **deleted**: `src/guide.sh`,
 its dispatcher wiring and its menu row are gone from both paths, and a smoke assertion keeps it gone
 (a silent alias would still leave the wizard on disk).
 
@@ -1057,7 +1057,7 @@ before the process exits", which no stub can fake and no pipe can show. `script 
 *when* each chunk arrived: with `tee` the plan lands at ~0.01 s, with `out=$(…)` it lands at
 ~2.0 s, together with the answer — 4 ms and 2 s apart, unambiguous. It is skipped loudly when
 `script` is missing, and two structural guards back it up (`core.sh` may not contain
-`out=$(bash "$OC_DISPATCHER"`, and no bare `run_oced_tool backup` may exist in `modules/menu/`),
+`out=$(bash "$OC_DISPATCHER"`, and no bare `run_oced_tool backup` may exist in `src/menu/`),
 because a guard that only runs where `script` exists would be a guard that silently does not.
 
 **The general rule.** *A menu action is not done when the command returns; it is done when the
@@ -1122,9 +1122,9 @@ ratchet holding the corpse in place.
 
 **The recurrence guard: the README snippet is now compared, not trusted.** `export_smoke.sh`
 grows a third anti-drift check next to the two `generate_schema.py` ones: it extracts the single
-`json` block the README prints and asserts it **equals** `presets.json.example`. The reason is the
+`json` block the README prints and asserts it **equals** the shipped `presets.json`. The reason is the
 shape of the bug itself — nothing in the build could ever catch it, because a doc that misdescribes
-the shipped example is perfectly valid JSON. A doc is only trustworthy about a flag when something
+the shipped presets is perfectly valid JSON. A doc is only trustworthy about a flag when something
 machine-checksable stands between it and the reader, and there are now three such things in a row:
 the schema, the generated artifacts, and this snippet. It is the one assertion in the suite that
 fails on prose, which is exactly the category that had been drifting.
@@ -1167,7 +1167,7 @@ a `--no-plan` flag the menu passes: new public surface, for a meaning `--yes` al
 
 **The same confusion, one level down, fixed by renaming rather than suppressing.** The shrink
 wizard prints its own read-only plan (`-> shrink plan (read-only counts — nothing is written yet)`,
-`modules/menu/shrink.sh`) and then the engine printed `== shrink plan ==` — same name, same screen,
+`src/menu/shrink.sh`) and then the engine printed `== shrink plan ==` — same name, same screen,
 one decision. Here the two blocks carry *different* facts (live-DB counts and the effective command
 vs. criteria / would-keep / would-delete / size on the real snapshot), so suppressing the engine's
 would have thrown away evidence that the copy matched the plan. The header now names the mode:
@@ -1234,7 +1234,7 @@ per-decision. `OCED_SHRINK_DISCARD_EXPORT_PROFILE` was already the hook for it �
 already broken: it appeared in **no** other file (not the conf example, not the README,
 not the docs) and was missing from `load_conf`'s env-snapshot list, so a value in the
 conf file silently overrode an exported one, inverting the documented env > conf
-precedence. It is now documented in `opencode-db.conf.example`, in the snapshot list, and
+precedence. It is now documented in the shipped `opencode-db.conf`, in the snapshot list, and
 validated by `o_shrink_discard_profile` against `o_export_profiles` (products ∪ preset
 names, asked from `exportlib/plan.py` so a new product or preset shows up for free). An
 invalid name is reported **where the command is printed**, with the valid list, and falls
@@ -1329,3 +1329,65 @@ The test suite pins:
 The old recency rows (`__LAST__`/`__OLDEST__`/`__DAYS__`) were also removed from the
 sessions picker (§19) — a row that re-computes "the N newest" at run time is a selection,
 not a marking. Recency is `--last`/`--since` on the CLI.
+
+### §37 Portable mode: the repo IS the config (confirmed)
+
+Running the tool straight from a checkout was already supported (no install), but the
+config came from `~/.config/opencode-db/` — a portable clone would quietly READ the
+machine's real presets and WRITE exports into `~/.local/share/opencode-db-exporter/`.
+That is a configuration drawer, not a sandbox.
+
+The fix: **the repo ships its own config.** `opencode-db.conf`, `presets.json` and
+`shrink-presets.json` exist at the repo root and are the single source of truth
+(§38 deleted the redundant `.example` copies), and running `bash src/opencode-db.sh …`
+from the checkout auto-discovers them (`OCED_PORTABLE=1` when the resolved `OCED_CONF`
+IS the repo-shipped conf). The data dirs default into the repo (`./exports`, `./backups`,
+`./activity.log`, gitignored), so a clone is fully local.
+
+Decisions locked:
+
+1. **The shipped files are their own truth.** No `.example` twins to drift — the suite
+   asserts they exist and are non-empty, validates `presets.json`/`shrink-presets.json`
+   against their schemas, and the README presets-snippet guard (§33) now compares against
+   the shipped file. §33 proved a doc cannot be trusted about a flag; the same rule now
+   applies to the shipped file itself.
+2. **`~/.config` always wins.** The repo file is the fallback, never the override: a
+   user who has their own conf/presets keeps them, even on the same machine where the
+   repo lives. Resolution per file: home → repo → built-in (and env > conf as always).
+3. **An install prefix never goes portable.** `install.sh` ships only `src/` (§38), so
+   the repo-root conf does not exist in an install and `OCED_PORTABLE` stays 0. Pinned
+   by a negative test that copies `src/` to a `$TMP/prefix` and asserts the exports
+   default stays in `~/.local/share/...`.
+4. **The repo conf is read, never chmod'ed.** `load_conf` skips the 600-chmod on the
+   repo-shipped conf (a portable run must not dirty git); a home conf still gets it.
+5. **The hermetic suites pin `OCED_CONF` to a missing temp path.** `export_smoke.sh`
+   already pinned the output dirs and presets; it now also pins the conf, so neither the
+   developer's `~/.config` nor the repo-shipped conf can leak into a run. The portable
+   tests themselves use `env -u OCED_CONF …` to re-open the default resolution.
+
+The menu's no-presets guidance is untouched: it only fires when `$OCED_PRESETS` does not
+exist, which is impossible in a portable checkout (the repo file exists).
+
+### §38 The repo is `src/`, installs are src-only, and the `.example` twins are gone (confirmed)
+
+§37 shipped real config files next to the `.example` templates and guarded the two with
+`cmp` — three pairs, three assertions, plus a home for every twin. Nothing else needed
+them, so the whole layer got deleted:
+
+1. **`modules/` is `src/` again.** The module tree is renamed `src/` (git sees it as a
+   fresh rename; `OCED_REPO_ROOT="${SCRIPT_DIR%/src}"`). The `modules/` name only ever
+   appeared in internal comments and the docs, which now say `src/`.
+2. **The `.example` files are deleted.** `opencode-db.conf`, `presets.json`,
+   `shrink-presets.json` were byte-identical to their twins by construction and are now
+   the only shipped copies. The three `cmp` anti-drift asserts became one "shipped files
+   are non-empty" check; schema validation and the README-snippet guard already target
+   the shipped files (§37.1).
+3. **`install.sh` copies only `src/`.** The prefix gets the module tree, `uninstall.sh`
+   and `LICENSE` — no `tests/`, no `scripts/`/`generated/`, no `docs/`, no config
+   (install always did skip docs; the suite has always run from the checkout). The home
+   conf/presets are created by copying the repo's shipped real files when missing, so
+   `~/.config/opencode-db/` keeps the exact docs/presets the repo documents. An install
+   prefix still ships no repo conf → still never portable (§37.3).
+4. **The guidance commands tell users about the shipped files.** The menu's no-presets
+   hint and the docs say `cp presets.json …` (or `opencode-db.conf`), never
+   `.example`.

@@ -46,14 +46,22 @@ describe an invented schema):
   `metadata.json` (markers vs summaries) and are the reason the **product** is named
   `digest`: it only ever wrote digests. `compactions` survives as a deprecated alias
   (`PRODUCT_ALIASES`, normalised at resolve time) — see `docs/export-analysis.md`.
-- Config precedence: **env > conf file > default** (`load_conf` in `common.sh` snapshots
-  the variables before sourcing `$OCED_CONF`).
+- Config precedence: **env > conf file > per-file default** (`load_conf` in `common.sh` snapshots
+  the variables before sourcing `$OCED_CONF`). The per-file default is `~/.config/opencode-db/<file>`
+  if present, else the repo-shipped copy when running portably, else the built-in.
+- **Portable mode**: running the CLI from a checkout that ships real config (`opencode-db.conf`,
+  `presets.json`, `shrink-presets.json` — there are no `.example` copies anymore, these files
+  ARE the single source of truth) goes `OCED_PORTABLE=1` and reads those files directly: the
+  data dirs default into the repo (`<repo>/{exports,backups,activity.log}`, gitignored) and the
+  repo conf is read without the `chmod 600` an installed conf gets. An install prefix ships no
+  config (install.sh copies only `src/`), so it never goes portable. A user
+  `~/.config/opencode-db` file always wins over the repo copy.
 
 ## 3. Export pipeline
 
 `export.sh` is a "bash → python" bridge: it validates dependencies/DB and delegates to the
-`exportlib` package (`modules/exportlib/cli.py` is the self-bootstrapping CLI entry — the old
-`modules/export.py` shim is gone), which is the only SQLite reader. There is no fork toward
+`exportlib` package (`src/exportlib/cli.py` is the self-bootstrapping CLI entry — the old
+`src/export.py` shim is gone), which is the only SQLite reader. There is no fork toward
 the opencode CLI (the CLI offers no `session export` and
 its environment filters would hide sessions; reading the DB directly in `mode=ro` is what
 guarantees seeing everything).
@@ -74,7 +82,7 @@ ignores it (documented in its `index.md`).
 
 The product × flags combination is folded into a **presets** file (JSON in `OCED_PRESETS`,
 default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
-`install.sh` auto-creates it from `presets.json.example` when missing). A preset pins
+`install.sh` auto-creates it from the shipped `presets.json` when missing). A preset pins
 `product` + its config flags + optionally the selection (`filter` LIKE **or** exact
 `sessions`, never both). It is the source of truth for both the CLI and the menu:
 
@@ -208,9 +216,9 @@ any token outside the allow-list, on `[>]` outside a flow row, on `[?]` outside 
 inspect row and on a toggle without `[*]`, and asserts the sample is non-vacuous.
 
 **`menu.sh` is a dispatcher, not a monolith.** It holds `run_menu`/`choose_action`/
-`oc_fzf_sel` and sources the per-domain flows from `modules/menu/`
+`oc_fzf_sel` and sources the per-domain flows from `src/menu/`
 (`backups.sh`, `sessions.sh`, `export.sh`, `exports.sh`, `shrink.sh`), with the shared
-multi-mark picker in `modules/menu/core.sh`. That picker is **one generic function**
+multi-mark picker in `src/menu/core.sh`. That picker is **one generic function**
 (`oc_session_picker`) parameterised through a `cfg` nameref, so the three session
 screens cannot drift apart:
 
@@ -262,7 +270,7 @@ then passes `--yes` so no command ever asks anything from inside a menu call. Th
 backup it launched used to ask a second, invisible one. This is untestable by stubs and by
 non-TTY runs (`run_oced_tool` is stubbed in `menu_flow.sh`, and every real prompt sits
 behind `[ -t 0 ]`), so it is guarded structurally — no `out=$(bash "$OC_DISPATCHER"`, no
-bare `run_oced_tool backup` in `modules/menu/` — plus by a `script -t` pty test that
+bare `run_oced_tool backup` in `src/menu/` — plus by a `script -t` pty test that
 measures *when* the first output chunk reaches the screen (~0.01 s streaming vs ~2 s
 captured).
 
@@ -280,7 +288,7 @@ a flip row, marks in a 1/0 array so a re-sort or a bulk row cannot resurrect an
 unmarked session). Then the **preset-only** picker lists each named preset as a direct
 action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle presets render as
 `[transcript+memory]`); **without the file it prints setup guidance**
-(`cp presets.json.example …`) plus the raw CLI — **there is no manual session→product
+(`cp presets.json …`) plus the raw CLI — **there is no manual session→product
 fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone).
 Asking for the selection *after* the plan was the old order and it was wrong twice
 over: it forced a second, identical list of sessions after the plan was already
@@ -424,7 +432,7 @@ pages but does not shrink the file (only `VACUUM` does, and it needs an exclusiv
    shape the menu consumes).
 6. Manual swap — or `--swap`, see §6.
 
-**Named recipes = OPERATIONS only** (the shrink mirror of §3.3): `modules/shrinklib/` is
+**Named recipes = OPERATIONS only** (the shrink mirror of §3.3): `src/shrinklib/` is
 the python SSoT, split in two disjoint families. **Session selection** (`keep`/
 `older_than`/`since`/`keep_all`/`keep_sessions`/`discard_sessions`) is a **CLI flag**
 — exactly one per invocation, never a recipe key. **Operations** (today

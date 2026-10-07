@@ -19,9 +19,11 @@ Legend: `R?` = optional key.
 ## 1. presets.json — `$OCED_PRESETS`
 
 Source of truth for `opencode-db export <name>` and the export menu (preset-first
-when the file exists). Authoritative machine schema: [`generated/presets.schema.json`](../generated/presets.schema.json)
+when the file exists). Defaults to `~/.config/opencode-db/presets.json` if present,
+else the repo-shipped `presets.json` when running portably from a checkout.
+Authoritative machine schema: [`generated/presets.schema.json`](../generated/presets.schema.json)
 (draft-07). **The schema and the per-key table are generated from
-`modules/exportlib/flags.py`** (flags = the single source of truth; see
+`src/exportlib/flags.py`** (flags = the single source of truth; see
 `scripts/generate_schema.py`, output in [`generated/`](../generated/)). Runtime
 validation in `exportlib/presets.py` imports the same key lists, so everything stays
 in sync by construction.
@@ -334,9 +336,11 @@ stored file (identical when `OCED_COMPRESS=0`).
 
 Named shrink **recipes**, the source of truth for `opencode-db shrink <name>` and the
 shrink menu's recipe step (the picker's rows are exactly these recipes, plus the
-built-ins; picking one goes straight to the read-only plan). Authoritative machine schema:
+built-ins; picking one goes straight to the read-only plan). Defaults to
+`~/.config/opencode-db/shrink-presets.json` if present, else the repo-shipped
+`shrink-presets.json` in a portable checkout. Authoritative machine schema:
 [`generated/shrink.schema.json`](../generated/shrink.schema.json) (draft-07). **The
-schema and the per-key tables are generated from `modules/shrinklib/flags.py`**
+schema and the per-key tables are generated from `src/shrinklib/flags.py`**
 (mirror of §1; same generator `scripts/generate_schema.py`).
 
 A recipe is split in **two disjoint families** (see

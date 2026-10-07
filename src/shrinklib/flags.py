@@ -11,7 +11,7 @@
 # Two disjoint families (see SHRINK_FLAGS): SESSION SELECTION (CLI flags, the
 # menu asks you with its picker) and OPERATIONS (the only preset keys).
 #
-# The build engine stays in modules/shrink.sh (SQL/VACUUM/swap); the PYTHON here
+# The build engine stays in src/shrink.sh (SQL/VACUUM/swap); the PYTHON here
 # owns the config contract: preset resolution, validation, schema, rows and the
 # "what will this shrink produce?" plan — mirroring exportlib for exports.
 import os

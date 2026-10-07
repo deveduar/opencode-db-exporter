@@ -191,8 +191,8 @@ oc_export_picker() {
     # user read this before redrawing the list.
     echo "Export from the menu needs a presets file (named plans = the source of truth)."
     echo "   missing: $OCED_PRESETS"
-    echo "   create it from the shipped example:"
-    echo "     cp \"$SCRIPT_DIR/../presets.json.example\" \"$OCED_PRESETS\""
+    echo "   create it from the shipped presets:"
+    echo "     cp \"$SCRIPT_DIR/../presets.json\" \"$OCED_PRESETS\""
     echo "   meanwhile: opencode-db export transcript|memory|digest [flags]"
     return 0
 }

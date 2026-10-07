@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
-# common.sh — config, paths and helpers shared by the opencode-db modules.
+# common.sh — config, paths and helpers shared by the opencode-db shell modules.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Config precedence: environment > conf file > built-in default.
-OCED_CONF="${OCED_CONF:-$HOME/.config/opencode-db/opencode-db.conf}"
+# Portable: when the repo checkout ships its own config and no user config exists
+# under ~/.config/opencode-db, the repo files ARE the defaults (fallback for the
+# no-install case). Precedence stays env > conf file > (user config | repo config) > built-in.
+OCED_HOME_CONF_DIR="$HOME/.config/opencode-db"
+OCED_REPO_ROOT="${SCRIPT_DIR%/src}"
+OCED_PORTABLE=0
 
-# Optional path config (no secrets): $OCED_CONF (permissions 600).
+o_cfg_default() { # <file> -> path; home file wins, repo shipped fallback.
+    [ -f "$OCED_HOME_CONF_DIR/$1" ] && { printf '%s/%s' "$OCED_HOME_CONF_DIR" "$1"; return 0; }
+    [ -f "$OCED_REPO_ROOT/$1" ] && { printf '%s/%s' "$OCED_REPO_ROOT" "$1"; return 0; }
+    printf '%s/%s' "$OCED_HOME_CONF_DIR" "$1"
+}
+
+# Config precedence: environment > conf file > built-in default.
+OCED_CONF="${OCED_CONF:-$(o_cfg_default opencode-db.conf)}"
+# The repo IS our config home only when its conf is the one in charge (home config
+# wins when both exist; an installed prefix never ships a conf at all).
+[ "$OCED_CONF" = "$OCED_REPO_ROOT/opencode-db.conf" ] && [ -f "$OCED_CONF" ] && OCED_PORTABLE=1
+
+# Optional path config (no secrets): $OCED_CONF (permissions 600; the repo-shipped
+# portable conf is left as-is so git never sees a 644 -> 600 mode change per run).
 # Variables: OPENCODE_DB, OCED_OUT, OCED_BACKUP_DIR, OCED_COMPRESS, OCED_LOG.
 load_conf() {
     [ -f "$OCED_CONF" ] || return 0
-    chmod 600 "$OCED_CONF" 2>/dev/null || true
+    [ "$OCED_PORTABLE" = 1 ] || chmod 600 "$OCED_CONF" 2>/dev/null || true
 
     # Snapshot variables already present in the environment so the conf file
     # cannot clobber them (env wins over conf).
@@ -32,8 +49,15 @@ load_conf
 
 # Built-in defaults for whatever neither the environment nor the conf defined.
 : "${OPENCODE_DB:=$HOME/.local/share/opencode/opencode.db}"
-: "${OCED_OUT:=$HOME/.local/share/opencode-db-exporter/exports}"
-: "${OCED_BACKUP_DIR:=$HOME/.local/share/opencode-db-exporter/backups}"
+if [ "$OCED_PORTABLE" = 1 ]; then
+    # Portable (repo-shipped conf active): data lives in the repo (gitignored),
+    # so a no-install run needs no ~/.local/share/opencode-db-exporter prefix.
+    : "${OCED_OUT:=$OCED_REPO_ROOT/exports}"
+    : "${OCED_BACKUP_DIR:=$OCED_REPO_ROOT/backups}"
+else
+    : "${OCED_OUT:=$HOME/.local/share/opencode-db-exporter/exports}"
+    : "${OCED_BACKUP_DIR:=$HOME/.local/share/opencode-db-exporter/backups}"
+fi
 : "${OCED_COMPRESS:=1}"
 
 # Tool version (shown by 'opencode-db version' and the schema probe).
@@ -51,16 +75,20 @@ todo:session_id,content,status
 # Opt-in activity log: OCED_LOG=1 appends one timestamped line per significant
 # action (backup, prune, shrink, ...) to OCED_ACTIVITY_LOG.
 : "${OCED_LOG:=0}"
-: "${OCED_ACTIVITY_LOG:=$HOME/.local/state/opencode-db/activity.log}"
+if [ "$OCED_PORTABLE" = 1 ]; then
+    : "${OCED_ACTIVITY_LOG:=$OCED_REPO_ROOT/activity.log}"
+else
+    : "${OCED_ACTIVITY_LOG:=$HOME/.local/state/opencode-db/activity.log}"
+fi
 # Backup source override: if set, use a stored backup file as the DB source.
 # Can be a filename (resolved under OCED_BACKUP_DIR) or an absolute path.
 : "${OCED_FROM_BACKUP:=}"
 # Export presets file (named recipes, source of truth for the menu). Absent file
 # = no presets: export keeps working with raw flags.
-: "${OCED_PRESETS:=$HOME/.config/opencode-db/presets.json}"
+: "${OCED_PRESETS:=$(o_cfg_default presets.json)}"
 # Shrink presets file (named shrink recipes; the shipped recipes lean/recent/
 # full/bare always exist — this file extends/overrides them).
-: "${OCED_SHRINK_PRESETS:=$HOME/.config/opencode-db/shrink-presets.json}"
+: "${OCED_SHRINK_PRESETS:=$(o_cfg_default shrink-presets.json)}"
 # Export profile used when shrink offers to export discarded sessions first.
 # Default: archive (transcript + memory). Set to "memory" for corpus-only, or any
 # valid export product/profile.

@@ -1,5 +1,11 @@
 x/
 
+# Portable (repo-shipped conf active): the data dirs live in the repo and are
+# created on demand. Never part of the tool.
+/exports/
+/backups/
+/activity.log
+
 # Python bytecode
 __pycache__/
 *.pyc
