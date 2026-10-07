@@ -2,11 +2,16 @@
 # Manage exports picker (view / remove)
 #-----------------------------------------------------------------------
 oc_exports_rows() {
-    local mode="$1"
+    local mode="$1" order="${2:-newest}"
     # [>] = opens a FLOW, and creating a run IS one (sessions -> preset). It is
     # the first row so "make an export" is the primary action of the screen.
     printf '__CREATE__\t[>] create export\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
+    if [ "$order" = "newest" ]; then
+        oc_toggle_row "newest first" "old first" "__TOGGLE_ORDER__"
+    else
+        oc_toggle_row "old first" "newest first" "__TOGGLE_ORDER__"
+    fi
     # [>] = the all-details report: every run's detail screen in one go, the same
     # `exports view` a row runs, so nothing can drift between the two. VIEW ONLY
     # and only when there is something to show: a report row next to [delete all]
@@ -20,7 +25,9 @@ oc_exports_rows() {
     fi
     [ -d "$OCED_OUT" ] || return 0
     local run
-    exports_runs_find | while IFS= read -r run; do
+    local dorder="desc"
+    [ "$order" = "old" ] && dorder="asc"
+    exports_runs_find "$dorder" | while IFS= read -r run; do
         [ -d "$run" ] || continue
         oc_exports_run_row "${run##*/}"
     done
@@ -48,7 +55,7 @@ oc_exports_run_row() {
     local run="$OCED_OUT/$stamp"
     local meta profiles="" roots=0 subs=0 msgs=0 found=0 m p r s
     local -a metas
-    mapfile -t metas < <(find "$run" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
+    mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
     for m in "${metas[@]}"; do
         [ -f "$m" ] || continue
         found=1
@@ -90,11 +97,11 @@ oc_exports_bulk() {
 }
 
 oc_exports_picker() {
-    local mode="view" sel key
+    local mode="view" order="newest" sel key
     while true; do
         local header
         header="Export runs — [>] create export, or inspect a run · mode: $mode"
-        sel=$(oc_exports_rows "$mode" | oc_fzf_sel "exports ($mode)" "$header") || return $?
+        sel=$(oc_exports_rows "$mode" "$order" | oc_fzf_sel "exports ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
             __CREATE__)
@@ -109,6 +116,7 @@ oc_exports_picker() {
                 continue
                 ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
+            __TOGGLE_ORDER__) order=$( [ "$order" = newest ] && printf old || printf newest ); continue ;;
             __REPORT_ALL__)
                 # One header, then one `exports view` per run and a SINGLE pause:
                 # this is a report, not a row that opens a flow, so it must not

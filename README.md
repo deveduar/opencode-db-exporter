@@ -92,7 +92,8 @@ Every row carries one marker that says what it does:
   The header counts (DB/sessions/WAL/backups/exports) are recomputed on every root loop, so
   they are never stale after an action.
 - **backups** picker (create + manage) — rows: `[>] create backup`, then the
-  `[*] view  →  remove` toggle, then in remove mode `[delete all]` / `[delete olds]`, then one
+  `[*] view  →  remove` toggle, then `[*] newest first  →  old first` (re-sorts the rows
+  in both modes), then in remove mode `[delete all]` / `[delete olds]`, then one
   row per backup (date/size/sessions/msgs/sha).
   `[>] create backup` prints the **plan first** (`opencode-db backup --dry-run`: source, target,
   estimated size), asks its own `y/N`, and only then runs the backup non-interactively — the
@@ -108,8 +109,13 @@ Every row carries one marker that says what it does:
 - **shrinks** picker (create + manage) — rows: `[>] create shrink copy` (a 3-step wizard
   from the LIVE DB, own snapshot), `[>] swap a copy into the LIVE DB` (destructive,
   requires typing `confirm` — the copy is checked for staleness first), `[?] verify`,
-  a `[*] view  →  remove` toggle (remove mode adds `[delete all]` / `[delete olds]` and one
-  row per produced copy). Creating a copy asks, in order: **(1) sessions** — one row per ROOT
+  a `[*] view  →  remove` toggle plus `[*] newest first  →  old first` (both modes;
+  remove mode adds `[delete all]` / `[delete olds]` and one
+  row per produced copy). A copy whose shrink.json predates the live DB shows a
+  `(stale)` tag in the list (a legacy/unverifiable one shows `(unverifiable)`), so a
+  `swap` into the live DB is never offered silently, and a run whose cascade was
+  exported first records it (`shrinks view` prints a `discard export:` line).
+  Creating a copy asks, in order: **(1) sessions** — one row per ROOT
   session with a `(N sub)` badge, `[x]` = survive (default all marked; `mark all` /
   `unmark all`; `continue` moves on), sorted **newest used first** with a row to flip
   to old first (re-sorting keeps your marks),
@@ -126,7 +132,7 @@ Every row carries one marker that says what it does:
   first** with a row to flip to oldest (re-sorting keeps your marks) and a `(N sub)`
   badge per root. The header is one line of live state (`3/6 marked · newest first`),
   plus a caveat line when a switch has a consequence the rows cannot show. A second switch row, `subagents: shown ⇄ hidden`,
-  toggles subagent visibility: while **hidden** they are not shown and the run exports
+  toggles subagent visibility: while **hidden** the run exports
   the full cascade of subagents for every marked root (no `--no-subagents` flag);
   while **shown**, each subagent is its own row with its own mark — un-marking it drops
   it, and the confirmation reports how many were explicitly unmarked. Un-marking its
@@ -145,7 +151,8 @@ Every row carries one marker that says what it does:
   (`cp presets.json …`) and points at the raw CLI — there is no manual
   session→product picker anymore.
 - **Export runs** picker (mode `view` / `remove`) — rows: the `[*] view  →  remove`
-  toggle, then in remove mode `[delete all]` / `[delete olds]`, then one row per run
+  toggle, then `[*] newest first  →  old first` (both modes), then in remove mode
+  `[delete all]` / `[delete olds]`, then one row per run
   (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
 
 Export flow: session selection → plan → confirmation → run. Mark sessions in the picker

@@ -113,8 +113,9 @@ list` aggregates it as `transcript+memory`.
   memory/corpus.jsonl
 ```
 
-Legacy runs wrote `metadatos.json`; the tool still reads both names (`exports
-list`/`view`, menu), so old run dirs keep aggregating.
+The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
+old `metadatos.json` name are ignored by every reader (`exports list`/`view`,
+menu, the shrink discard-link).
 
 ### transcript / digest `metadata.json`
 
@@ -394,6 +395,10 @@ finishes; `--dry-run` writes nothing):
                        //   keep_sessions|discard_sessions; scalar rules carry "value",
                        //   session rules carry "ids": ["ses_…", …] (the rule/ids shape
                        //   shrinklib/plan.py emits for the menu)
+  "discard_exported": "20261006-150000"[,   // R?: the stamp of the newest export run whose
+                       //   .sessions_selected EQUALS the discarded cascade (order-insensitive);
+                       //   auto-detected by o_shrink_discard_export after a discard run,
+                       //   absent when no run matches — never a hand-written key
   "sessions": {"total": 20, "kept": 10, "deleted": 10, "max_updated": 1790293022000},
                        // max_updated = the copy's newest session time_updated (ms epoch);
                        // 0 only for a pre-max_updated legacy shrink.json
@@ -432,6 +437,14 @@ warned about on screen first — `roots/subagents/total` cannot distinguish "exp
 its subagents" from "exported without them" in a way the user asked for, and both look
 identical in `metadata.json`.
 
+When the cascade export is actually done before the shrink (the hint command, or the
+menu's offer), the run records it: `shrink.json.discard_exported` = the stamp of the
+newest export run whose `metadata.json`.`sessions_selected` list is exactly the
+discarded cascade (any order); the run notes `(recorded: the cascade export is <stamp>
+— see: opencode-db shrinks view <stamp>)` and `shrinks view` prints the
+`discard export:` line. The key is absent when no matching run exists — a discard
+without the export is fully valid, it just stays unlinked.
+
 The same closed keep-set is used to derive deleted counts. `--swap` additionally
 snapshots the live DB to `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db`
 (WAL-safe, newest-copy-only auto-cleanup) and performs the atomic swap — the one
@@ -459,8 +472,7 @@ same broken dir twice).
 
 ## 7. exports list
 
-`exports list` aggregates every `metadata.json` (legacy `metadatos.json`
-accepted) under a stamp directory:
+`exports list` aggregates every `metadata.json` under a stamp directory:
 
 ```
   N.  <YYY-MM-DD HH:MM UTC>  <profiles joined '+' +, order = dir sort>  <roots> roots (<subagents> subagent) · <msgs> msgs · <comp> comp · <size>
@@ -492,7 +504,7 @@ naming because the data shapes are not uniform:
   `.session_records`.
 
 `--json` returns one metadata record per product as a JSON array (the raw
-`metadata.json`/`metadatos.json` contents, no banner, no aggregation). Only the
+`metadata.json` contents, no banner, no aggregation). Only the
 human mode carries the header — a machine reader gets the data untouched.
 
 ## 8. shrinks list

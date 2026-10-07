@@ -307,18 +307,28 @@ oc_pick_shrink() {
 # `shrinks list --tsv`), so there is no duplicated aggregation in the menu.
 # --------------------------------------------------------------------
 oc_shrinks_rows() {
-    local mode="$1" run
+    local mode="$1" order="${2:-newest}" run live_max=""
     printf '__CREATE__\t[>] create shrink copy\n'
     printf '__SWAP__\t[>] swap a copy into the LIVE DB\n'
     printf '__VERIFY__\t[?] verify\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
+    if [ "$order" = "newest" ]; then
+        oc_toggle_row "newest first" "old first" "__TOGGLE_ORDER__"
+    else
+        oc_toggle_row "old first" "newest first" "__TOGGLE_ORDER__"
+    fi
     if [ "$mode" = "remove" ]; then
         printf '__DELETE_ALL__\t[delete all]\n'
         printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
     local -a runs=()
-    mapfile -t runs < <(shrinks_runs_find)
+    local dorder="desc"
+    [ "$order" = "old" ] && dorder="asc"
+    mapfile -t runs < <(shrinks_runs_find "$dorder")
     [ "${#runs[@]}" -gt 0 ] || { printf '__NONE__\t(no shrink copies yet)\n'; return 0; }
+    # One live DB read for every row's freshness: a list must cost one query,
+    # not one per copy (shrinks_run_row queries when live_max is empty).
+    live_max=$(o_q "SELECT coalesce(max(time_updated),0) FROM session" 2>/dev/null || echo 0)
     # [>] = the all-details report: every copy's shrink.json in one go, the same
     # `shrinks view` a row runs, so nothing can drift between the two. VIEW ONLY
     # (never next to [delete all]) and only when there is a copy to show.
@@ -326,7 +336,7 @@ oc_shrinks_rows() {
         printf '__REPORT_ALL__\t[>] details of all copies\n'
     fi
     for run in "${runs[@]}"; do
-        shrinks_run_row "$run"
+        shrinks_run_row "$run" "$live_max"
     done
 }
 
@@ -399,11 +409,11 @@ oc_shrinks_swap_pick() {
 }
 
 oc_shrinks_picker() {
-    local mode="view" sel key
+    local mode="view" order="newest" sel key
     while true; do
         local header
         header="Shrink copies — mode: $mode"
-        sel=$(oc_shrinks_rows "$mode" | oc_fzf_sel "shrinks ($mode)" "$header") || return $?
+        sel=$(oc_shrinks_rows "$mode" "$order" | oc_fzf_sel "shrinks ($mode)" "$header") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
             __CREATE__)
@@ -433,6 +443,7 @@ oc_shrinks_picker() {
                 continue
                 ;;
             __TOGGLE__)     mode=$( [ "$mode" = view ] && printf remove || printf view ); continue ;;
+            __TOGGLE_ORDER__) order=$( [ "$order" = newest ] && printf old || printf newest ); continue ;;
             __DELETE_ALL__) oc_shrinks_bulk all; continue ;;
             __KEEP_NEWEST__) oc_shrinks_bulk newest; continue ;;
             __NONE__)       continue ;;

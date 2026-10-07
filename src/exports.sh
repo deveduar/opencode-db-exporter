@@ -2,10 +2,13 @@
 # exports.sh — oced_exports: list/remove/prune of past export runs (OCED_OUT).
 set -uo pipefail
 
-# exports_runs_find -> run dirs under OCED_OUT, newest first.
+# exports_runs_find [asc|desc] -> run dirs under OCED_OUT, `desc` = newest first
+# (the default every caller wants; `asc` = oldest first, for the backlog picker).
 exports_runs_find() {
     [ -d "$OCED_OUT" ] || return 0
-    find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d | sort -r
+    local cmp="-r"
+    [ "${1:-desc}" = "asc" ] && cmp=""
+    find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d | sort $cmp
 }
 
 oced_exports() {
@@ -31,7 +34,7 @@ oced_exports_list() {
             [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
                 human_date="${stamp:0:10} ${stamp:11:2}:${stamp:14:2} UTC" ;;
         esac
-        mapfile -t metas < <(find "$run" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
+        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
         profiles="" roots=0 subs=0 msgs=0 comp=0 found=0
         for m in "${metas[@]}"; do
             [ -f "$m" ] || continue
@@ -183,7 +186,7 @@ oced_exports_view() {
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db exports list"; return 1; }
 
     local -a metas
-    mapfile -t metas < <(find "$target" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | sort)
+    mapfile -t metas < <(find "$target" -type f -name metadata.json 2>/dev/null | sort)
     [ "${#metas[@]}" -gt 0 ] || { echo "No metadata.json found in $target"; return 1; }
 
     if [ "$json_mode" -eq 1 ]; then

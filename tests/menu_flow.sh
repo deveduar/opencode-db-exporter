@@ -39,8 +39,8 @@ FZF_HIST="$TMP/fzf.log"
 # reset -> restore real function definitions (undo test overrides).
 # menu_pause is neutralised: its real body would block on a TTY stdin.
 reset() { unset FZF_QUEUE FZF_FAIL; . "$MOD/menu.sh"; menu_pause() { return 0; }; : > "$FZF_HIST"; }
-count_meta() { find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) 2>/dev/null | wc -l; }
-newest_meta() { find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
+count_meta() { find "$OUT" -path "*/$1/*" -type f -name metadata.json 2>/dev/null | wc -l; }
+newest_meta() { find "$OUT" -path "*/$1/*" -type f -name metadata.json -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
 CALLS="$TMP/calls.txt"
 call_log() { run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }; }
 # FZF queue lives in a FILE: fzf() runs inside $(...) pipelines (subshells), so
@@ -184,6 +184,25 @@ printf '%s\n' "$RROWS" | grep -qxF "__DELETE_ALL__${TAB}[delete all]" \
     && ok "remove mode has [delete all]" || bad "delete all row: $(printf '%s\n' "$RROWS" | grep __DELETE_ALL__)"
 printf '%s\n' "$RROWS" | grep -qxF "__KEEP_NEWEST__${TAB}[delete olds]" \
     && ok "remove mode has [delete olds]" || bad "delete olds row: $(printf '%s\n' "$RROWS" | grep __KEEP_NEWEST__)"
+
+# The sort-order switch is a SECOND [*] toggle, present in BOTH modes (a row you
+# can reach only after flipping view/remove is a hidden feature). Default: newest
+# first, so the default row reads as the state you are IN.
+printf '%s\n' "$VROWS" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "backups view has the newest/oldest order toggle" || bad "backups order toggle: $(printf '%s\n' "$VROWS" | grep __TOGGLE_ORDER__)"
+printf '%s\n' "$RROWS" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "backups remove mode has the order toggle too" || bad "backups order toggle remove: $(printf '%s\n' "$RROWS" | grep __TOGGLE_ORDER__)"
+# and it really reorders: default = newest first, `old` = oldest first
+cp "$OCED_BACKUP_DIR/manifest.json" "$TMP/bk-manifest.orig.json"
+jq -n '{backups:[
+  {file:"older.db", date:"2026-01-01T00:00:00Z", size:100, sessions:2, messages:5},
+  {file:"newer.db", date:"2026-01-02T00:00:00Z", size:200, sessions:3, messages:9}]}' \
+    > "$OCED_BACKUP_DIR/manifest.json"
+WANT=$(printf 'newer.db\nolder.db'); GOT=$(oc_backups_rows view | grep -oE '^(older|newer)\.db')
+[ "$GOT" = "$WANT" ] && ok "backups rows default to newest first" || bad "backups newest-first: [$(printf '%s' "$GOT" | tr '\n' ' ')]"
+WANTOLD=$(printf 'older.db\nnewer.db'); GOTOLD=$(oc_backups_rows view old | grep -oE '^(older|newer)\.db')
+[ "$GOTOLD" = "$WANTOLD" ] && ok "backups rows flip to old first on --old" || bad "backups old-first: [$(printf '%s' "$GOTOLD" | tr '\n' ' ')]"
+mv "$TMP/bk-manifest.orig.json" "$OCED_BACKUP_DIR/manifest.json"
 
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
@@ -478,6 +497,14 @@ printf '%s\n' "$ER_VIEW" | grep -qxF "__TOGGLE__${TAB}[*] view  ${ARROW}  remove
 printf '%s\n' "$ER_REM" | grep -qxF "__TOGGLE__${TAB}[*] remove  ${ARROW}  view" \
     && ok "exports rows toggle flips in remove mode" || bad "exports toggle rem: $(printf '%s\n' "$ER_REM" | grep __TOGGLE__)"
 printf '%s\n' "$ER_REM" | grep -qE "^__(DELETE_ALL|KEEP_NEWEST)__" && ok "exports remove mode has bulk rows" || bad "exports bulk rows"
+printf '%s\n' "$ER_VIEW" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "exports view has the newest/oldest order toggle" || bad "exports order toggle: $(printf '%s\n' "$ER_VIEW" | grep __TOGGLE_ORDER__)"
+printf '%s\n' "$ER_REM" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "exports remove mode has the order toggle too" || bad "exports order toggle remove: $(printf '%s\n' "$ER_REM" | grep __TOGGLE_ORDER__)"
+[ "$(oc_exports_rows view | grep -oE '^(aaa|bbb|ccc)' | head -1)" = "ccc" ] \
+    && ok "exports rows default to newest first" || bad "exports newest-first: $(oc_exports_rows view | grep -oE '^(aaa|bbb|ccc)' | head -1)"
+[ "$(oc_exports_rows view old | grep -oE '^(aaa|bbb|ccc)' | head -1)" = "aaa" ] \
+    && ok "exports rows flip to old first on --old" || bad "exports old-first: $(oc_exports_rows view old | grep -oE '^(aaa|bbb|ccc)' | head -1)"
 reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
@@ -1088,7 +1115,7 @@ BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__S
 [ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report)" || bad "[>] leaked onto: $BADFLOW"
 BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__')
 [ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify)" || bad "[?] leaked onto: $BADINSPECT"
-NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
+NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__|^__TOGGLE_ORDER__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
 [ "$NOTOGGLE" = "0" ] && ok "every toggle row carries [*]" || bad "toggle rows without [*]: $NOTOGGLE"
 
 : > "$CALLS"
@@ -1201,6 +1228,24 @@ printf '%s\n' "$ROWS" | awk 'length($0) > 120 { bad++; print } END { exit (bad+0
     >/dev/null 2>&1 && ok "shrinks rows stay inside the menu width" || bad "shrinks row too wide for the menu"
 printf '%s\n' "$ROWS" | grep -q '^__VERIFY__' && ok "shrinks rows offer verify" || bad "shrinks verify row missing"
 printf '%s\n' "$ROWS" | grep -q '^__SWAP__' && ok "shrinks rows offer the swap entry" || bad "shrinks swap row missing"
+printf '%s\n' "$ROWS" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "shrinks view has the newest/oldest order toggle" || bad "shrinks order toggle: $(printf '%s\n' "$ROWS" | grep __TOGGLE_ORDER__)"
+ROWS_REM2=$(oc_shrinks_rows remove)
+printf '%s\n' "$ROWS_REM2" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${ARROW}  old first" \
+    && ok "shrinks remove mode has the order toggle too" || bad "shrinks order toggle remove: $(printf '%s\n' "$ROWS_REM2" | grep __TOGGLE_ORDER__)"
+[ "$(printf '%s\n' "$ROWS" | grep -oE '^[0-9]{8}-[0-9]{6}' | head -1)" = "20260103-110000" ] \
+    && ok "shrinks rows default to newest first" || bad "shrinks newest-first row"
+[ "$(printf '%s\n' "$(oc_shrinks_rows view old)" | grep -oE '^[0-9]{8}-[0-9]{6}' | head -1)" = "20251231-120000" ] \
+    && ok "shrinks rows flip to old first on --old" || bad "shrinks old-first row: $(printf '%s\n' "$(oc_shrinks_rows view old)" | grep -oE '^[0-9]{8}-[0-9]{6}' | head -1)"
+# the picker's order toggle dispatches across BOTH switches: view -> remove, then
+# newest -> old, then the oldest copy is the target of the removal
+: > "$CALLS"; call_log
+confirm_action() { return 0; }
+qset "__TOGGLE__" "__TOGGLE_ORDER__" "20251231-120000"
+oc_shrinks_picker >/dev/null
+grep -qx "shrinks remove 20251231-120000 --yes" "$CALLS" \
+    && ok "shrinks picker: toggle order to old first, then remove the oldest copy" \
+    || bad "shrinks order-flip removal: $(cat "$CALLS")"
 
 : > "$CALLS"; call_log
 qset "__VERIFY__"

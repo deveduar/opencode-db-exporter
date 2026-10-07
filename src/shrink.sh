@@ -27,6 +27,37 @@ o_sql_qlist() {
 # not disagree. A name that would not resolve is a configuration mistake, so it is
 # reported HERE — with the valid names — and falls back, instead of failing later
 # inside an export the user already confirmed.
+# o_shrink_discard_export <cascade-csv> -> stamp of the NEWEST export run whose
+# .sessions_selected exactly equals the discard cascade (the closed set the
+# offer/hint exports with `--sessions`), or "" when none. Set equality only: a
+# root-only export, an 'ALL sessions' run or anything else is a different set, so
+# it can never be linked. Reads only export metadata (never index.md), from the
+# same runs `exports list` iterates.
+o_shrink_discard_export() {
+    local cascade="$1"
+    [ -n "$cascade" ] || return 0
+    [ -d "${OCED_OUT:-}" ] || return 0
+    local want got
+    want=$(printf '%s' "$cascade" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
+    local -a runs=()
+    mapfile -t runs < <(exports_runs_find)
+    local run m
+    for run in "${runs[@]}"; do
+        [ -d "$run" ] || continue
+        got=""
+        while IFS= read -r m; do
+            [ -f "$m" ] || continue
+            got="${got:+$got,}$(jq -r '.sessions_selected // [] | join(",")' "$m" 2>/dev/null)"
+        done < <(find "$run" -type f -name metadata.json 2>/dev/null)
+        [ -n "$got" ] || continue
+        got=$(printf '%s' "$got" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
+        [ "$got" = "$want" ] || continue
+        printf '%s\n' "${run##*/}"
+        return 0
+    done
+    return 0
+}
+
 o_shrink_discard_profile() {
     local p="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
     local fallback=""
@@ -184,7 +215,7 @@ oced_shrink() {
     o_check_deps
     o_db_exists
     local keep_n=10 keep_all=0 older_than=0 since_ms=0 dry=0 strip=0 swap=0 yes=0 outdir="$OCED_BACKUP_DIR" criteria=""
-    local rule="" since_date=""
+    local rule="" since_date="" discard_exported=""
     local -a keep_sessions=() discard_sessions=()
 
     # Named recipe/preset: the first non-flag token is resolved via shrinklib
@@ -416,6 +447,12 @@ oced_shrink() {
             SELECT group_concat(id) FROM (
                 SELECT d.id FROM d JOIN session s ON s.id = d.id ORDER BY s.time_created);" 2>/dev/null)
         [ -n "$disc_csv" ] || disc_csv="$ids_csv"
+        # The offer/hint exports EXACTLY this closed set (`--sessions $disc_csv`),
+        # so the moment the user (menu gate or README/CLI hint) accepted, that exact
+        # run is the newest one whose .sessions_selected equals the cascade; link it
+        # into shrink.json so the shrink itself keeps the reference. No export -> no
+        # key (the CLI user may have declined; the command hint stays enough).
+        discard_exported=$(o_shrink_discard_export "$disc_csv")
         local -a _dcsv=()
         IFS=',' read -r -a _dcsv <<< "$disc_csv"
         n_disc=${#_dcsv[@]}
@@ -426,6 +463,8 @@ oced_shrink() {
         echo "   export them before you swap the copy in — --swap snapshots the live DB"
         echo "   to backups/pre-shrink/ first, so nothing is really lost:"
         echo "     opencode-db export $profile --sessions $disc_csv"
+        [ -n "$discard_exported" ] \
+            && echo "     (recorded: the cascade export is $discard_exported — see: opencode-db shrinks view $stamp)"
         echo ""
     fi
 
@@ -523,12 +562,14 @@ oced_shrink() {
         --argjson total "$total" --argjson kept "$keptcnt" --argjson deleted "$deleted" \
         --arg max_updated "$max_updated" \
         --argjson selection "$selection_json" \
+        --arg discard_exported "$discard_exported" \
         --argjson before "$before_size" --argjson after "$after_size" \
         --argjson removed_ob "$removed_json" --argjson removed_total "$removed_total" \
         --argjson stripped_reasoning "$stripped_reasoning" \
         --arg integrity "$integrity" --arg fk "$fk_status" \
         '{tool: $tool, date: $date, source: $source, stamp: $stamp, criteria: $criteria,
           selection: $selection,
+          discard_exported: $discard_exported,
           sessions: {total: $total, kept: $kept, deleted: $deleted, max_updated: ($max_updated | tonumber)},
           size: {before: $before, after: $after},
           integrity_check: $integrity,
@@ -536,7 +577,8 @@ oced_shrink() {
           removed: $removed_ob,
           removed_total: $removed_total,
           stripped_reasoning: $stripped_reasoning,
-          file: "opencode.shrunk.db"}' \
+          file: "opencode.shrunk.db"}
+          | if $discard_exported == "" then del(.discard_exported) else . end' \
         > "$outdir/shrink/$stamp/shrink.json"
 
     o_log "shrink: $criteria (deleted=$deleted kept=$keptcnt) -> $outdir/shrink/$stamp"
@@ -566,10 +608,13 @@ oced_shrink() {
 
 shrinks_dir() { printf '%s/shrink' "$OCED_BACKUP_DIR"; }
 
-# shrinks_runs_find -> run dirs under <backup>/shrink, newest first.
+# shrinks_runs_find [asc|desc] -> run dirs under <backup>/shrink, `desc` = newest
+# first (the default every caller wants; `asc` = oldest first, for the picker).
 shrinks_runs_find() {
     [ -d "$(shrinks_dir)" ] || return 0
-    find "$(shrinks_dir)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r
+    local cmp="-r"
+    [ "${1:-desc}" = "asc" ] && cmp=""
+    find "$(shrinks_dir)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort $cmp
 }
 
 # shrinks_stamp_human <stamp 20260921-083000> -> "2026-09-21 08:30:00 UTC".
@@ -582,16 +627,19 @@ shrinks_stamp_human() {
     esac
 }
 
-# shrinks_run_row <run-dir> -> TSV 'stamp<TAB>display' (single source for the
-# menu picker, like exports view/list share one aggregation).
+# shrinks_run_row <run-dir> [live_max] -> TSV 'stamp<TAB>display' (single source
+# for the menu picker, like exports view/list share one aggregation).
 #
 # The display cell is a COLUMN, so it carries the tag (plan.py rule-tag) and not
 # the criteria sentence: that sentence is 100+ characters of parentheticals written
 # for shrink.json, and pasting it here made every row 225 characters and buried the
 # three numbers that matter. One size expression (before -> after, -%) instead of
-# three repetitions of it, and the copy's own state only when it is anomalous.
+# three repetitions of it, and the copy's own state only when it is anomalous
+# ((swapped/no copy), or a (stale)/(unverifiable) freshness tag from the ONE
+# o_shrink_stale helper — default live_max costs one query per row, so
+# `oced_shrinks_list` computes it once and passes it).
 shrinks_run_row() {
-    local run="$1" stamp j
+    local run="$1" live_max="${2:-}" stamp j
     local rule rvalue nids tag db_state size pct
     local jtotal jkept jbefore jafter jstrip
     stamp="${run##*/}"
@@ -643,6 +691,19 @@ shrinks_run_row() {
         else
             db_state="$(o_human_size "$size")"
         fi
+        # Freshness tag, from the SAME o_shrink_stale that view/verify/swap use: a
+        # column cannot carry the sentence, only the verdict. Legacy copies without
+        # sessions.max_updated are unverifiable (flagged, never silently trusted);
+        # a list that passes live_max runs one DB query for all rows.
+        if [ -f "$j" ]; then
+            local jmaxupd
+            jmaxupd=$(jq -r '.sessions.max_updated // 0' "$j" 2>/dev/null || echo 0)
+            if [ "$jmaxupd" -eq 0 ]; then
+                db_state="$db_state (unverifiable)"
+            elif ! o_shrink_stale "$j" "$live_max" >/dev/null 2>&1; then
+                db_state="$db_state (stale)"
+            fi
+        fi
     else
         db_state="(swapped/no copy)"
     fi
@@ -669,8 +730,12 @@ oced_shrinks_list() {
     local tsv=0
     [ "${1:-}" = "--tsv" ] && tsv=1
     local -a runs rows=()
-    local run stamp
+    local run stamp live_max=""
     mapfile -t runs < <(shrinks_runs_find)
+    # One live DB read for the whole list: every row's freshness plugs this in.
+    if [ "${#runs[@]}" -gt 0 ]; then
+        live_max=$(o_q "SELECT coalesce(max(time_updated),0) FROM session" 2>/dev/null || echo 0)
+    fi
     if [ "$tsv" -eq 0 ]; then
         echo "== Shrink copies (${#runs[@]}) =="
     fi
@@ -682,10 +747,10 @@ oced_shrinks_list() {
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
         if [ "$tsv" -eq 1 ]; then
-            shrinks_run_row "$run"
+            shrinks_run_row "$run" "$live_max"
         else
             local row
-            row=$(printf '%s' "$(shrinks_run_row "$run")" | cut -f2-)
+            row=$(printf '%s' "$(shrinks_run_row "$run" "$live_max")" | cut -f2-)
             rows+=("  $((${#rows[@]} + 1)).  $row")
         fi
     done
@@ -750,6 +815,11 @@ oced_shrinks_view() {
     fi
     printf '  %-11s %s\n' "date:" "$(jq -r '.date // "?"' "$j")"
     printf '  %-11s %s\n' "db:" "$(jq -r '.source // "?"' "$j")"
+    local dexp
+    dexp=$(jq -r '.discard_exported // ""' "$j")
+    if [ -n "$dexp" ]; then
+        printf '  %-11s %s\n' "discard export:" "$dexp (the discarded cascade was exported there — opencode-db exports view $dexp)"
+    fi
     printf '  %-11s %s\n' "integrity:" "$integrity · foreign keys $fkeys"
     # Freshness here, by the same rule as `backups view`: a detail screen must not
     # show an artifact nobody validated. Same helper as verify/swap/remove.
@@ -834,15 +904,21 @@ oced_shrinks_prune() {
     echo "Prune: removed $n run(s); keeping $keep."
 }
 
-# o_shrink_stale <shrink.json> — compares the live DB against a shrink copy
-# (read-only). Echoes a warning (or nothing when clean/up to date) and returns
+# o_shrink_stale <shrink.json> [live_max] — compares the live DB against a shrink
+# copy (read-only). Echoes a warning (or nothing when clean/up to date) and returns
 # 0 = up to date, 1 = stale or unverifiable. This is the single stale-check for
-# guides, pickers and verify so the logic changes in one place.
+# guides, pickers and verify so the logic changes in one place. `live_max` skips
+# the DB query: a `shrinks list` computes the live max ONCE and hands it to every
+# row, so N copies cost one query instead of N (view/verify still query per call).
 o_shrink_stale() {
     local j="$1"
     local live_max=0 shrink_max=0
     [ -f "$j" ] || { echo "shrink.json missing: $j"; return 1; }
-    live_max=$(o_q "SELECT coalesce(max(time_updated),0) FROM session" 2>/dev/null || echo 0)
+    if [ -n "${2:-}" ]; then
+        live_max="$2"
+    else
+        live_max=$(o_q "SELECT coalesce(max(time_updated),0) FROM session" 2>/dev/null || echo 0)
+    fi
     shrink_max=$(jq -r '.sessions.max_updated // 0' "$j" 2>/dev/null || echo 0)
     if [ "$shrink_max" -eq 0 ]; then
         echo "cannot verify freshness ($j has no sessions.max_updated — old shrink format); re-run shrink to record it."

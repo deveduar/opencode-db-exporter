@@ -53,7 +53,7 @@ last_meta() { # $1=profile (newest by mtime, path breaks a tie)
     # `sort -n` compares the WHOLE line numerically, so an equal %T@ left the
     # order to chance and two exports in the same tick could hand back the older
     # run. Sort by mtime first and by PATH second: deterministic.
-    find "$OUT" -path "*/$1/*" -type f \( -name metadata.json -o -name metadatos.json \) -printf '%T@ %p\n' \
+    find "$OUT" -path "*/$1/*" -type f -name metadata.json -printf '%T@ %p\n' \
         | sort -k1,1n -k2,2 | tail -1 | cut -d' ' -f2-
 }
 
@@ -337,7 +337,7 @@ echo "$TC2" | grep -q "<!-- step-finish -->" && ok "step markers present" || bad
 echo "== token backfill from step-finish (session row has 0 tokens) =="
 run export transcript --filter ses_A0001 >/dev/null
 MT=$(last_meta transcript)
-jq -e '.tokens_backfilled == 1' "$MT" >/dev/null && ok "metadatos records the backfill" || bad "tokens_backfilled: $(jq '.tokens_backfilled' "$MT")"
+jq -e '.tokens_backfilled == 1' "$MT" >/dev/null && ok "metadata records the backfill" || bad "tokens_backfilled: $(jq '.tokens_backfilled' "$MT")"
 run export memory --filter ses_A0001 >/dev/null
 MB=$(last_meta memory); MB="${MB%/metadata.json}"
 printf '%s' "$(sed -n '1p' "$MB/corpus.jsonl")" | jq -e '.tokens.input == 1100 and .tokens.output == 600 and .tokens.reasoning == 80 and .tokens.cache.read == 50 and .tokens.cache.write == 120 and .tokens.backfilled == true and .cost == 0.05' >/dev/null \
@@ -419,19 +419,32 @@ printf '%s' "$SELV" | grep -qE "^  (Cap|Touched files):" \
 # Field labels must align on one column.
 BADALIGN=$(printf '%s' "$SELV" | sed -n '/== Details per product ==/,$p' | grep -E '^  [A-Za-z].*[A-Za-z]+: ' | grep -vcE '^  [A-Za-z][A-Za-z ()]*: {2,}')
 [ "$BADALIGN" -eq 0 ] && ok "exports view field labels align" || bad "exports view label alignment ($BADALIGN ragged)"
-# Legacy runs wrote metadatos.json; readers must keep aggregating them.
+# The legacy `metadatos.json` file name is gone: a run dir that only has it is
+# ignored (one name, English). The shape fallbacks for OLD metadata.json CONTENT
+# (no .sessions.total, no .session_records) still apply.
 LEGACY="legacy-$(date -u +%s)"
 mkdir -p "$OUT/$LEGACY/transcript"
 echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
+LEGACYV=$(run exports view "$LEGACY" 2>&1)
+[ $? -ne 0 ] && printf '%s' "$LEGACYV" | grep -q "No metadata.json found" \
+    && ok "exports view refuses a legacy-only metadatos.json run dir" \
+    || bad "exports view legacy: $(printf '%s' "$LEGACYV" | head -1)"
 EXL=$(run exports list)
-printf '%s' "$EXL" | grep -q "$LEGACY" && ok "exports list aggregates legacy metadatos.json runs" || bad "legacy run aggregation"
-LEGACYV=$(run exports view "$LEGACY")
-# No sessions.total in legacy metadata: it must be derived from roots + subagents.
-printf '%s' "$LEGACYV" | grep -q "jq: error" && bad "legacy sessions total: jq error" || ok "exports view renders a legacy metadatos.json run"
-printf '%s' "$LEGACYV" | grep -qE "^  totals: +1 roots \(0 subagent\)" \
-    && ok "exports view aggregates a legacy run" || bad "legacy totals: $(printf '%s' "$LEGACYV" | grep -i 'totals:')"
-printf '%s' "$LEGACYV" | grep -q "legacy record" \
-    && ok "exports view labels a legacy run's selection" || bad "legacy selection label"
+LEGRO=$(printf '%s' "$EXL" | grep "$LEGACY" || true)
+printf '%s' "$LEGRO" | grep -qv transcript \
+    && ok "exports list stops aggregating metadatos.json runs" \
+    || bad "legacy list row: $(printf '%s' "$LEGRO" | head -1)"
+
+# Same minimal record as metadata.json: the content fallbacks stay.
+NOSHAPE="noshape-$(date -u +%s)"
+mkdir -p "$OUT/$NOSHAPE/transcript"
+echo '{"profile":"transcript","sessions_selected":["ses_A0001"],"sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$NOSHAPE/transcript/metadata.json"
+NOSS=$(run exports view "$NOSHAPE")
+# No sessions.total: totals must come from roots + subagents.
+printf '%s' "$NOSS" | grep -qE "^  totals: +1 roots \(0 subagent\)" \
+    && ok "exports view derives totals from roots + subagents" || bad "noshape totals: $(printf '%s' "$NOSS" | grep -i 'totals:')"
+printf '%s' "$NOSS" | grep -q "legacy record" \
+    && ok "exports view labels a pre-session_records run's selection" || bad "noshape selection label"
 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null
@@ -761,6 +774,32 @@ jq -e '[.session_records[].id] | sort == ["ses_A0001","ses_A0002","ses_A0003"]' 
 # memory (the other half of archive) must reference the subagents on its one line
 printf '%s' "$(sed -n '1p' "$CSTAMP/memory/corpus.jsonl")" | jq -e '(.subagents | length) == 2' >/dev/null \
     && ok "memory's corpus line references the 2 subagents of its root" || bad "corpus refs: $(sed -n '1p' "$CSTAMP/memory/corpus.jsonl" | jq -c '.subagents')"
+
+echo "== the discard cascade export is linked into shrink.json =="
+# The offer/hint exports EXACTLY the closed cascade (`--sessions root,sub,sub`),
+# so the engine auto-detects the NEWEST export run whose .sessions_selected equals
+# it and records .discard_exported — one link shared by the CLI path (this run)
+# and the menu offer, with no flag and no menu-side state. This shrink runs AFTER
+# the cascade export above, which is the order the offer/hint enforces.
+DLINK=$(OCED_PRESETS="$EX_PRESETS" run shrink --discard-sessions ses_A0001)
+DSJ=$(newest_sj)
+DSTAMP=$(basename "$(dirname "$DSJ")")
+DE=$(jq -r '.discard_exported // ""' "$DSJ")
+[ "$DE" = "$(stamp_of "$CAS")" ] \
+    && ok "the cascade export is auto-linked into shrink.json (.discard_exported = $DE)" \
+    || bad "discard_exported: [${DE:-absent}] want [$(stamp_of "$CAS")]"
+printf '%s' "$DLINK" | grep -q "recorded: the cascade export is $(stamp_of "$CAS")" \
+    && ok "the shrink hint names the recorded export run" || bad "hint-recorded line: $DLINK"
+printf '%s' "$(run shrinks view "$DSTAMP")" | grep -qE "^  discard export: +$DE \(the discarded cascade was exported" \
+    && ok "shrinks view shows the discard export line for this copy" \
+    || bad "shrinks view lacks the discard export line: [$(printf '%s' "$(run shrinks view "$DSTAMP")" | grep 'discard export')]"
+# No matching cascade export -> the key stays absent (deterministic negative: the
+# B cascade [root+1 sub] has never been exported with its exact closed set).
+DNO=$(OCED_PRESETS="$EX_PRESETS" run shrink --discard-sessions ses_B0001)
+DSJ2=$(newest_sj)
+jq -e 'has("discard_exported") | not' "$DSJ2" >/dev/null \
+    && ok "no matching cascade export -> no discard_exported key" \
+    || bad "discard_exported set without a matching cascade export: $(jq -c '.discard_exported // ""' "$DSJ2")"
 
 echo "== the discard profile must not silently drop the subagents it is handed =="
 # The offer's whole promise is "this export keeps what the shrink drops", and it
@@ -1269,6 +1308,29 @@ done <<< "$VT"
 [ "$BADKEY" -eq 0 ] \
     && ok "every stale row is keyed by its OWN copy's stamp" \
     || bad "a stale row is not keyed by a real stamp: [$(printf '%s' "$VT" | grep '^stale')]"
+
+# The same verdict must reach the LIST column as a compact tag (a row cannot carry
+# the sentence, only the verdict): the live max is read ONCE for the whole list.
+LSTALE=$(OCED_BACKUP_DIR="$CBK" run shrinks list --tsv)
+STALE_COUNT=$(printf '%s\n' "$LSTALE" | grep -c ' (stale)')
+[ "$STALE_COUNT" -eq "$NCOPIES" ] \
+    && ok "shrinks list tags every stale copy '(stale)' ($STALE_COUNT/$NCOPIES) in the column" \
+    || bad "shrinks list stale tags: $STALE_COUNT of $NCOPIES: [$(printf '%s\n' "$LSTALE" | tr '\n' '|')]"
+printf '%s\n' "$LSTALE" | grep -qE ' kept  (stale)' \
+    && bad "the stale tag must follow the size delta, not replace it" \
+    || ok "the stale tag rides on the size column, never alone"
+# A legacy copy (no sessions.max_updated) is UNVERIFIABLE, and that must be the
+# tag too — a list that silently called it clean would violate the one-helper rule.
+CBKNEW=$(find "$CBK/shrink" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
+CBKNEWSJ="$CBKNEW/shrink.json"
+MU_RESTORE=$(jq -r '.sessions.max_updated' "$CBKNEWSJ")
+jq 'del(.sessions.max_updated)' "$CBKNEWSJ" > "$CBKNEWSJ.bak" && mv "$CBKNEWSJ.bak" "$CBKNEWSJ"
+LUNV=$(OCED_BACKUP_DIR="$CBK" run shrinks list --tsv)
+[ "$(printf '%s\n' "$LUNV" | grep -c ' (unverifiable)')" -eq 1 ] \
+    && [ "$(printf '%s\n' "$LUNV" | grep -c ' (stale)')" -eq "$((NCOPIES-1))" ] \
+    && ok "a legacy copy is tagged '(unverifiable)', the other still '(stale)'" \
+    || bad "unverifiable tag: [$(printf '%s\n' "$LUNV" | tr '\n' '|')]"
+jq --argjson m "$MU_RESTORE" '.sessions.max_updated = $m' "$CBKNEWSJ" > "$CBKNEWSJ.bak" && mv "$CBKNEWSJ.bak" "$CBKNEWSJ"
 
 # An orphan dir (no valid shrink.json) is reported ONCE, as an orphan: never
 # re-listed as a stale copy, which is what o_shrink_stale would answer for a

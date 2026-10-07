@@ -137,7 +137,8 @@ against the code, not just documented):
 - **No `--swap` contradiction** — the intro of `docs/schemas.md` states the one
   opt-in exception explicitly instead of claiming "never written" flatly.
 - **Artifact renamed** `metadatos.json` → `metadata.json`; readers (`exports list/
-  view`, menu) still accept the legacy name so old run dirs keep aggregating.
+  view`, menu) still accept the legacy name so old run dirs keep aggregating
+  (the legacy-name read was later removed — see §40).
 
 Test surface grew with the hardening (remembered `touched_files` is now asserted,
 not just visually verified).
@@ -1391,3 +1392,54 @@ them, so the whole layer got deleted:
 4. **The guidance commands tell users about the shipped files.** The menu's no-presets
    hint and the docs say `cp presets.json …` (or `opencode-db.conf`), never
    `.example`.
+
+### §39 The cascade export is recorded, the shelf shows its age, and every picker sorts itself (current)
+
+Three small contracts that closed the gaps §35 opened and made the shelves readable:
+
+1. **The shrink run records its own cascade export.** `o_shrink_discard_export
+   <cascade-csv>` looks for the newest export run whose `metadata.json` `.sessions_selected`
+   list equals the discarded cascade (any order) and stores its stamp as
+   `shrink.json.discard_exported`. It is auto-detected in the engine, so the CLI path gets
+   it too — no menu flag, nothing to forget. The run prints `(recorded: the cascade export
+   is <stamp> — see: opencode-db shrinks view <stamp>)` and `shrinks view` shows the
+   `discard export:` line. A discard without the export is valid and stays unlinked: the
+   key is absent. The read never touches `index.md` (only `metadata.json`), so it cannot be
+   fooled by markdown.
+
+2. **A list shows a copy is stale, once, with one query.** Before, `shrinks list` only
+   flagged a copy whose *file* was gone (`(swapped/no copy)`); freshness lived in
+   `view`/`verify` only. Now `o_shrink_stale <shrink.json> [live_max]` accepts the live
+   `max(time_updated)` it would otherwise query itself, and `list` computes it **once** per
+   listing and passes it down, so every aged copy gains ` (stale)` after its size and a
+   legacy no-`max_updated` shrink.json flips to ` (unverifiable)` — the column stays
+   compact and an up-to-date copy stays untagged. The row helper is
+   `shrinks_run_row <run> [live_max]`, so the picker and `list --tsv` share the same
+   rendering.
+
+3. **The three artifact pickers order themselves.** `backups`/`exports`/`shrinks` gained a
+   `[*] newest first → old first` toggle (`__TOGGLE_ORDER__`) in BOTH view and remove
+   modes — `exports_runs_find`/`shrinks_runs_find` take `[asc|desc]`, the backups jq sorts
+   by `.date` then `reverse`. The bulk rows (`[delete all]`/`[delete olds]`) and
+   `[>] details of all …` stay newest-first by design, and the toggle is part of the
+   symbol-system contract, so `menu_flow.sh` guards its bracket and its placement.
+
+The two suites now pin all of it: the cascade run is *linked back* (positive and negative
+cases), the `verify-bk` shelf shows `(stale)`/`(unverifiable)` and an up-to-date copy
+stays clean — all keyed by the copy's own stamp, and every picker's rows really reorder
+after a flip. `export_smoke.sh` is 384 asserts, `menu_flow.sh` 325.
+
+### §40 The legacy `metadatos.json` name is gone (current)
+
+§12 renamed the artifact but kept a dual-name read (`exports list`/`view`, the menu rows
+and the shrink discard-link all `find`ed `metadata.json` OR `metadatos.json`) so old run
+dirs kept aggregating. It was bilingual, it lived in four readers, and nobody had legacy
+runs — the dual read was pure noise. The name is now English-only: every reader finds
+`metadata.json` alone, and a run dir that contains only `metadatos.json` is ignored
+(`exports view` answers `No metadata.json found`, the list row shows no product, the
+discard-link skips it). Discussing removal surfaced a useful distinction: the *filename*
+legacy is removed, but the content **shape** fallbacks stay — `.sessions` without
+`.total` derives it from `roots + subagents`, and a metadata without `.session_records`
+still labels its selection `(legacy record)`. `tests/export_smoke.sh` pins both halves:
+a legacy-only dir is refused, and the same minimal record as `metadata.json` still
+renders. `export_smoke.sh` stays 384 asserts.
