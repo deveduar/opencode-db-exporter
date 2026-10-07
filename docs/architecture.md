@@ -436,8 +436,24 @@ resolves rows/descriptions/bake/`ops-flags` for the CLI and the menu. `shrink <n
 bakes the recipe to the raw **operation** flags (`--strip-reasoning`) and prepends
 them, so an explicit selection flag still wins (`shrink lean --keep 3`); unknown names
 error and list the known ones. `--discard-sessions` prints a first-step hint —
-`opencode-db export memory --sessions <ids>` — so nothing is lost before the pruned copy
-is made; the menu makes it an actual offer.
+`opencode-db export <profile> --sessions <cascade>` — so nothing is lost before the
+pruned copy is made; the menu makes it an actual offer. The hint and the offer both
+carry the **cascade**, not the listed roots: `--discard-sessions` drops the roots and
+every descendant, while `export --sessions` matches EXACT ids, so the roots alone
+exported part of what was about to be deleted — silently, because the export
+succeeded. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE` (default `archive` =
+transcript + memory), validated against products + preset names in
+`o_shrink_discard_profile`, so a typo is reported where the command is printed.
+
+That resolver also asks `plan.py subagent-gaps <profile>` (read across every product of a
+bundle) whether the profile would keep the subagents it is being handed:
+`no_subagents`/`no_orphan_subagents` drop the sessions themselves, and `sub: omit` empties
+`children_of`, so **no subagent body is written** while the run still reports plausible
+counts. All three are silent successes — the exact failure this offer exists to prevent,
+now with a closed set that specifically contains the subagents. So the resolver warns
+before the y/N gate. It is a warning and not a veto: dropping subagents on purpose is a
+legitimate reason to run the export. A product keyword can never gap, so `archive` stays
+silent for free.
 
 **The create flow is sessions-first** (`oc_pick_shrink` = the `__CREATE__` entry of the
 shrinks picker), and it is the only way to create a shrink from the menu:
@@ -464,7 +480,8 @@ shrinks picker), and it is the only way to create a shrink from the menu:
 3. `oc_shrink_confirm_run` — the **read-only plan**: exact counts on the LIVE DB using
    the *engine's own predicates* (kept roots+subagents, the discarded cascade, rows per
    table, reasoning parts, current size) via `WITH RECURSIVE` closures, the
-   `export memory --sessions` offer when discarding, the picked `Recipe:`/`Command:`
+   `export <profile> --sessions <cascade>` offer when discarding (the list names each
+   discarded session by id + title, capped), the picked `Recipe:`/`Command:`
    lines, then the y/N gate.
 
 Rationale: the *selection* is the decision users actually think in ("which conversations
@@ -478,10 +495,21 @@ Declining at the plan re-renders the recipe rows (pick another one; the selectio
 untouched) and ESC there climbs back to the sessions picker with the marks intact.
 
 Produced copies accumulate under `$OCED_BACKUP_DIR/shrink/<o_ts>/`; `oced_shrinks`
-(`shrinks list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>`) manages them the
-way `exports` manages run folders — `list` aggregates each `shrink.json` + the copy size
-into one row, `--tsv` emits `stamp<TAB>display` as the single machine row format (used by
-the menu picker).
+(`shrinks list [--tsv]|view <stamp> [--json]|verify [--tsv] [--yes]|remove <stamp> [--yes]|prune <N>`)
+manages them the way `exports` manages run folders. The presentation splits into two
+screens with two widths:
+
+* `shrinks list` — a **COLUMN**: `<date>  <tag>  <kept>/<total> kept  <before> -> <after> -N%`,
+  the tag from `plan.py rule-tag` (the SSoT for the compact form), one size delta,
+  the copy's state only when anomalous (`(swapped/no copy)`).
+* `shrinks view` — a **DETAIL** screen shaped like `exports view`
+  (`== Shrink copy: <stamp> ==` then `sessions:`/`size:`/`selection:`/`criteria:`/
+  `reasoning:`/`date:`/`db:`/`integrity:`/`freshness:` + per-table removals + files);
+  `--json` returns `shrink.json` verbatim, byte for byte, no banner.
+
+Both formats are generated from the same `shrink.json`; the sentence and the tag are
+two formats of ONE fact living side by side in `plan.py` (`rule-line` / `rule-tag`).
+The bash engine never builds these phrases itself; it delegates to the single source.
 
 ## 6. Operational safety of the swap (`shrink --swap`)
 

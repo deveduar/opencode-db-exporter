@@ -115,14 +115,20 @@ oced_backup() {
     done
 
     mkdir -p "$OCED_BACKUP_DIR"
+    # The plan belongs to whoever OWNS the gate. `--yes` says exactly that: the
+    # caller asked (the menu prints the plan with --dry-run, asks its own y/N and
+    # then runs --yes), so printing it again put the SAME block twice on one
+    # screen. `--dry-run` always shows it — that is its whole job.
     local est_raw est_extra=0 ans
-    [ -f "${OPENCODE_DB}-wal" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-wal"))) || true
-    [ -f "${OPENCODE_DB}-shm" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-shm"))) || true
-    est_raw=$(( $(stat -c %s "$OPENCODE_DB") + est_extra ))
-    echo "-> Backup plan"
-    printf '   %-11s %s\n' "Source:" "$OPENCODE_DB"
-    printf '   %-11s %s/opencode-<timestamp>.db%s\n' "Target:" "$OCED_BACKUP_DIR" "$([ "$compress" -eq 1 ] && echo ' (gzipped)')"
-    printf '   %-11s ~%s raw snapshot (sqlite .backup; gzip compresses on save)\n' "Est. size:" "$(o_human_size "$est_raw")"
+    if [ "$yes" -ne 1 ] || [ "$dry" -eq 1 ]; then
+        [ -f "${OPENCODE_DB}-wal" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-wal"))) || true
+        [ -f "${OPENCODE_DB}-shm" ] && est_extra=$((est_extra + $(stat -c %s "${OPENCODE_DB}-shm"))) || true
+        est_raw=$(( $(stat -c %s "$OPENCODE_DB") + est_extra ))
+        echo "-> Backup plan"
+        printf '   %-11s %s\n' "Source:" "$OPENCODE_DB"
+        printf '   %-11s %s/opencode-<timestamp>.db%s\n' "Target:" "$OCED_BACKUP_DIR" "$([ "$compress" -eq 1 ] && echo ' (gzipped)')"
+        printf '   %-11s ~%s raw snapshot (sqlite .backup; gzip compresses on save)\n' "Est. size:" "$(o_human_size "$est_raw")"
+    fi
     # The plan and nothing else — the same contract as `shrink --dry-run`, and what
     # the menu prints BEFORE asking for the y/N (so the gate belongs to the frame
     # that owns the list, not to a prompt hidden inside a captured command).

@@ -80,7 +80,7 @@ set, where a subagent never travels without its parent, add
 `--no-orphan-subagents`: any selected subagent whose parent is not part of the export
 is dropped instead.
 
-## 2. Manual run vs named plans
+## 2. CLI runs vs named plans
 
 Products run, by default, with their plain defaults:
 
@@ -90,27 +90,35 @@ Products run, by default, with their plain defaults:
 | subagents | included, in separate files |
 | patches / reasoning | included |
 | faithful `--json` | off |
-| sessions | **all** (or `--filter` / `--sessions` to narrow) |
+| sessions | **all** (or `--filter` / `--sessions` to narrow; recency is `--last N` / `--since DATE` — both **CLI-only**, never plan keys) |
 
-The menu's manual flow (no presets file) uses exactly these defaults. To repeat a configured combination
-again and again (and to run **several products under one stamp**) define a **plan** in
+These are the defaults a plan that configures nothing inherits. To repeat a configured
+combination again and again (and to run **several products under one stamp**) define a **plan** in
 `~/.config/opencode-db/presets.json` (created from `presets.json.example` at install;
 schema documented in `docs/schemas.md` and machine-checkable in
 `generated/presets.schema.json`).
 
-The **shipped plans** are named after their purpose:
+The **shipped plans** (exactly what `presets.json.example` contains) are named after
+their purpose:
 
 | plan | products | purpose | relative size |
 |---|---|---|---|
 | `archive` | transcript (`tool_output full` + `json`) + memory (`files`) | **lossless backup**: everything, complete tool outputs + faithful JSON + file lists | heavy |
 | `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
-| `share` | transcript (`json` + `sanitize` + `no_reasoning`) | **publish transcript (best-effort redaction)**: sanitized, no reasoning, faithful JSON | medium |
+| `share` | transcript (`json` + `no_reasoning`) | **publish transcript**: faithful JSON, no reasoning. It does **not** redact — add `--sanitize` (best effort) yourself, and read the output before you publish | medium |
 | `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
+| `backup_then_full` | transcript (`snapshot: fresh` + `tool_output full`) | **archive-grade but safe to run any time**: offers a fresh backup first when the last one diverged from the live DB | heavy |
+| `this_week` | transcript (pinned `filter "%2026-09%"`) | **sessions whose text matches that pattern**: edit the month before using it. The plan's own selection wins over your marks, and the confirmation says so | light |
+| `one_session` | memory (pinned `sessions`) | **corpus of one session**: template — replace `ses_ONLY_THIS_ID` with a real id | light |
+
+`--sanitize` is a **per-run** flag, deliberately not baked into `share`: it redacts
+high-confidence prefixes only, and a plan that silently redacted part of the content
+would promise a safety it cannot keep. See §5.
 
 Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same sessions, and
-`quick` ~4× the plain manual transcript. Delete runs you no longer need with
+`quick` ~4× the plain CLI transcript. Delete runs you no longer need with
 `opencode-db exports remove <stamp>`.
 
 ## 3. The menu flow, step by step
@@ -121,7 +129,8 @@ opencode-db menu  →  Export
 
 1. **Session picker** — if the presets file exists, you see the session picker first.
    Sessions are listed with `[x]` marks (default: all marked). The header is one line of
-   live state — `3/6 marked · newest first · ESC: back` — plus a caveat line when a
+   live state — `3/6 marked · newest first · ESC: back` (`· subagents hidden, never
+   exported` is appended while the switch is hidden) — plus a caveat line when a
    switch has a consequence the rows cannot show. You can:
    - Toggle individual sessions with Enter
    - Use the two bulk rows: `mark all`, `unmark all`
@@ -151,10 +160,14 @@ opencode-db menu  →  Export
      preset) — your 6 marks are not used`, and the run is the plain `export <name>`
    - some unmarked → `the 2 sessions you marked (the menu overrides the preset: …)` and
      the run is `export <name> --sessions CSV`
-   `Menu adds:` names only what the menu itself contributes (`--no-subagents` when the
-   subagents switch is hidden), never the preset's own config. `Note:` appears when a row
-   cannot show the consequence: subagents that will be exported standalone, or a preset
-   that already drops subagents (the switch cannot widen it).
+   `Menu adds:` names only what the menu itself contributes, and with the subagents
+   switch **hidden it adds no flag at all**: hidden subagent rows are never rendered, so
+   they cannot be marked nor reach the CSV, and the run instead says
+   `subagents cascaded from selected roots` (the marked roots are expanded to their full
+   cascade before the `--sessions` override). Otherwise it reads `nothing`. It never
+   repeats the preset's own config. `Note:` appears when a row cannot show the
+   consequence: subagents that will be exported standalone, or a preset that already
+   drops subagents (the switch cannot widen it).
    Accept to run, or ESC to go back and change sessions/preset.
 
 4. The run lands in `~/.local/share/opencode-db-exporter/exports/<stamp>/` with one
@@ -163,18 +176,62 @@ opencode-db menu  →  Export
 
 Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|digest [flags]`; `full` and `compactions` still resolve as aliases). ESC always climbs back / cancels.
 
+## 3b. Managing your runs
+
+Every list in the menu has the same shape: one flow row, one `[*] view → remove`
+toggle, then a row per entry. Only in **view** mode do you get the detail rows.
+
+| list | rows | what a row does |
+|---|---|---|
+| exports | `[>] create export`, `[*] view → remove`, `[>] details of all runs`, `[delete all]`, `[delete olds]` | `exports view <stamp>` prints the run's metadata only (not its markdown), one screen with a banner and per-product blocks |
+| backups | `[>] create backup`, `[*] view → remove`, `[delete all]`, `[delete olds]` | `backups view <file>` prints the manifest record **and runs the sha256 check** — `[OK]`, `[FAIL]` with both hashes, or `[MISSING]` — plus `vs live DB` and a `--from-backup` restore hint |
+| shrinks | `[>] create shrink copy`, `[>] swap a copy into the LIVE DB`, `[?] verify`, `[*] view → remove`, `[>] details of all copies`, `[delete all]`, `[delete olds]` | `shrinks view <stamp>` shows one copy; `verify` audits **every** copy, not just the newest |
+
+Every row is a single action — there is no TAB multi-select anywhere. The two `delete`
+rows only appear in **remove** mode, next to the toggle, never next to a detail row.
+
+Three behaviours worth knowing:
+
+- **`[>] details of all …`** prints every entry's detail screen in one pass — one
+  global header, then the same `view` command the single row runs, with a single pause
+  at the end (Enter returns to the list, Esc closes the submenu). It appears only in
+  view mode, and only when the list is not empty. Backups has no such row: hashing
+  every file twice is not worth it, and `backups view` already validates each one you open.
+- **`[?] verify` on shrinks** is a real audit, not a display: a copy is **stale** when
+  the live DB has newer sessions than the copy (or when it predates the last backup),
+  and a directory without a `shrink.json` is reported once, as an orphan. Delete a stale
+  copy knowing this.
+- **`[>] create backup` shows the plan before asking.** It runs `backup --dry-run`
+  first, then a single `Create this backup now?` gate, then `backup --yes` — so no
+  command ever stops to ask you something from inside the menu, and the plan block
+  appears exactly once (the `--yes` call does not repeat it). The `snapshot: fresh`
+  plan (`backup_then_full`) offers the same when the last backup has diverged.
+- **When the shrink discards sessions, the plan names them and offers the export
+  first.** You see every session that will be dropped by **id + title + how many
+  subagents come with it** (an id alone does not tell you which conversation it is),
+  and the offer is `export archive --sessions <cascade>` — the whole discard set
+  (roots **and** their subagents), which is the only thing that protects them:
+  `export --sessions` matches exact ids, so the roots alone would export part of
+  what the shrink is about to delete. Answer `y` and you keep a readable reference;
+  answer `n` and the same command is printed so you can run it later (the live DB
+  still has everything — the export matters before you **swap** the copy in). Set
+  `OCED_SHRINK_DISCARD_EXPORT_PROFILE=memory` in the conf file if you prefer a
+  corpus-only reference. Whatever you pick, it must keep the subagents: a preset with
+  `no_subagents`, `no_orphan_subagents` or `sub: omit` earns an on-screen warning, because
+  the export would run, look fine, and leave the subagents behind.
+
 ## 4. Decision matrix
 
 | I want to… | use | notes |
 |---|---|---|
 | keep a lossless backup of everything | `export archive` | complete tool outputs + faithful JSON + corpus |
 | review what I did today, fast | `export quick` | light, readable transcript + corpus |
-| send a session to a colleague / paste in an issue / publish | `export share` | sanitized, no reasoning; **verify output before sharing (sanitize is best-effort)** |
+| send a session to a colleague / paste in an issue / publish | `export share` | no reasoning + faithful JSON; it does **not** redact — add `--sanitize` if you must (best effort) and **read the output before sharing** |
 | read a conversation plain | `export notes` | plain transcript defaults, nothing extra |
-| give another AI the context of my sessions (RAG) | `export rag` | corpus.jsonl with defaults; add `--files` for touched files |
+| give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
-| give another AI the context of my sessions (RAG) | `export memory` | corpus.jsonl; add `--files` for touched files |
-| read one conversation in full | `transcript` (manual/CLI) | add `--json` if you also want the faithful archive |
+| archive-grade export, but make sure the backup is current first | `export backup_then_full` | offers a fresh backup when the last one diverged, then a full transcript |
+| read one conversation in full | `export transcript` (CLI) | add `--json` if you also want the faithful archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
@@ -187,8 +244,8 @@ Without a presets file, the classic raw-flags CLI remains available (`opencode-d
   explicit flag overrides the plan's value).
 - The DB is always opened **read-only**; exports never mutate opencode data. The only
   path that writes the live DB is the opt-in `shrink --swap`.
-- Every machine artifact carries a `db_sha256` so you can correlate an export with the
-  exact snapshot that produced it.
+- Every export's `metadata.json` carries a `db_sha256`, so you can correlate a run with
+  the exact snapshot that produced it.
 - **`--sanitize` is best-effort**: it redacts high-confidence secret prefixes
   (sk-, ghp_, Bearer, JWT, PEM…) but is not a guarantee; always review the output
   before sharing.

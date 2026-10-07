@@ -27,12 +27,6 @@ oc_export_rows() {
     oc_preset_rows
 }
 
-# oc_selection_rows -> session/ALL selection rows for a chosen preset.
-oc_selection_rows() {
-    printf '__ALL__\tALL SESSIONS (no filter)\n'
-    oc_sessions_rows
-}
-
 oc_export_presets_picker() {
     local csv="$1" hide="${2:-0}"
     local sel key header name seldesc

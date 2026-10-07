@@ -25,6 +25,8 @@
 #   list-presets         <name>\t<summary> rows for `shrink --list-presets`
 #   rule-line <rule> [value] [strip 0|1]   human criteria line for the bash
 #                                      engine's final resolved rule
+#   rule-tag <rule> [value] [strip 0|1]   the COMPACT tag of the same rule
+#                                      (one cell: shrinks list + menu rows)
 from __future__ import annotations
 
 import json
@@ -42,11 +44,19 @@ try:
         merged_presets,
         op_lines,
         rule_lines,
+        rule_tags,
     )
     from shrinklib.flags import SHRINK_PRESET_PURPOSE
 except ImportError:
     # fallback for in-place execution (python3 modules/shrinklib/plan.py ...)
-    from presets import bake_args, load_shrink_presets, merged_presets, op_lines, rule_lines
+    from presets import (
+        bake_args,
+        load_shrink_presets,
+        merged_presets,
+        op_lines,
+        rule_lines,
+        rule_tags,
+    )
     from flags import SHRINK_PRESET_PURPOSE
 
 
@@ -157,10 +167,11 @@ def _cli() -> int:
                     tag = f"  → {SHRINK_PRESET_PURPOSE[name]}"
                 print(f"{name}\t{_short(cfg)}{tag}")
             return 0
-        if cmd == "rule-line":
-            # Human criteria line for a resolved rule (the bash engine's final rule
-            # after last-wins). Args: <rule> [value] [strip 0|1]. Single source with
-            # rule_lines() — shrink.sh never builds these phrases itself.
+        if cmd in ("rule-line", "rule-tag"):
+            # Human criteria line (or its compact tag) for a resolved rule (the bash
+            # engine's final rule after last-wins). Args: <rule> [value] [strip 0|1].
+            # Single source with rule_lines()/rule_tags() — shrink.sh never builds
+            # these phrases itself.
             if len(args) < 2:
                 return 1
             rule = args[1]
@@ -179,6 +190,12 @@ def _cli() -> int:
                 return 1
             if strip:
                 cfg["strip_reasoning"] = True
+            if cmd == "rule-tag":
+                # the same cfg, one cell: `shrinks list` cannot afford the
+                # sentence (it reached 225 chars/row), so the phrase and the tag
+                # are two formats of ONE fact and live side by side here.
+                print(rule_tags(cfg))
+                return 0
             print(" + ".join(rule_lines(cfg)))
             return 0
     except ValueError:

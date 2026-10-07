@@ -384,7 +384,6 @@ GUIDE=$(oc_export_picker)
 printf '%s' "$GUIDE" | grep -q 'presets.json.example' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
 printf '%s' "$GUIDE" | grep -q 'export transcript|memory|digest' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
 [ -z "$(oc_export_rows)" ] && ok "export rows empty without presets (no manual fallback)" || bad "export rows: $(oc_export_rows)"
-printf '%s\n' "$(oc_selection_rows)" | sed -n '1p' | grep -q '^__ALL__' && ok "selection rows list ALL SESSIONS first" || bad "selection rows ALL missing"
 
 echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
 export OCED_PRESETS="$TMP/presets.json"
@@ -398,7 +397,8 @@ cat > "$OCED_PRESETS" <<'EOF'
    "digest": {"product": "compactions"},
    "snappy": {"product": "transcript", "snapshot": "fresh"},
    "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true},
-   "nosub": {"product": "transcript", "no_subagents": true}
+   "nosub": {"product": "transcript", "no_subagents": true},
+   "narrow": {"product": "transcript", "sub": "omit"}
 }}
 EOF
 reset
@@ -929,17 +929,99 @@ qempty
 ( oc_fzf_sel() { tee -a "$TMP/sessions_rows.txt" | fzf "$@"; }
   oc_shrink_sessions_pick >/dev/null )
 reset
+export OCED_PRESETS="$TMP/presets.json"   # so `archive` resolves (an install ships it)
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 grep -q '^__TOGGLE__.*\[\*\] newest first  →  old first$' "$TMP/sessions_rows.txt" \
     && ok "the order row advertises the current mode and the reverse sort" || bad "order row missing"
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
-oc_pick_shrink >/dev/null
+oc_pick_shrink > "$TMP/offer.txt"
 grep -q '^export archive --sessions ' "$CALLS" && ok "unmarked roots are offered for export first (archive bundle)" || bad "sessions export offer: $(cat "$CALLS")"
 grep -q '^shrink --discard-sessions ' "$CALLS" && ok "unmarked roots -> --discard-sessions" || bad "sessions discard: $(cat "$CALLS")"
 [ "$(grep '^shrink --discard-sessions ' "$CALLS" | tail -1 | grep -o ',' | wc -l)" = "1" ] \
     && ok "sessions picker: 2 unmarked roots (1 kept of 3) -> 1 comma" || bad "sessions discard csv count"
+
+# The offer must export the DISCARD CASCADE, not the roots the picker left
+# unmarked: `export --sessions` matches EXACT ids (pinned in export_smoke.sh) while
+# --discard-sessions drops the roots AND their descendants. Offering the roots
+# alone exported 2 of the 3 sessions about to be deleted — and looked like it
+# worked, because the export succeeded with plausible counts.
+EXCSV=$(grep '^export archive --sessions ' "$CALLS" | tail -1 | sed 's/^export archive --sessions //')
+[ "$(printf '%s' "$EXCSV" | tr ',' '\n' | sort | paste -sd, -)" = "ses_B0001,ses_B0002,ses_ORPHAN01" ] \
+    && ok "the discard offer exports the cascade (ses_B0002 comes along)" || bad "offer csv: $EXCSV"
+grep -qx "shrink --discard-sessions $(printf '%s' 'ses_ORPHAN01,ses_B0001')" "$CALLS" \
+    && ok "the engine still gets only the roots (it closes the set itself)" || bad "engine roots: $(cat "$CALLS")"
+
+# An id alone says nothing ("which chat is this?"): the plan names what it drops.
+grep -q "Project Beta" "$TMP/offer.txt" && grep -q "Orphan subagent" "$TMP/offer.txt" \
+    && ok "the discard list names the sessions (title next to the id)" || bad "offer titles: $(grep -A3 'WILL DISCARD' "$TMP/offer.txt")"
+grep -q "(1 subagent(s))" "$TMP/offer.txt" \
+    && ok "…with the subagents each one takes with it" || bad "offer badge: $(grep -A3 'WILL DISCARD' "$TMP/offer.txt")"
+
+# a long discard must not flood the screen, but the cap still names the whole set
+reset; call_log; confirm_action() { return 0; }
+DISCARD_LIST_MAX=1
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/offer_cap.txt"
+grep -q '^     … and 1 more (all of them: ' "$TMP/offer_cap.txt" \
+    && ok "the discard list is capped, and the cap still carries the full csv" || bad "cap: $(grep -A3 'WILL DISCARD' "$TMP/offer_cap.txt")"
+# titles longer than the field are cut with an ellipsis, not wrapped
+DISCARD_LIST_MAX=8; DISCARD_TITLE_W=5
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/offer_cut.txt"
+grep -q 'Proje…' "$TMP/offer_cut.txt" \
+    && ok "a long title is cut to the field width" || bad "title cut: $(grep -A3 'WILL DISCARD' "$TMP/offer_cut.txt")"
+
+# the profile both call sites print is configuration, not another menu row — and a
+# typo must be reported here (with the valid names), never inside the export
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+OCED_SHRINK_DISCARD_EXPORT_PROFILE="archve" oc_pick_shrink > "$TMP/offer_bad.txt" 2>&1
+grep -q "is not a valid export profile" "$TMP/offer_bad.txt" && grep -q "Valid: archive" "$TMP/offer_bad.txt" \
+    && grep -q "Using 'archive' instead" "$TMP/offer_bad.txt" \
+    && ok "an invalid OCED_SHRINK_DISCARD_EXPORT_PROFILE is reported + falls back" || bad "bad profile: $(grep -E '\[!\]|Valid|Using' "$TMP/offer_bad.txt")"
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+OCED_SHRINK_DISCARD_EXPORT_PROFILE="memory" oc_pick_shrink >/dev/null 2>&1
+grep -q '^export memory --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+    && ok "the profile var picks a different export (same cascade)" || bad "profile var: $(cat "$CALLS")"
+export OCED_PRESETS="$TMP/no-presets.json"
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/offer_nopresets.txt" 2>&1
+grep -q '^export transcript --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+    && ok "with no presets file the offer falls back to the always-valid product" || bad "no-presets: $(cat "$CALLS")"
+
+# the offer hands over the whole CASCADE, so a profile that would not keep the
+# subagents breaks the promise the command appears to make — and the export still
+# succeeds, so it must be said on screen, before the y/N gate
+export OCED_PRESETS="$TMP/presets.json"
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+OCED_SHRINK_DISCARD_EXPORT_PROFILE="narrow" oc_pick_shrink > "$TMP/offer_gap.txt" 2>&1
+grep -q "does not preserve subagents (sub_omit)" "$TMP/offer_gap.txt" \
+    && ok "the offer warns when the profile drops the subagents (sub: omit)" || bad "gap warn: $(grep -E '\[!\]' "$TMP/offer_gap.txt")"
+grep -q '^export narrow --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+    && ok "the subagent gap warns but does not veto the offer" || bad "gap veto: $(cat "$CALLS")"
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+OCED_SHRINK_DISCARD_EXPORT_PROFILE="nosub" oc_pick_shrink > "$TMP/offer_gap2.txt" 2>&1
+grep -q "does not preserve subagents (no_subagents)" "$TMP/offer_gap2.txt" \
+    && ok "no_subagents is reported on the offer screen too" || bad "gap2 warn: $(grep -E '\[!\]' "$TMP/offer_gap2.txt")"
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
+oc_pick_shrink > "$TMP/offer_clean.txt" 2>&1
+grep -q "does not preserve subagents" "$TMP/offer_clean.txt" \
+    && bad "archive keeps the subagents: the offer must stay silent" || ok "a subagent-safe profile (archive) warns nothing"
 
 # the plan prints the exact read-only counts before the y/N gate
 : > "$CALLS"
@@ -1100,7 +1182,8 @@ done
 mkdir -p "$SHR/20251231-120000"
 jq -n --arg c "keep 10 + strip reasoning" --argjson t 6 --argjson k 2 --argjson del 4 \
     --argjson b 100000 --argjson a 30000 --argjson st 0 --argjson mu 9999999999999 \
-    '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del, max_updated:$mu}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-04T00:00:00Z"}' \
+    --argjson ids '["ses_aaa","ses_bbb","ses_ccc"]' \
+    '{criteria:$c, sessions:{total:$t, kept:$k, deleted:$del, max_updated:$mu}, size:{before:$b, after:$a}, stripped_reasoning:$st, date:"2026-01-04T00:00:00Z", selection:{rule:"keep_sessions", ids:$ids}}' \
     > "$SHR/20251231-120000/shrink.json"
 : > "$SHR/20251231-120000/opencode.shrunk.db"
 : > "$SHR/20260101-090000/opencode.shrunk.db"
@@ -1108,7 +1191,13 @@ ROWS=$(oc_shrinks_rows view)
 printf '%s\n' "$ROWS" | sed -n '1p' | grep -q '^__CREATE__' && ok "shrinks rows: create first" || bad "shrinks create not first"
 printf '%s\n' "$ROWS" | grep -q '__TOGGLE__' && ok "shrinks rows: view/remove toggle" || bad "shrinks toggle missing"
 printf '%s\n' "$ROWS" | grep -q '2026-01-03 11:00:00' && ok "shrinks rows list the produced runs (human stamp)" || bad "shrinks run rows missing"
-printf '%s\n' "$ROWS" | grep -q '2 sess / 4 del' && ok "shrinks rows show the shrunken counts" || bad "shrinks counts in row"
+printf '%s\n' "$ROWS" | grep -q '2/6 kept' && ok "shrinks rows show kept/total" || bad "shrinks counts in row"
+printf '%s\n' "$ROWS" | grep -q 'keep 3 ids' && ok "shrinks rows show the selection tag, not the criteria sentence" || bad "shrinks tag in row: $(printf '%s\n' "$ROWS" | tail -2 | tr '\n' '|')"
+printf '%s\n' "$ROWS" | grep -q 'keep 10 + strip reasoning' && bad "shrinks row leaks the criteria sentence" || ok "shrinks row carries no criteria sentence"
+# a dir with no shrink.json at all (and no copy) must still be listed, and say so
+printf '%s\n' "$ROWS" | grep -q 'swapped/no copy' && ok "shrinks rows flag a run with no copy" || bad "shrinks no-copy row"
+printf '%s\n' "$ROWS" | awk 'length($0) > 120 { bad++; print } END { exit (bad+0 > 0) }' \
+    >/dev/null 2>&1 && ok "shrinks rows stay inside the menu width" || bad "shrinks row too wide for the menu"
 printf '%s\n' "$ROWS" | grep -q '^__VERIFY__' && ok "shrinks rows offer verify" || bad "shrinks verify row missing"
 printf '%s\n' "$ROWS" | grep -q '^__SWAP__' && ok "shrinks rows offer the swap entry" || bad "shrinks swap row missing"
 

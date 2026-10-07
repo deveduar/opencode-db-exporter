@@ -58,22 +58,80 @@ oc_shrink_sql_ids() {
     printf '%s' "$out"
 }
 
-# oc_shrink_discard_offer <ids-csv> -> offers to export the ids to be discarded
-# BEFORE the shrink drops them: the SAFE order is backup -> export <profile> -> shrink.
-# Profile is $OCED_SHRINK_DISCARD_EXPORT_PROFILE (default: archive = transcript+memory;
-# set to "memory" for corpus-only, or any valid export product/profile).
+# DISCARD_LIST_MAX -> how many discarded sessions the plan names before it
+# summarises the rest. An id alone says nothing ("which chat is this?"), so the
+# plan shows titles — but a 500-session discard must not flood the screen.
+DISCARD_LIST_MAX=8
+DISCARD_TITLE_W=60
+
+# oc_shrink_discard_rows <roots-csv> -> one TSV line per discarded ROOT session:
+# "<id>\t<title>\t<descendant-count>", read-only on the live DB, ordered like the
+# picker (newest used first). The title is the reason this exists: the plan names
+# what it drops. Tabs/newlines inside a title would break a TSV line, so they
+# collapse to spaces (a title is one display field, not a data field).
+oc_shrink_discard_rows() {
+    local inlist
+    inlist=$(oc_shrink_sql_ids "$1")
+    [ -n "$inlist" ] || return 0
+    o_q -separator $'\t' "
+        WITH RECURSIVE d(id, root) AS (
+            SELECT s.id, s.id FROM session s WHERE s.id IN ($inlist)
+            UNION ALL
+            SELECT c.id, d.root FROM session c JOIN d ON c.parent_id = d.id)
+        SELECT d.root,
+               CASE WHEN s.title IS NULL OR s.title = ''
+                    THEN '(no title)'
+                    ELSE replace(replace(replace(s.title, char(9), ' '), char(10), ' '), char(13), ' ')
+               END,
+               count(*) - 1
+          FROM d JOIN session s ON s.id = d.root
+         GROUP BY d.root
+         ORDER BY s.time_updated DESC;" 2>/dev/null
+}
+
+# oc_shrink_discard_offer <roots-csv> -> offers to export what the shrink is about
+# to drop: the SAFE order is backup -> export <profile> -> shrink.
+#
+# <roots-csv> are the roots the picker left unmarked, but the DISCARD set is
+# descendant-closed while `export --sessions` matches EXACT ids. Offering the
+# roots alone would export 2 of the 7 sessions about to be dropped — and it would
+# look like it worked, because the export succeeds with plausible counts. So the
+# offer expands to the full cascade (oc_export_expand_subs, the same helper the
+# export wizard uses for its hidden-subagent mode).
+# Profile: o_shrink_discard_profile ($OCED_SHRINK_DISCARD_EXPORT_PROFILE, default
+# archive = transcript + memory) — a config choice, not another menu row.
 oc_shrink_discard_offer() {
-    local ids="$1"
-    [ -n "$ids" ] || return 0
-    local profile="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
+    local roots="$1"
+    [ -n "$roots" ] || return 0
+    local profile cascade rows shown=0 total
+    profile=$(o_shrink_discard_profile)
+    cascade=$(oc_export_expand_subs "$roots")
+    [ -n "$cascade" ] || cascade="$roots"
+    rows=$(oc_shrink_discard_rows "$roots")
+    total=$(printf '%s' "$rows" | grep -c . || true)
     echo ""
-    echo "   This shrink WILL DISCARD the listed session(s) (and their subagents):"
-    echo "     $ids"
+    echo "   This shrink WILL DISCARD these session(s) (each with its subagents):"
+    while IFS=$'\t' read -r id title subs; do
+        [ -n "$id" ] || continue
+        shown=$((shown + 1))
+        [ "$shown" -gt "$DISCARD_LIST_MAX" ] && break
+        if [ "${#title}" -gt "$DISCARD_TITLE_W" ]; then
+            title="${title:0:$DISCARD_TITLE_W}…"
+        fi
+        if [ "${subs:-0}" -gt 0 ]; then
+            printf '     %-38s %s (%s subagent(s))\n' "$id" "$title" "$subs"
+        else
+            printf '     %-38s %s\n' "$id" "$title"
+        fi
+    done <<< "$rows"
+    if [ "$total" -gt "$DISCARD_LIST_MAX" ]; then
+        printf '     … and %s more (all of them: %s)\n' "$((total - DISCARD_LIST_MAX))" "$cascade"
+    fi
     if confirm_action "Export them first (opencode-db export $profile --sessions)? This is the SAFE order (backup -> export $profile -> shrink)."; then
-        run_oced_tool export "$profile" --sessions "$ids"
+        run_oced_tool export "$profile" --sessions "$cascade"
         echo ""
     else
-        echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $ids"
+        echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $cascade"
     fi
 }
 

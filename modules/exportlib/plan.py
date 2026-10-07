@@ -343,6 +343,36 @@ def preset_subagents(name: str, pdata: dict | None = None) -> str:
     return ""
 
 
+def preset_subagent_gaps(name: str, pdata: dict | None = None) -> str:
+    """Every way this profile would NOT preserve the subagents it is handed,
+    comma-separated ('' = it keeps them all).
+
+    The shrink discard offer passes a CLOSED set (the discarded roots plus every
+    descendant) precisely so nothing that dies with the copy is lost. Two
+    different flags can quietly break that promise while the export still
+    succeeds with plausible counts: `no_subagents`/`no_orphan_subagents` drop
+    the sessions themselves, and `sub: omit` empties `children_of`, so the
+    subagents are counted as roots of nothing and no body is ever written. The
+    offer warns on the tokens instead of printing a command that reads like a
+    safety net. Read across every product of a bundle, like preset_subagents:
+    the decision is about the whole run.
+    """
+    if pdata is None:
+        pdata = load_presets().get(name, {})
+    bundle = _bundle_cfg(pdata)
+    cfgs: list[dict] = (
+        [v for v in bundle.values() if isinstance(v, dict)] if bundle else [pdata]
+    )
+    gaps = []
+    if any(c.get("no_subagents") is True for c in cfgs):
+        gaps.append("no_subagents")
+    if any(c.get("no_orphan_subagents") is True for c in cfgs):
+        gaps.append("no_orphan_subagents")
+    if any(c.get("sub") == "omit" for c in cfgs):
+        gaps.append("sub_omit")
+    return ",".join(gaps)
+
+
 def preset_rows(presets: dict | None = None) -> list[str]:
     """TSV picker rows for every preset, replicating oc_preset_rows (jq logic:
     purpose tag from product combo / transcript tool_output / sel + selection)."""
@@ -493,6 +523,20 @@ def _cli() -> int:
             if args[1] not in presets:
                 return 1
             print(preset_subagents(args[1], presets[args[1]]))
+            return 0
+        if cmd == "subagent-gaps":
+            # subagent-gaps <preset> -> the tokens of every subagent-preserving
+            # gap ('' when it keeps them all). The shrink discard offer asks
+            # this so a profile that would drop them warns BEFORE its y/N gate,
+            # where the command still reads like a safety net.
+            if len(args) < 2:
+                return 1
+            presets = load_presets()
+            if args[1] not in presets:
+                return 1
+            gaps = preset_subagent_gaps(args[1], presets[args[1]])
+            if gaps:
+                print(gaps)
             return 0
         if cmd == "resolve":
             if len(args) < 2:

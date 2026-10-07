@@ -417,8 +417,16 @@ Keep rules (`oced_shrink`, last one wins — exactly ONE applies):
 
 `--strip-reasoning` also drops every `part` whose `data` JSON has `type=reasoning`
 (kept set unchanged). `--discard-sessions` prints a first-step hint to
-`opencode-db export memory --sessions <ids>` so the knowledge is preserved before
-the pruned copy is made.
+`opencode-db export <profile> --sessions <cascade>` so the knowledge is preserved
+before the pruned copy is made. The hint lists the **cascade** (the selected ids plus
+every descendant that travels with them), because `--sessions` matches exact ids and
+the discard set does not. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE`
+(default `archive`); an unknown value is reported with the valid product/preset names
+and falls back instead of failing inside the export. A profile that would NOT preserve
+the subagents of that cascade (`no_subagents`, `no_orphan_subagents`, `sub: omit`) is
+warned about on screen first — `roots/subagents/total` cannot distinguish "exported with
+its subagents" from "exported without them" in a way the user asked for, and both look
+identical in `metadata.json`.
 
 The same closed keep-set is used to derive deleted counts. `--swap` additionally
 snapshots the live DB to `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db`
@@ -489,10 +497,54 @@ human mode carries the header — a machine reader gets the data untouched.
 picker consumes — same aggregation as `shrinks list`):
 
 ```
-<stamp>\t<YYYY-MM-DD HH:MM:SS UTC>  <criteria>  <kept> sess / <deleted> del  <before> -> <after> (<freed>, <pct>%)  <copy or (swapped/no copy)>
+<stamp>\t<YYYY-MM-DD HH:MM:SS UTC>  <tag>  <kept>/<total> kept  <before> -> <after> -<pct>%  <state>
 ```
 
-`<stamp>` is the run dir name (`YYYYMMDD-HHMMSS`, UTC); numbers come from that run's
-`shrink.json` (see §6); size fields are human-readable. A run whose `opencode.shrunk.db`
-was moved out by `--swap` renders `(swapped/no copy)`. Without `--tsv` the same row is
-printed numbered with a `view <stamp> · remove <stamp> · prune <N>` footer.
+`<stamp>` is the run dir name (`YYYYMMDD-HHMMSS`, UTC); the tag comes from
+`shrinklib/plan.py rule-tag` (the compact selection tag: `keep 1 newest`, `discard 2 ids +strip`,
+etc.); `<kept>/<total> kept` is the session survival count; ONE size delta replaces the
+three size fields the old format repeated; `<state>` is the copy's own state only when
+anomalous (`(swapped/no copy)`). Numbers come from that run's `shrink.json` (see §6); size
+fields are human-readable. Without `--tsv` the same row is printed numbered with a
+`view <stamp> · remove <stamp> · prune <N>` footer.
+
+A legacy `shrink.json` without `.selection` falls back to a 24-char cut of its `.criteria`
+as the tag, so the column never empties.
+
+---
+
+## 9. shrinks view
+
+`shrinks view <stamp> [--json]` is a **detail screen**, shaped like `exports view`:
+
+**Human mode (default):** leads with `== Shrink copy: <stamp> ==` then one fact per line:
+
+```
+  sessions:   <total> total · <kept> kept · <deleted> deleted
+  size:       <before> -> <after> (freed <freed>, -<pct>%)
+  selection:  <rule> · <n> id(s)
+  criteria:   <full criteria sentence from shrink.json>
+  reasoning:  <n> part(s) stripped          # only when stripped_reasoning > 0
+  date:       <ISO-8601 UTC from shrink.json>
+  db:         <source path from shrink.json>
+  integrity:  <integrity_check> · foreign keys <foreign_key_check>
+  freshness:  ok — the live DB has no newer session than this copy
+              STALE — <reason from o_shrink_stale>
+  ids (<n>):  ses_... (first 8)
+              … N more (--json has all of them)
+  removed:    <removed_total> row(s) total
+    <table> <count>        # per-table removals, biggest first (only non-zero)
+  files:
+    opencode.shrunk.db   <human size>
+    shrink.json          <human size>
+```
+
+- The `criteria` sentence is the full parenthetical text from `shrink.json` — the list
+  column only carries the compact tag (same fact, two formats).
+- The `freshness` line is the **same check** `shrinks verify` uses (`o_shrink_stale`), so
+  a detail screen can never show a copy nobody validated. A legacy shrink.json without
+  `sessions.max_updated` prints `STALE — shrink.json has no sessions.max_updated; cannot verify freshness`.
+- IDs are capped at 8 with `… N more`; the real count stays in `selection:`.
+
+**Machine mode (`--json`):** returns `shrink.json` **verbatim**, byte for byte, no banner,
+no aggregation. This is the contract the menu picker depends on.

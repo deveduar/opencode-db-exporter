@@ -55,6 +55,7 @@ opencode-db digest <session_id> [show [last|N|all]]
                                       # ('compactions' is the deprecated alias)
 opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (.backup), gzip + sha256 + manifest
                                        # --dry-run prints the plan (source/target/est. size) and writes nothing
+                                       # --yes skips the question AND the plan (the caller owns the gate)
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | digest
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
@@ -95,7 +96,8 @@ Every row carries one marker that says what it does:
   row per backup (date/size/sessions/msgs/sha).
   `[>] create backup` prints the **plan first** (`opencode-db backup --dry-run`: source, target,
   estimated size), asks its own `y/N`, and only then runs the backup non-interactively — the
-  menu never asks you something you cannot see, and a declined gate creates nothing.
+  menu never asks you something you cannot see, the plan appears exactly once (the second,
+  `--yes` call does not repeat it), and a declined gate creates nothing.
   In **view** mode a row shows that backup's details — `backups view <file>` prints the
   manifest record, **runs the sha256 check** (`[OK]` / `[FAIL]` with both hashes /
   `[MISSING]`), how it compares to the live DB and how to use it with `--from-backup`; in
@@ -114,8 +116,11 @@ Every row carries one marker that says what it does:
   **(2) the recipe** — `lean` (strip reasoning) or `quiet` (prune + vacuum), and nothing
   else: picking one goes straight to **(3) the plan** — the exact read-only counts
   (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
-  before the y/N gate; discarding offers `export memory --sessions <ids>` first, and
-  declining goes back to the recipes.
+  before the y/N gate; discarding offers `export archive --sessions <ids>` first
+  (the whole discard cascade, roots **and** their subagents, with each session named
+  by title), and declining goes back to the recipes. A profile that would drop those
+  subagents (`no_subagents`, `no_orphan_subagents` or `sub: omit`) is called out on
+  screen first — the export would otherwise succeed and quietly lose them.
 - **export** picker (preset-only) — **(1) sessions** first: one row per session, all
   marked by default (`[ ]` unmark, `mark all`/`unmark all`), sorted **newest used
   first** with a row to flip to oldest (re-sorting keeps your marks) and a `(N sub)`
@@ -219,18 +224,30 @@ and the `exports list` line).
     "share": {
       "product": "transcript",
       "json": true,
-      "sanitize": true,
       "no_reasoning": true
     },
     "notes": { "product": "transcript" },
     "rag":   { "product": "memory" },
-    "digest": { "product": "digest" }
+    "digest": { "product": "digest" },
+    "backup_then_full": {
+      "product": "transcript",
+      "snapshot": "fresh",
+      "tool_output": "full"
+    },
+    "this_week": { "product": "transcript", "filter": "%2026-09%" },
+    "one_session": { "product": "memory", "sessions": ["ses_ONLY_THIS_ID"] }
   }
 }
 ```
 
+That is the shipped `presets.json.example`, verbatim. Note that `share` does **not**
+bake in `--sanitize`: redaction is best-effort (high-confidence prefixes only), so it
+stays an explicit per-run flag you ask for on purpose — a plan that silently redacted
+part of the content would promise a safety it cannot keep.
+
 ```bash
 opencode-db export share                 # run the named preset (product + config + its own selection)
+opencode-db export share --sanitize      # opt into best-effort redaction for one run
 opencode-db export share --filter '%'    # a concrete CLI flag overrides the preset
 opencode-db export rag --cap 3000        # same, per-run
 opencode-db export transcript --json     # product keywords always mean the product (raw flags unchanged)
@@ -330,7 +347,7 @@ opencode-db shrink --older-than 30         # keep sessions updated in the last 3
 opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
 opencode-db shrink --keep-sessions ses_aaaaaa     # keep ONLY the listed ids + their parents/subagents
 opencode-db shrink --discard-sessions ses_bbbbbb  # keep everything EXCEPT the ids + their subagents
-                                               # (hints to export memory --sessions <ids> first)
+                                               # (offers export archive --sessions <cascade> first)
 opencode-db shrink lean --keep 30          # raw flags compose over a recipe (30 most recent, still strips)
 opencode-db shrink lean --swap             # build the copy AND replace the live DB (safe: --yes to skip the prompt)
 ```
@@ -372,10 +389,10 @@ Workflow that preserves knowledge while reclaiming space: `opencode-db backup` �
 Produced copies accumulate under `backups/shrink/`; manage them like export runs:
 
 ```bash
-opencode-db shrinks list              # date / criteria / kept-deleted / sizes per copy
+opencode-db shrinks list              # date / tag / kept/total / size delta
 opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
-opencode-db shrinks view <stamp> [--json]  # show a copy's shrink.json (--json = raw)
-opencode-db shrinks verify [--yes]    # audit: orphan dirs, old pre-shrinks, and the freshness of EVERY copy vs the live DB
+opencode-db shrinks view <stamp> [--json]  # detail screen (sessions/size/criteria/freshness/ids); --json = raw shrink.json
+opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, old pre-shrinks, and freshness of EVERY copy vs live DB
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
 ```
@@ -455,8 +472,8 @@ Environment variables still win over that file, which in turn wins over the buil
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 322 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 296 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 369 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 312 OK / 0 FAIL
 ```
 
 ## Layout

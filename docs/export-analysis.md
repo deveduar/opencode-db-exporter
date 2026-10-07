@@ -1069,3 +1069,263 @@ output, it cannot own the gate — which is the deeper half of why `guide.sh` ha
 `backup` call survives anywhere in the menu, plus the structural and pty guards. `tests/export_smoke.sh`
 — `--dry-run` prints the plan and writes no file, no manifest entry, asks nothing;
 `--dry-run --yes` still writes nothing.
+
+## §33 The user-facing guide had drifted from the code (current)
+
+`docs/export-guide.md` is the doc a user reads *instead of* this file, so drift there is worse
+than drift here: the design log can be old, the guide cannot lie. A pass comparing it against the
+menu found four false statements, one of them a **safety** claim.
+
+**`share` does not sanitize.** The guide (and a `presets.json` snippet in the README) still
+listed `share` as `transcript (json + sanitize + no_reasoning)` — "sanitized, no reasoning", with
+a decision-matrix row telling you to "verify output before sharing". §14 had already decided the
+opposite and said the guide was updated: the redaction patterns were narrowed to high-confidence
+prefixes only, so a plan that silently redacted *part* of the content would promise a safety it
+cannot keep, and `sanitize` was dropped from the shipped example. The guide was never actually
+rewritten. A user could have published secrets believing they were redacted — the exact failure
+mode `--sanitize` exists to make obvious. `share` is now documented as `json + no_reasoning`, with
+`--sanitize` as a per-run flag the reader must ask for on purpose, and the README snippet is on
+the same list (still open at the time of writing).
+
+**The menu's `Menu adds:` row never emits a flag.** The guide explained it as `--no-subagents`
+"when the subagents switch is hidden" — the pre-§29 design. Since the hidden switch stopped
+rendering those rows at all, the roots-only guarantee became *structural* and the cascade is
+expanded into `--sessions` instead, so the row reads `nothing` or `subagents cascaded from
+selected roots`. Documenting the old flag would have taught a user to grep for a flag that is never
+written.
+
+**There is no manual menu flow.** §2 claimed "the menu's manual flow (no presets file) uses exactly
+these defaults" while §3 of the same file correctly said the picker prints setup guidance and falls
+back to the CLI (§27 removed the flow). A document that contradicts itself is worse than one that
+is merely old, so §2 now only describes what the CLI and an unconfigured plan do.
+
+**The shipped example grew three plans the guide never mentioned.** `backup_then_full`
+(`snapshot: fresh` + full tool outputs), `this_week` (pins a `filter`) and `one_session` (pins
+`sessions`) shipped with §13's recency work; the guide's plan table still listed six. The two
+pinned-selection plans are the interesting ones: they are precisely the cases §13's decision log
+uses as the argument for why the confirmation had to become non-decorative, so a reader who met
+them here would already know what `Sessions:` is for.
+
+Added: a `## 3b. Managing your runs` section, because §3 documented *creating* a run and nothing
+about the three lists that manage them — the `[*] view → remove` toggle, `[>] details of all …`,
+`[?] verify` auditing every shrink copy, and the plan-before-gate backup create (§32).
+
+**Removed dead code with the last caller.** `oc_selection_rows` (the `__ALL__` + session rows of
+the deleted manual flow) had no production call site since §27; the only thing still invoking it
+was a test asserting its own first row. The real `[mark all]` row is emitted by `oc_session_picker`
+(`core.sh`), so the function, its test and its mention in `AGENTS.md` went together. A test that
+only proves a dead function still returns what it always returned is not coverage — it is a
+ratchet holding the corpse in place.
+
+**Verified** — `bash -n` over every script, `tests/export_smoke.sh` `322 OK / 0 FAIL`,
+`tests/menu_flow.sh` `295 OK / 0 FAIL` (one fewer: the deleted dead-code assertion), `git diff --check`.
+
+**The recurrence guard: the README snippet is now compared, not trusted.** `export_smoke.sh`
+grows a third anti-drift check next to the two `generate_schema.py` ones: it extracts the single
+`json` block the README prints and asserts it **equals** `presets.json.example`. The reason is the
+shape of the bug itself — nothing in the build could ever catch it, because a doc that misdescribes
+the shipped example is perfectly valid JSON. A doc is only trustworthy about a flag when something
+machine-checksable stands between it and the reader, and there are now three such things in a row:
+the schema, the generated artifacts, and this snippet. It is the one assertion in the suite that
+fails on prose, which is exactly the category that had been drifting.
+
+## §34 One decision, one plan (the backup plan appeared twice)
+
+§32 fixed the backup create flow so the user could see it: `backup --dry-run` printed the plan,
+the menu asked its own y/N, and `backup --yes` ran it. It was reported as fixed because the
+mechanism was right — and then the user came back with the obvious follow-up: **the plan appears
+again after answering `y`.**
+
+**Cause.** `oced_backup` printed `-> Backup plan` unconditionally, *before* both the dry-run early
+return and the `--yes` check. The menu calls the command twice by design, so the one block that
+was supposed to be shown exactly once was printed twice on one screen — and twice for the *same*
+decision, which is why it read as a repeat rather than as two things.
+
+**Why the suite was green.** `tests/export_smoke.sh` asserted that the output of `backup --yes`
+contains `Backup plan`, `Est. size:` and `Target:`. The bug was not merely uncaught: it was
+**pinned as a contract**. A test that requires the defect is worse than a missing test, because
+the next reader treats the defect as a decision and defends it. (The same test now asserts the
+opposite — `backup --yes` must NOT contain the plan, and must still report `[OK] Backup:` — and
+the plan's fields moved to the `--dry-run` assertions, where they belong. Guard verified
+non-vacuous: restoring the unconditional print fails it.)
+
+**The rule, and the matrix.** The plan belongs to whoever owns the gate. `--yes` *means* "the
+caller owns the gate", so it prints no plan; `--dry-run` always prints it, because that is its
+entire job.
+
+| call | plan | asks | writes |
+|---|---|---|---|
+| `backup` (tty) | yes | yes | after `y` |
+| `backup` (no tty) | yes | no | yes |
+| `backup --dry-run` | yes | no | no |
+| `backup --dry-run --yes` | yes | no | no |
+| `backup --yes` | **no** | no | yes |
+
+The run still reports itself — `-> Consistent snapshot (sqlite .backup) …`, `[OK] Backup: <file>`,
+Created / Size / Sessions / sha256 — so nothing is lost but the echo. The rejected alternative was
+a `--no-plan` flag the menu passes: new public surface, for a meaning `--yes` already carried.
+
+**The same confusion, one level down, fixed by renaming rather than suppressing.** The shrink
+wizard prints its own read-only plan (`-> shrink plan (read-only counts — nothing is written yet)`,
+`modules/menu/shrink.sh`) and then the engine printed `== shrink plan ==` — same name, same screen,
+one decision. Here the two blocks carry *different* facts (live-DB counts and the effective command
+vs. criteria / would-keep / would-delete / size on the real snapshot), so suppressing the engine's
+would have thrown away evidence that the copy matched the plan. The header now names the mode:
+`== shrink plan (read-only; nothing written) ==` on a dry run (it genuinely is a plan, and the CLI
+prints no other), `== shrink run (criteria and counts of THIS copy) ==` on a real one. Same rule as
+backup, opposite remedy: **a block that is not a plan should not be called one.**
+
+## §35 The "safe order" that exported 2 of 7 (a root-vs-cascade mismatch)
+
+The shrink wizard offers to export what it is about to drop before it builds the copy, and
+labels that order SAFE. A real run of the wizard on a 21-session DB printed:
+
+```
+   Discard:    2 root(s) + 5 subagent(s) = 7 session(s) (cascade)
+   This shrink WILL DISCARD the listed session(s) (and their subagents):
+     ses_f746a22cbffeq1NXL5qQeLpmfT,ses_f72115a6affe0whavtOJSmHQwV
+Export them first (opencode-db export archive --sessions)? ... [y/N] y
+   Root sessions : 2
+   Subagents     : 0
+```
+
+**Two of the seven sessions.** The export succeeded, printed plausible counts, and left
+five conversations unreferenced — in a workflow whose entire purpose is that nothing is
+lost. Two independent mismatches stacked up:
+
+| side | input it got | what it meant |
+|---|---|---|
+| the engine's discard | the **roots** from the picker (`--discard-sessions`) | plus **every descendant** (`WITH RECURSIVE discard`, `shrink.sh`) |
+| `export --sessions` | the same roots | **exactly those ids** (`WHERE s.id IN (…)`), and `children_of` is built only from selected sessions |
+
+The picker works on roots *by design* (a subagent always follows its root), and the
+engine closes the set itself — so every input that reached the offer was roots-only, while
+every consumer that mattered was cascade-shaped. **Both** call sites printed the same
+command, so the two halves disagreed about what "these sessions" meant.
+
+**Why nothing caught it.** The engine hint was `grep_run "export archive --sessions
+ses_A0001"` — a PREFIX of the correct answer, which also passed when only the root was
+listed. A prefix assertion cannot distinguish "the root" from "the root and its
+descendants", so the one fact under test was never actually tested. The offer itself had
+**no assertion at all**.
+
+**The fix is one helper that already existed.** The export wizard's hidden-subagent mode
+hits the same shape (picker shows roots → `--sessions` needs the cascade) and already
+solves it with `oc_export_expand_subs`. The shrink offer now calls it, so there is one
+cascade expansion in the menu instead of two hand-written ones. `--sessions` stays exact
+on purpose — that is its documented contract, and a test now pins it (`--sessions
+ses_A0001` = 1 root, 0 subagents) so "the caller expands" cannot rot into "the engine
+expands".
+
+**An id is not a name.** The block above listed two 36-character ids for sessions the
+user was about to lose, in a screen whose whole purpose is "this shrink WILL DISCARD…".
+`oc_shrink_discard_rows` now answers id + title + descendant count in one read-only query
+(the `o_q -separator $'\t'` idiom `oc_shrink_sub_counts` already used), capped at
+`DISCARD_LIST_MAX` rows with `… N more` + the full csv. The cap is not decoration: the
+whole point of a mass shrink is that the list is long, and a 500-line dump would push the
+y/N gate off screen. Division of labour, same as the backup plan in §34: **the menu shows
+names, the CLI keeps the command copy-pasteable** (the engine's hint stays ids — it is a
+line you paste).
+
+**The profile is config, not a fourth option.** Offering `archive` vs `memory` in the
+prompt was rejected: `confirm_action` is a binary gate and a third option would mean a
+new multi-way picker inside the plan screen for a preference that is per-user, not
+per-decision. `OCED_SHRINK_DISCARD_EXPORT_PROFILE` was already the hook for it — and
+already broken: it appeared in **no** other file (not the conf example, not the README,
+not the docs) and was missing from `load_conf`'s env-snapshot list, so a value in the
+conf file silently overrode an exported one, inverting the documented env > conf
+precedence. It is now documented in `opencode-db.conf.example`, in the snapshot list, and
+validated by `o_shrink_discard_profile` against `o_export_profiles` (products ∪ preset
+names, asked from `exportlib/plan.py` so a new product or preset shows up for free). An
+invalid name is reported **where the command is printed**, with the valid list, and falls
+back — never discovered later inside an export the user had already confirmed. It is
+deliberately NOT a shrink-recipe key: recipes are ops-only by contract (§17), and a
+selection-adjacent preference in that file would smuggle a keep rule back in.
+
+### §35b The profile has to be able to keep what the cascade contains
+
+Handing the offer a closed set removed the *root* mismatch, but created a quieter one: the
+cascade's whole value is its subagents, and the chosen profile could still throw them away.
+Three shapes do it, and **every one of them is a silent success**:
+
+| profile shape | what the run does | what it reports |
+|---|---|---|
+| `no_subagents: true` | drops the matched subagent sessions before any file is written | `.subagents_hidden` with a count |
+| `no_orphan_subagents: true` | keeps the ones whose parent is exported, drops the rest | same |
+| `sub: omit` | empties `children_of`, so a subagent is in `sessions` but no body is ever rendered | `.sessions.subagents: 0` |
+
+`sub: omit` is the one worth naming. It is a *transcription* flag (`--sub separate|inline|omit`),
+perfectly reasonable for a "one chat, no side quests" export — and it applies to a profile
+whose job here is "keep what is about to die". The failure mode is the §35 failure mode with
+an extra step: 2 of 7 exported, except now the missing 5 were selected, counted in the run,
+and then never written. `metadata.json` cannot distinguish "no subagents were selected" from
+"they were selected and dropped": `.sessions.subagents` is 0 either way.
+
+The fix is one query, `plan.py subagent-gaps <profile>`, reading across every product of a
+bundle (a bundle is one run decision — if ANY product drops them the user should know before
+the gate, exactly like `preset_subagents` for the export wizard). It returns tokens, so the
+bash side only formats the sentence and never parses flags:
+
+```
+no_subagents | no_orphan_subagents | sub_omit        (comma-separated; '' = it keeps them all)
+```
+
+A **warning, not a veto**, for the same reason the wizard's other notes are warnings:
+`--discard-sessions` may be discarding a session because the user is deliberately dropping
+its subagent conversations, and forcing `archive` over their `memory` choice would be the
+tool overruling a decision it does not understand. So the resolver says what is true and
+still prints the command. A product keyword can never gap, so the default stays silent and
+there is no noise to tune.
+
+The lesson from §35 applies to both halves: **the promise was "this export keeps what the
+shrink drops"**, and only the first mismatch (roots vs cascade) was visible in the output.
+What a contract claims has to be checked against the thing that enforces it — here the
+`metadata.json` counters the engine writes, not the command string that suggested the
+safety. So the suite now pins both ends: the cascade csv really writes 1 root + 2 subagents
+(nested under `<root>/subagents/`, `index.md` reading `1 / 2 / 3`, `memory`'s corpus line
+carrying both refs), and the resolver warns for each gap shape while `archive` stays silent.
+
+---
+
+### §36 The list is a column, the view is a detail screen
+
+The `shrinks list` row used to paste the full criteria sentence (`keep everything except the
+2 listed session(s) (their subagents are dropped too) + strip reasoning (drop the 'reasoning'
+parts in the copy)`) into a table cell. At 100+ characters of parentheticals it pushed every
+row to ~225 characters and buried the three numbers that actually matter:
+
+```
+before -> after  (freed, -pct%)  before -> after  (freed, -pct%)  before -> after  (freed, -pct%)
+```
+
+The fix splits the presentation into two screens with two widths:
+
+1. **`shrinks list` — a COLUMN**  
+   One compact row: `2026-10-05 19:52 UTC  discard 2 ids +strip   14/21 kept   1.2GiB -> 843MiB (-31%)`  
+   The tag comes from `plan.py rule-tag` (the SSoT for the compact form), carrying the
+   rule's own value (`keep 1` vs `keep 10` are the same rule, different facts — which is
+   why the engine records `.selection.value`). One size delta instead of three. The
+   copy's own state `(swapped/no copy)` only when anomalous. Width bounded (~80 chars).
+
+2. **`shrinks view` — a DETAIL screen**  
+   Banner + one fact per line, the FULL criteria sentence verbatim from `shrink.json`,
+   the recorded `integrity_check`, `freshness` from the SAME `o_shrink_stale` helper that
+   `verify` uses (including the unverifiable legacy case), selected IDs capped at 8 with
+   `… N more` (the count stays), per-table removals, and the files.  
+   `--json` returns `shrink.json` byte-for-byte, no banner.
+
+Both formats are generated from the same `shrink.json` — the sentence and the tag are
+two formats of ONE fact and live side by side in `plan.py` (`rule-line` / `rule-tag`).
+The bash engine never builds these phrases itself; it delegates to the single source.
+
+The test suite pins:
+- Row width ≤ 100 columns
+- The criteria sentence absent from the list (grep fails on its parentheticals)
+- The tag carries the rule's own value (keep 1, not a default)
+- View prints the criteria verbatim, the integrity_check, freshness always answered
+- IDs capped at 8 + `… N more`, count intact
+- `--json` is the file verbatim, no banner
+
+The old recency rows (`__LAST__`/`__OLDEST__`/`__DAYS__`) were also removed from the
+sessions picker (§19) — a row that re-computes "the N newest" at run time is a selection,
+not a marking. Recency is `--last`/`--since` on the CLI.

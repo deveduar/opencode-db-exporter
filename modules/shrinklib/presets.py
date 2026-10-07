@@ -135,3 +135,40 @@ def rule_lines(cfg: dict) -> list[str]:
 
     Single source with the bash engine's criteria line (plan.py rule-line)."""
     return selection_lines(cfg) + op_lines(cfg)
+
+
+def selection_tag(cfg: dict) -> str:
+    """The COMPACT shape of a session-selection rule — for a column.
+
+    `selection_lines` is a sentence ("keep everything except the 2 listed
+    session(s) (their subagents are dropped too)"), which is right inside
+    shrink.json / `shrink --help` where the width costs nothing and wrong in a
+    list row, where it pushed `shrinks list` to 225 characters and buried the
+    three numbers that matter (how many sessions survived, how much space was
+    freed). Same data, one word per rule; the sentence stays where it belongs.
+    """
+    if "keep" in cfg:
+        return f"keep {cfg['keep']} newest"
+    if "older_than" in cfg:
+        return f"last {cfg['older_than']}d"
+    if "since" in cfg:
+        return f"since {cfg['since']}"
+    if cfg.get("keep_all"):
+        return "keep all"
+    if "keep_sessions" in cfg:
+        return f"keep {len(cfg['keep_sessions'])} ids"
+    if "discard_sessions" in cfg:
+        return f"discard {len(cfg['discard_sessions'])} ids"
+    return ""
+
+
+def rule_tags(cfg: dict) -> str:
+    """Compact tag of a resolved invocation: selection + operations in one cell.
+
+    `+strip` is the whole operations vocabulary that survives a shrink.json
+    (strip_reasoning is recorded as a count); `quiet`'s prune+vacuum is implied
+    by the size and the removed rows, so it needs no tag of its own."""
+    out = selection_tag(cfg)
+    if cfg.get("strip_reasoning"):
+        out = f"{out} +strip" if out else "+strip"
+    return out

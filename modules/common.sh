@@ -17,7 +17,7 @@ load_conf() {
     # cannot clobber them (env wins over conf).
     local v
     local -A conf_env_set=() conf_env_val=()
-    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS; do
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS OCED_SHRINK_DISCARD_EXPORT_PROFILE; do
         if [ "${!v+x}" = x ]; then
             conf_env_set[$v]=1
             conf_env_val[$v]="${!v}"

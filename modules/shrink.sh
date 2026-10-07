@@ -18,6 +18,53 @@ o_sql_qlist() {
     printf '%s' "${out%,}"
 }
 
+# o_shrink_discard_profile -> the export profile that protects what a shrink is
+# about to drop: $OCED_SHRINK_DISCARD_EXPORT_PROFILE (any product or preset from
+# o_export_profiles) or `archive` (transcript + memory) by default.
+#
+# It lives here, not in the menu, because BOTH the menu offer and the engine's own
+# post-build hint print the same `export <profile> --sessions …` command and must
+# not disagree. A name that would not resolve is a configuration mistake, so it is
+# reported HERE — with the valid names — and falls back, instead of failing later
+# inside an export the user already confirmed.
+o_shrink_discard_profile() {
+    local p="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
+    local fallback=""
+    if ! o_export_profile_known "$p"; then
+        if o_export_profile_known archive; then
+            fallback=archive
+        else
+            # No presets file at all: `archive` cannot resolve, and the transcript
+            # product always does.
+            fallback=transcript
+        fi
+        {
+            echo "   [!] OCED_SHRINK_DISCARD_EXPORT_PROFILE='$p' is not a valid export profile."
+            echo "       Valid: $(o_export_profiles | paste -sd' ' -)"
+            echo "       Using '$fallback' instead."
+        } >&2
+        p="$fallback"
+    fi
+    # The command this function feeds hands over a CLOSED set (the discarded roots
+    # plus every descendant), so the profile has to preserve them. It is allowed
+    # to be a product keyword, which can never gap; a preset can: `no_subagents`
+    # drops the sessions themselves and `sub: omit` empties `children_of`, so no
+    # subagent body is written. Either way the export SUCCEEDS with plausible
+    # counts while the subagents are missing — the exact failure this offer exists
+    # to prevent — so warn here, before the y/N gate, and still print the command
+    # (a warning, not a veto: the user may be exporting on purpose).
+    local gaps
+    gaps=$(OCED_PRESETS="$OCED_PRESETS" python3 "$SCRIPT_DIR/exportlib/plan.py" subagent-gaps "$p" 2>/dev/null || true)
+    if [ -n "$gaps" ]; then
+        {
+            echo "   [!] the export profile '$p' does not preserve subagents ($gaps)."
+            echo "       The command below hands over the whole cascade, but this run would not"
+            echo "       write them — use a transcript/memory profile to keep what the shrink drops."
+        } >&2
+    fi
+    printf '%s' "$p"
+}
+
 oced_shrink_usage() {
     # The whole --help text lives in shrinklib/flags.py (--usage, single source;
     # also served by `opencode-db help`). Static fallback for a broken python.
@@ -331,7 +378,15 @@ oced_shrink() {
     deleted=$((total - keptcnt))
 
     echo ""
-    echo "== shrink plan =="
+    # Two names, because this block lands in two different places: the menu wizard
+    # already showed its own `-> shrink plan` (live-DB counts) right before its y/N,
+    # so an identical `== shrink plan ==` here read as the plan being asked twice.
+    # A dry run IS a plan; a real run is this copy's accounting.
+    if [ "$dry" -eq 1 ]; then
+        echo "== shrink plan (read-only; nothing written) =="
+    else
+        echo "== shrink run (criteria and counts of THIS copy) =="
+    fi
     printf '   %-16s %s\n' "Criteria:" "$criteria"
     printf '   %-16s %s\n' "Sessions total:" "$total"
     printf '   %-16s %s\n' "Would keep:" "$keptcnt"
@@ -347,13 +402,30 @@ oced_shrink() {
     fi
 
     if [ "$rule" = "discard_sessions" ] && [ "$dry" -eq 0 ]; then
-        local ids_csv
+        local ids_csv disc_csv n_disc profile
         ids_csv=$(IFS=','; echo "${discard_sessions[*]}")
-        local profile="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
+        # `--sessions` matches EXACT ids while the discard set is descendant-closed
+        # (the _keep closure above), so handing over only the listed roots would
+        # export 2 of the 7 sessions this copy is about to drop — silently, because
+        # the export still succeeds. Close the set here, from the snapshot.
+        disc_csv=$(sqlite3 "$snap" "
+            WITH RECURSIVE d(id) AS (
+                SELECT id FROM session WHERE id IN ($(o_sql_qlist "${discard_sessions[@]}"))
+                UNION
+                SELECT s.id FROM session s JOIN d ON s.parent_id = d.id)
+            SELECT group_concat(id) FROM (
+                SELECT d.id FROM d JOIN session s ON s.id = d.id ORDER BY s.time_created);" 2>/dev/null)
+        [ -n "$disc_csv" ] || disc_csv="$ids_csv"
+        local -a _dcsv=()
+        IFS=',' read -r -a _dcsv <<< "$disc_csv"
+        n_disc=${#_dcsv[@]}
+        profile=$(o_shrink_discard_profile)
         echo ""
-        echo "   TEMPORARY: the listed sessions will NOT survive in the copy — to keep a"
-        echo "   reference of them in an export BEFORE building the shrink copy, run:"
-        echo "     opencode-db export $profile --sessions $ids_csv"
+        echo "   NOTE: $n_disc session(s) listed above will NOT survive in this copy"
+        echo "   (the LIVE database still has them). To keep a readable reference,"
+        echo "   export them before you swap the copy in — --swap snapshots the live DB"
+        echo "   to backups/pre-shrink/ first, so nothing is really lost:"
+        echo "     opencode-db export $profile --sessions $disc_csv"
         echo ""
     fi
 
@@ -512,42 +584,73 @@ shrinks_stamp_human() {
 
 # shrinks_run_row <run-dir> -> TSV 'stamp<TAB>display' (single source for the
 # menu picker, like exports view/list share one aggregation).
+#
+# The display cell is a COLUMN, so it carries the tag (plan.py rule-tag) and not
+# the criteria sentence: that sentence is 100+ characters of parentheticals written
+# for shrink.json, and pasting it here made every row 225 characters and buried the
+# three numbers that matter. One size expression (before -> after, -%) instead of
+# three repetitions of it, and the copy's own state only when it is anomalous.
 shrinks_run_row() {
     local run="$1" stamp j
-    local jcriteria jsess jkept jdel jbefore jafter jstrip
-    local size freed pct db_state
+    local rule rvalue nids tag db_state size pct
+    local jtotal jkept jbefore jafter jstrip
     stamp="${run##*/}"
     j="$run/shrink.json"
+    tag=""   # `local` does not initialise: under set -u an unset local is fatal
     if [ -f "$j" ]; then
-        jcriteria=$(jq -r '.criteria // "(no criteria)"' "$j")
-        jsess=$(jq -r '.sessions.total // 0' "$j")
+        rule=$(jq -r '.selection.rule // ""' "$j")
+        # The tag needs the rule's OWN value (keep 1 vs keep 10 are the same rule and
+        # different facts, which is why the engine records .selection.value), except for
+        # the two id rules, whose value IS their length.
+        rvalue=$(jq -r '.selection.value // ""' "$j")
+        nids=$(jq -r '(.selection.ids // []) | length' "$j")
+        case "$rule" in
+            keep|older_than|since) : ;;
+            *) [ -n "$rvalue" ] || rvalue="$nids" ;;
+        esac
+        jtotal=$(jq -r '.sessions.total // 0' "$j")
         jkept=$(jq -r '.sessions.kept // 0' "$j")
-        jdel=$(jq -r '.sessions.deleted // 0' "$j")
         jbefore=$(jq -r '.size.before // 0' "$j")
         jafter=$(jq -r '.size.after // 0' "$j")
         jstrip=$(jq -r '.stripped_reasoning // 0' "$j")
     else
-        jcriteria="(no shrink.json)"
-        jsess="?"; jkept="?"; jdel="?"; jbefore=0; jafter=0; jstrip=0
+        rule=""; rvalue=""; nids=0
+        jtotal=0; jkept="?"; jbefore=0; jafter=0; jstrip=0
     fi
+    # The tag is python's (shrinklib/presets.py rule_tags): shrink.sh never builds
+    # those phrases itself. A legacy shrink.json with no `.selection` has no rule to
+    # render, so its criteria is cut rather than trusted whole.
+    if [ -n "$rule" ]; then
+        local strip_arg=0
+        case "$jstrip" in ''|*[!0-9]*) ;; *) [ "$jstrip" -gt 0 ] && strip_arg=1 ;; esac
+        [ -n "$rvalue" ] || rvalue=0
+        # ${OCED_SHRINK_PRESETS:-} like oc_shrink_py: under `set -u` a bare
+        # reference aborts this subshell and the row silently loses its tag.
+        tag=$(OCED_SHRINK_PRESETS="${OCED_SHRINK_PRESETS:-}" python3 "$SCRIPT_DIR/shrinklib/plan.py" \
+              rule-tag "$rule" "$rvalue" "$strip_arg" 2>/dev/null) || tag=""
+    fi
+    # One fallback for every reason the tag is missing: python not on PATH, a plan.py
+    # that died, a legacy shrink.json with no .selection. The cut criteria is a poor
+    # tag but it is a fact about THIS copy, while "?" says nothing at all.
+    [ -n "$tag" ] || tag=$(jq -r '.criteria // "?"' "$j" 2>/dev/null | cut -c1-24)
+    [ -n "$tag" ] || tag="?"
     if [ -f "$run/opencode.shrunk.db" ]; then
         size=$(stat -c %s "$run/opencode.shrunk.db" 2>/dev/null || echo 0)
-        db_state="$(o_human_size "$size")"
+        if [ "$jbefore" -gt 0 ] && [ "$jafter" -gt 0 ]; then
+            pct=""
+            [ "$jbefore" -gt "$jafter" ] && pct=" -$(( (jbefore - jafter) * 100 / jbefore ))%"
+            printf -v db_state '%s -> %s%s' "$(o_human_size "$jbefore")" "$(o_human_size "$jafter")" "$pct"
+        else
+            db_state="$(o_human_size "$size")"
+        fi
     else
-        size=0
         db_state="(swapped/no copy)"
     fi
-    freed="--"
-    pct=""
-    if [ "$jbefore" -gt 0 ] && [ "$jafter" -gt 0 ]; then
-        freed="$(o_human_size "$((jbefore - jafter))")"
-        [ "$jbefore" -gt "$jafter" ] && pct="$(( (jbefore - jafter) * 100 / jbefore ))%"
-    fi
+    # kept/total (not kept/del): the two are one subtraction apart and the total is
+    # what you compare against the DB you are looking at afterwards.
     printf '%s\t%s\n' "$stamp" \
-        "$(printf '%s  %s  %s sess / %s del  %s -> %s (%s)%s  %s' \
-            "$(shrinks_stamp_human "$stamp")" "$jcriteria" \
-            "$jkept" "$jdel" "$(o_human_size "$jbefore")" "$(o_human_size "$jafter")" \
-            "$freed" "$pct" "$db_state")"
+        "$(printf '%-22s  %-22s  %s/%s kept  %s' \
+            "$(shrinks_stamp_human "$stamp")" "$tag" "$jkept" "$jtotal" "$db_state")"
 }
 
 oced_shrinks() {
@@ -558,7 +661,7 @@ oced_shrinks() {
         remove) shift; oced_shrinks_remove "$@" ;;
         prune)  shift; oced_shrinks_prune "$@" ;;
         verify) shift; oced_shrinks_verify "$@" ;;
-        *) echo "Usage: opencode-db shrinks [list [--tsv]|view <stamp>|remove <stamp> [--yes]|prune <N>|verify [--yes]]"; return 1 ;;
+        *) echo "Usage: opencode-db shrinks [list [--tsv]|view <stamp> [--json]|remove <stamp> [--yes]|prune <N>|verify [--tsv] [--yes]]"; return 1 ;;
     esac
 }
 
@@ -601,17 +704,92 @@ oced_shrinks_view() {
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db shrinks list"; return 1; }
     j="$target/shrink.json"
     [ -f "$j" ] || { echo "No shrink.json in $target"; return 1; }
-    
+
+    # The machine view is the file itself, byte for byte: a pretty screen is added
+    # IN FRONT of it, never in place of it.
     if [ "$json_mode" -eq 1 ]; then
         cat "$j"
         return 0
     fi
-    
-    echo "== Shrink run: $stamp =="
-    jq . "$j"
+
+    # Human screen, shaped like `exports view` (banner + one fact per line). The
+    # criteria sentence lives HERE and not in `shrinks list`: a detail screen has
+    # room for the parentheticals, a list column does not.
+    local total kept del before after strip removed
+    local rule nids pct integrity fkeys fresh
+    total=$(jq -r '.sessions.total // 0' "$j")
+    kept=$(jq -r '.sessions.kept // 0' "$j")
+    del=$(jq -r '.sessions.deleted // 0' "$j")
+    before=$(jq -r '.size.before // 0' "$j")
+    after=$(jq -r '.size.after // 0' "$j")
+    strip=$(jq -r '.stripped_reasoning // 0' "$j")
+    removed=$(jq -r '.removed_total // 0' "$j")
+    rule=$(jq -r '.selection.rule // "?"' "$j")
+    nids=$(jq -r '(.selection.ids // []) | length' "$j")
+    integrity=$(jq -r '.integrity_check // "?"' "$j")
+    fkeys=$(jq -r '.foreign_key_check // "?"' "$j")
+    pct=""
+    if [ "$before" -gt 0 ] && [ "$after" -gt 0 ] && [ "$before" -gt "$after" ]; then
+        pct=", -$(( (before - after) * 100 / before ))%"
+    fi
+
+    echo "== Shrink copy: $stamp =="
+    echo ""
+    printf '  %-11s %s\n' "sessions:" "$total total · $kept kept · $del deleted"
+    if [ "$before" -gt 0 ] && [ "$after" -gt 0 ]; then
+        printf '  %-11s %s -> %s (freed %s%s)\n' "size:" \
+            "$(o_human_size "$before")" "$(o_human_size "$after")" \
+            "$(o_human_size "$(( before - after ))")" "$pct"
+    else
+        printf '  %-11s %s\n' "size:" "$(o_human_size "$(stat -c %s "$target/opencode.shrunk.db" 2>/dev/null || echo 0)")"
+    fi
+    printf '  %-11s %s\n' "selection:" "$rule · $nids id(s)"
+    printf '  %-11s %s\n' "criteria:" "$(jq -r '.criteria // "?"' "$j")"
+    if [ "$strip" -gt 0 ] 2>/dev/null; then
+        printf '  %-11s %s\n' "reasoning:" "$strip part(s) stripped"
+    fi
+    printf '  %-11s %s\n' "date:" "$(jq -r '.date // "?"' "$j")"
+    printf '  %-11s %s\n' "db:" "$(jq -r '.source // "?"' "$j")"
+    printf '  %-11s %s\n' "integrity:" "$integrity · foreign keys $fkeys"
+    # Freshness here, by the same rule as `backups view`: a detail screen must not
+    # show an artifact nobody validated. Same helper as verify/swap/remove.
+    if fresh=$(o_shrink_stale "$j" 2>&1); then
+        printf '  %-11s %s\n' "freshness:" "ok — the live DB has no newer session than this copy"
+    else
+        printf '  %-11s %s\n' "freshness:" "STALE — $fresh"
+    fi
+
+    # The selected ids, capped: a 200-id discard would otherwise bury the fields
+    # above. --json always has the whole list.
+    if [ "${nids:-0}" -gt 0 ] 2>/dev/null; then
+        local -a ids=()
+        mapfile -t ids < <(jq -r '.selection.ids[]' "$j")
+        echo ""
+        echo "  ids (${#ids[@]}):"
+        local i=0 id
+        for id in "${ids[@]}"; do
+            i=$((i + 1))
+            [ "$i" -gt 8 ] && break
+            printf '    %s\n' "$id"
+        done
+        [ "${#ids[@]}" -gt 8 ] && echo "    … $(( ${#ids[@]} - 8 )) more (--json has all of them)"
+    fi
+
+    # Per-table removals, biggest first: one line for the rare big ones, the rest
+    # only if they are non-zero.
+    if [ "${removed:-0}" -gt 0 ] 2>/dev/null; then
+        echo ""
+        printf '  removed:    %s row(s) total\n' "$removed"
+        jq -r '.removed // {} | to_entries | map(select(.value > 0)) | sort_by(-.value)
+               | .[] | "    \(.key) \(.value)"' "$j" 2>/dev/null | head -6
+    fi
+
     echo ""
     echo "  files:"
-    find "$target" -maxdepth 1 -type f -printf '    %f  %k KiB\n' 2>/dev/null
+    local f
+    while IFS= read -r f; do
+        printf '    %-20s %s\n' "${f##*/}" "$(o_human_size "$(stat -c %s "$f" 2>/dev/null || echo 0)")"
+    done < <(find "$target" -maxdepth 1 -type f 2>/dev/null | sort)
 }
 
 oced_shrinks_remove() {

@@ -43,3 +43,19 @@
 # Example: {"presets": {"lean": {"strip_reasoning": true}, "quiet": {}}}
 # Missing file = built-in recipes only. `shrink --list-presets` shows the set.
 # OCED_SHRINK_PRESETS="$HOME/.config/opencode-db/shrink-presets.json"
+
+# Which export protects what a `shrink --discard-sessions` is about to drop.
+# The menu's plan and the engine's own post-build note both print
+#   opencode-db export <this> --sessions <the sessions being dropped>
+# so a wrong name here would only fail later, inside that export. Valid values:
+# any export PRODUCT (transcript | memory | digest) or any preset name from the
+# presets file above (archive = transcript + memory is the default: the widest
+# readable reference). An invalid name is reported with the valid list and falls
+# back to `archive` (or `transcript` when there are no presets).
+#
+#   Choose one that KEEPS subagents. The offer exports the whole discard cascade
+#   (the discarded sessions AND their subagents), but a preset that sets
+#   `no_subagents` / `no_orphan_subagents`, or `sub: omit`, would drop them from
+#   the export anyway — and the export would still succeed, quietly losing them.
+#   The shrink offer warns on screen when the profile you pick has that shape.
+# OCED_SHRINK_DISCARD_EXPORT_PROFILE=archive

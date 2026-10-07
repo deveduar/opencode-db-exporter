@@ -144,6 +144,8 @@ NMANIFEST_BEFORE=$(jq -r '.backups | length' "$BK/manifest.json" 2>/dev/null || 
 DRY=$(run backup --dry-run)
 printf '%s' "$DRY" | grep -q "Backup plan" && printf '%s' "$DRY" | grep -q "Est\. size:" \
     && ok "backup --dry-run prints the plan (source/target/est. size)" || bad "backup dry-run plan: [$(printf '%s' "$DRY" | tail -3)]"
+printf '%s' "$DRY" | grep -q "Target:" && ok "backup --dry-run names the target dir + compression" \
+    || bad "backup dry-run target: [$(printf '%s' "$DRY" | tail -3)]"
 printf '%s' "$DRY" | grep -q "nothing written" && ok "backup --dry-run says it wrote nothing" \
     || bad "backup dry-run note: [$(printf '%s' "$DRY" | tail -2)]"
 printf '%s' "$DRY" | grep -q 'Create this backup?' && bad "backup --dry-run still asks to confirm" \
@@ -157,13 +159,19 @@ printf '%s' "$DRY" | grep -q 'Create this backup?' && bad "backup --dry-run stil
 DRY2=$(run backup --dry-run --yes)
 [ "$(find "$BK" -maxdepth 1 -name 'opencode-*' 2>/dev/null | wc -l)" -eq "$NFILES_BEFORE" ] \
     && ok "backup --dry-run --yes still writes nothing" || bad "backup dry-run --yes wrote a file"
+printf '%s' "$DRY2" | grep -q "Backup plan" && ok "backup --dry-run --yes still shows the plan (--dry-run always does)" \
+    || bad "backup --dry-run --yes lost the plan"
 grep_run "Unknown argument: --nope" backup --nope && ok "backup refuses an unknown flag" || bad "backup unknown flag"
 
 B=$(run backup --yes)
 printf "%s" "$B" | grep -qE "opencode-[0-9-]+\.db\.gz" && ok "compressed backup" || bad "backup"
-printf "%s" "$B" | grep -q "Backup plan" && ok "backup shows the plan" || bad "backup plan"
-printf "%s" "$B" | grep -qE "Est\. size:" && ok "backup shows estimated size" || bad "backup estimate"
-printf "%s" "$B" | grep -q "Target:" && ok "backup shows target dir" || bad "backup target"
+# --yes means "the caller owns the gate and already showed the plan". Re-printing
+# it put the SAME block twice on the menu screen (reported live: the plan appeared
+# again right after answering y). The plan's fields are asserted on --dry-run above.
+printf "%s" "$B" | grep -q "Backup plan" && bad "backup --yes repeats the plan the caller showed" \
+    || ok "backup --yes does not repeat the plan (one decision, one plan)"
+printf "%s" "$B" | grep -q "\[OK\] Backup:" && ok "backup --yes still reports the created backup" \
+    || bad "backup --yes report: [$(printf '%s' "$B" | tail -3)]"
 grep_run "opencode-" backups list && ok "backups list" || bad "backups list"
 FNAME=$(run backups list | grep -oE 'opencode-[0-9-]+\.db\.gz' | head -1)
 grep_run "OK" backups verify "$FNAME" && ok "backups verify" || bad "backups verify"
@@ -620,6 +628,108 @@ grep_run "export archive --sessions ses_A0001" shrink --discard-sessions ses_A00
 printf '%s' "$(cat "$(dirname "$SDS")/shrink.json")" | jq -e '.selection.rule == "discard_sessions"' >/dev/null \
     && ok "shrink.json records the discard-sessions selection" || bad "discard selection in shrink.json"
 
+echo "== shrink discard hint: the CASCADE, not the roots =="
+# `--discard-sessions` drops the listed roots AND every descendant, but
+# `export --sessions` matches EXACT ids (pinned earlier: --sessions ses_A0001
+# exports 1 session and 0 subagents). Handing over only the roots exported 2 of
+# the 7 sessions the copy was about to drop — silently, because the export still
+# succeeded with plausible counts. So the hint (and the menu offer) must carry
+# the closed set. OCED_PRESETS is pinned to the shipped example so `archive`
+# resolves deterministically instead of depending on ~/.config.
+EX_PRESETS="$TESTS_DIR/../presets.json.example"
+drun() { # drun <profile|-> <args...> -> shrink run output with that profile
+    local p="$1"; shift
+    if [ "$p" = "-" ]; then
+        bash "$MOD/opencode-db.sh" "$@" 2>&1
+    else
+        OCED_SHRINK_DISCARD_EXPORT_PROFILE="$p" bash "$MOD/opencode-db.sh" "$@" 2>&1
+    fi
+}
+DH=$(OCED_PRESETS="$EX_PRESETS" drun - shrink --discard-sessions ses_A0001)
+printf '%s' "$DH" | grep -q "export archive --sessions ses_A0001,ses_A0002,ses_A0003" \
+    && ok "discard hint exports the whole cascade (root + its 2 subagents)" || bad "hint cascade: $DH"
+printf '%s' "$DH" | grep -q "3 session(s) listed above" \
+    && ok "discard hint counts the cascade, not the listed roots" || bad "hint count: $DH"
+printf '%s' "$DH" | grep -q "will NOT survive in this copy" \
+    && ok "discard hint says the copy is already built (not 'before building')" || bad "hint wording: $DH"
+DH2=$(OCED_PRESETS="$EX_PRESETS" drun memory shrink --discard-sessions ses_A0001)
+printf '%s' "$DH2" | grep -q "export memory --sessions ses_A0001,ses_A0002,ses_A0003" \
+    && ok "OCED_SHRINK_DISCARD_EXPORT_PROFILE picks the profile both call sites print" || bad "profile var: $DH2"
+DH3=$(OCED_PRESETS="$EX_PRESETS" drun archve shrink --discard-sessions ses_A0001)
+printf '%s' "$DH3" | grep -q "is not a valid export profile" \
+    && printf '%s' "$DH3" | grep -q "Valid: archive" \
+    && printf '%s' "$DH3" | grep -q "Using 'archive' instead" \
+    && printf '%s' "$DH3" | grep -q "export archive --sessions ses_A0001,ses_A0002,ses_A0003" \
+    && ok "an invalid profile is reported with the valid names, then falls back" || bad "invalid profile: $DH3"
+DH4=$(OCED_PRESETS="$TMP/no-such-presets.json" drun - shrink --discard-sessions ses_A0001)
+printf '%s' "$DH4" | grep -q "Using 'transcript' instead" \
+    && ok "no presets file -> the always-valid transcript product is used" || bad "no-presets fallback: $DH4"
+# the exact-ids contract that forces the caller-side expansion (guard against a
+# future "--sessions closes over descendants": the menu expands, the engine does not)
+RO=$(OCED_PRESETS="$EX_PRESETS" run export archive --sessions ses_A0001)
+jq -e '.sessions.total == 1 and .sessions.subagents == 0' "$(meta_of "$RO")" >/dev/null \
+    && ok "--sessions stays EXACT (1 root, 0 subagents) — the menu expands instead" || bad "--sessions is no longer exact"
+
+# ...and the other half of the same contract: handed the CASCADE, the export must
+# really write the subagents, NESTED under their own root. The two assertions above
+# pin each half separately (the hint prints the cascade; --sessions is exact), so
+# without this one nothing proved that the cascade the offer hands over is the set
+# the engine actually drops — which is the bug: 2 of 7 sessions exported, silently.
+CAS=$(OCED_PRESETS="$EX_PRESETS" run export archive --sessions ses_A0001,ses_A0002,ses_A0003)
+CMETA="$(meta_of "$CAS")"
+jq -e '.sessions.total == 3 and .sessions.subagents == 2' "$CMETA" >/dev/null \
+    && ok "the cascade export writes the root AND its 2 subagents (3 sessions)" \
+    || bad "cascade export: $(jq -c '.sessions' "$CMETA")"
+# `archive` is a BUNDLE, so out_dir_of lands on the LAST product (memory). Read the
+# transcript subdir from the stamp — that is where the per-session files live, and
+# the nesting question ("under their own root, or as extra roots?") is asked there.
+CSTAMP="$OUT/$(stamp_of "$CAS")"
+CDIR="$CSTAMP/transcript"
+# 1 root folder + subagents/ with 2 files: the subagents are written under their
+# OWN root (children_of), not flattened as extra roots and not dropped
+[ "$(find "$CDIR" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ] \
+    && [ "$(find "$CDIR" -path "*/subagents/*.md" | wc -l)" -eq 2 ] \
+    && ok "the subagents land in <root>/subagents/, nested (not extra roots)" \
+    || bad "cascade layout: $(cd "$CDIR" && find . -maxdepth 2 | sort | tr '\n' ' ')"
+# the index.md row is what a human reads: roots/subagents/total must agree
+grep -qE '^\| Sessions \(roots/subagents/total\) \| 1 / 2 / 3 \|$' "$CDIR/index.md" \
+    && ok "index.md reports 1 root / 2 subagents / 3 total" || bad "index row: $(grep 'Sessions (roots' "$CDIR/index.md")"
+jq -e '[.session_records[].id] | sort == ["ses_A0001","ses_A0002","ses_A0003"]' "$CMETA" >/dev/null \
+    && ok "metadata .session_records lists all 3 exported sessions" || bad "records: $(jq -c '.session_records|map(.id)' "$CMETA")"
+# memory (the other half of archive) must reference the subagents on its one line
+printf '%s' "$(sed -n '1p' "$CSTAMP/memory/corpus.jsonl")" | jq -e '(.subagents | length) == 2' >/dev/null \
+    && ok "memory's corpus line references the 2 subagents of its root" || bad "corpus refs: $(sed -n '1p' "$CSTAMP/memory/corpus.jsonl" | jq -c '.subagents')"
+
+echo "== the discard profile must not silently drop the subagents it is handed =="
+# The offer's whole promise is "this export keeps what the shrink drops", and it
+# hands over a CLOSED set. Two flags break that while the export still succeeds
+# with plausible counts: no_subagents drops the sessions themselves, and
+# `sub: omit` empties children_of so no subagent body is written at all. A
+# product keyword can never gap, so only a preset needs the warning.
+GAP="$TMP/gap-presets.json"
+cat > "$GAP" <<'EOF'
+{"presets": {
+  "narrow":   {"product": "transcript", "sub": "omit"},
+  "dropall":  {"product": "transcript", "no_subagents": true},
+  "droporph": {"products": {"transcript": {}, "memory": {"no_orphan_subagents": true}}}
+}}
+EOF
+DG=$(OCED_PRESETS="$GAP" drun narrow shrink --discard-sessions ses_A0001)
+printf '%s' "$DG" | grep -q "the export profile 'narrow' does not preserve subagents (sub_omit)" \
+    && ok "a preset with 'sub: omit' is warned about before its y/N gate" || bad "sub_omit warning: $DG"
+# a warning, not a veto: the command is still printed (the user may want it)
+printf '%s' "$DG" | grep -q "export narrow --sessions ses_A0001,ses_A0002,ses_A0003" \
+    && ok "the subagent gap warns but does not block the offered command" || bad "sub_omit blocks: $DG"
+DG2=$(OCED_PRESETS="$GAP" drun dropall shrink --discard-sessions ses_A0001)
+printf '%s' "$DG2" | grep -q "does not preserve subagents (no_subagents)" \
+    && ok "a preset with no_subagents is warned about too" || bad "no_subagents warning: $DG2"
+DG3=$(OCED_PRESETS="$GAP" drun droporph shrink --discard-sessions ses_A0001)
+printf '%s' "$DG3" | grep -q "does not preserve subagents (no_orphan_subagents)" \
+    && ok "the gap is read across a bundle's products (memory drops them)" || bad "bundle gap: $DG3"
+DG4=$(OCED_PRESETS="$EX_PRESETS" drun - shrink --discard-sessions ses_A0001)
+printf '%s' "$DG4" | grep -q "does not preserve subagents" \
+    && bad "a gap-free profile (archive) must be silent" || ok "a profile that keeps subagents warns nothing (no noise)"
+
 echo "== shrink recipes from OCED_SHRINK_PRESETS (file overrides/extensions) =="
 FPRES="$TMP/shrink-presets.json"
 cat > "$FPRES" <<'EOF'
@@ -991,6 +1101,17 @@ spec = importlib.util.spec_from_file_location('gen', '$TESTS_DIR/../scripts/gene
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 sys.exit(0 if open('$TESTS_DIR/../generated/flags-table.md').read() == m.flags_table() + '\n' else 1)
 " >/dev/null 2>&1 && ok "generated/flags-table.md matches scripts/generate_schema.py --docs (no drift)" || bad "flags-table drift vs generate_schema.py --docs"
+# Anti-drift #3: the presets snippet the README prints must EQUAL the shipped
+# example. The README claimed `share` was sanitized for months after the example
+# dropped `sanitize` (docs/export-analysis.md §33): a user could have published
+# secrets believing they were redacted. A doc cannot be allowed to lie about a
+# flag, so the two files are compared instead of trusted.
+python3 -c "
+import json, re, sys
+md = open('$TESTS_DIR/../README.md').read()
+blocks = [b for b in re.findall(r'\`\`\`json\n(.*?)\`\`\`', md, re.S) if '\"presets\"' in b]
+sys.exit(0 if len(blocks) == 1 and json.loads(blocks[0]) == json.load(open('$EXAMPLE')) else 1)
+" >/dev/null 2>&1 && ok "the README presets snippet equals presets.json.example (no doc drift)" || bad "README presets snippet drifted from presets.json.example"
 cat > "$TMP/schema-bad.json" <<'EOF'
 {"presets": {"double": {"product": "transcript", "products": {"memory": {}}}}}
 EOF
@@ -1104,12 +1225,23 @@ rm -rf "$ORPH"
 
 # A legacy shrink.json without sessions.max_updated is flagged (unverifiable), not silently clean.
 LASTSTAMP=$(basename "$(dirname "$LASTSJ")")
+LASTMAXU=$(jq -r '.sessions.max_updated' "$LASTSJ")
 jq 'del(.sessions.max_updated)' "$LASTSJ" > "$LASTSJ.bak" && mv "$LASTSJ.bak" "$LASTSJ"
 VLEGACY=$(run shrinks verify)
 printf '%s' "$VLEGACY" | grep -q "cannot verify freshness" && ok "shrinks verify flags a legacy shrink.json (no max_updated)" || bad "shrinks verify legacy: [$(printf '%s' "$VLEGACY" | tail -2)]"
 printf '%s' "$VLEGACY" | grep -q "  $LASTSTAMP  —  cannot verify freshness" \
     && ok "a per-copy warning carries the stamp it belongs to ($LASTSTAMP)" \
     || bad "per-copy stale line has no stamp: [$(printf '%s' "$VLEGACY" | grep -A3 'Stale shrink' | head -4)]"
+
+# The same unverifiable state must reach the DETAIL screen (one helper, both screens):
+# a `view` that showed ok/clean while `verify` warned would be the half-verification
+# AGENTS.md forbids.
+VLEG=$(run shrinks view "$LASTSTAMP" 2>&1)
+printf '%s' "$VLEG" | grep -q "^  freshness: .*cannot verify freshness" \
+    && ok "shrinks view reports the same unverifiable freshness as verify" \
+    || bad "shrinks view freshness (legacy): [$(printf '%s' "$VLEG" | grep -i fresh)]"
+# restore what the test removed, so the manager section below runs on a normal copy
+jq --argjson m "$LASTMAXU" '.sessions.max_updated = $m' "$LASTSJ" > "$LASTSJ.bak" && mv "$LASTSJ.bak" "$LASTSJ"
 
 echo "== shrinks (manager of the produced shrink copies) =="
 SL=$(run shrinks list)
@@ -1125,10 +1257,60 @@ case "$STAMP" in
     *) bad "shrinks tsv stamp: '$STAMP'" ;;
 esac
 [ "$(printf '%s\n' "$TSV" | wc -l)" -eq "$NCM" ] && ok "shrinks tsv: one row per run" || bad "shrinks tsv rows"
-printf '%s\n' "$TSV" | sed -n '1p' | grep -qE 'UTC.*sess' && ok "shrinks tsv: human display" || bad "shrinks tsv display: $(printf '%s\n' "$TSV" | sed -n '1p')"
+ROW1=$(printf '%s\n' "$TSV" | sed -n '1p')
+printf '%s' "$ROW1" | grep -qE 'UTC.*kept' && ok "shrinks tsv: human display" || bad "shrinks tsv display: $ROW1"
+# A list row is a COLUMN: the criteria sentence is 100+ chars of parentheticals and
+# used to reach 225/row, burying the kept count and the size delta. It belongs in
+# `shrinks view` (asserted below), never here.
+MAXW=$(printf '%s\n' "$TSV" | awk -F'\t' '{ if (length($2) > w) w = length($2) } END { print w+0 }')
+[ "${MAXW:-0}" -le 100 ] && ok "shrinks list rows stay compact (max ${MAXW} cols)" || bad "shrinks list row too wide: ${MAXW}"
+printf '%s\n' "$TSV" | grep -qE 'listed session\(s\)|their subagents|dropped too' \
+    && bad "shrinks list leaks the criteria sentence into a column: $(printf '%s\n' "$TSV" | sed -n '1p')" \
+    || ok "shrinks list shows the tag, not the criteria sentence"
+# the tag itself (plan.py rule-tag is the SSoT), and one size expression instead of
+# the before/after/freed/percent repetition the row used to print
+printf '%s\n' "$TSV" | grep -qE '(keep all|keep [0-9]+ newest|last [0-9]+d|since [0-9-]+|keep [0-9]+ ids|discard [0-9]+ ids)' \
+    && ok "shrinks list renders a selection tag" || bad "shrinks list tag: $ROW1"
+COPYROWS=$(printf '%s\n' "$TSV" | grep -v 'swapped/no copy')
+BADROWS=$(printf '%s\n' "$COPYROWS" | grep -vE '[0-9]+/[0-9]+ kept  [0-9,.]+[KMGTP]?i?B -> [0-9,.]+[KMGTP]?i?B' | cut -f1)
+[ -z "$BADROWS" ] && ok "shrinks list: kept/total + one size delta on every copy that has one" \
+    || bad "shrinks list row shape: $(printf '%s' "$BADROWS" | tr '\n' ' ')"
+printf '%s\n' "$TSV" | grep -qE 'freed' && bad "shrinks list repeats the size three times" || ok "shrinks list prints the size once"
+# keep 1 and keep 10 are the same rule and different facts: the tag must carry the value
+# the engine recorded in .selection.value, never a default.
+KEEPROW=$(printf '%s\n' "$TSV" | grep -E 'keep [0-9]+ newest' | sed -n '1p')
+if [ -n "$KEEPROW" ]; then
+    KSTAMP=$(printf '%s' "$KEEPROW" | cut -f1)
+    KVAL=$(jq -r '.selection.value' "$BK/shrink/$KSTAMP/shrink.json")
+    printf '%s' "$KEEPROW" | cut -f2 | grep -qE "keep $KVAL newest" \
+        && ok "shrinks list tag carries the rule's own value (keep $KVAL, not a default)" \
+        || bad "shrinks list keep tag: [$(printf '%s' "$KEEPROW" | cut -f2)] want [keep $KVAL newest]"
+else
+    ok "shrinks list keep tag (skipped: no numeric-keep run on the shelf)"
+fi
 
 VOUT=$(run shrinks view "$STAMP")
-printf '%s' "$VOUT" | grep -q '"criteria"' && ok "shrinks view prints the shrink.json" || bad "shrinks view: [$VOUT]"
+printf '%s' "$VOUT" | grep -qF "== Shrink copy: $STAMP ==" && ok "shrinks view leads with the copy banner" || bad "shrinks view banner: [$(printf '%s' "$VOUT" | head -2)]"
+# one fact per line, and the criteria sentence the list row had to leave out
+for F in "sessions:" "size:" "selection:" "criteria:" "date:" "db:" "integrity:" "freshness:" "files:"; do
+    printf '%s' "$VOUT" | grep -qE "^  $F" && ok "shrinks view: $F field" || bad "shrinks view missing $F"
+done
+printf '%s' "$VOUT" | grep -qE '^  freshness: +(ok|STALE)' \
+    && ok "shrinks view always answers freshness (ok or STALE)" || bad "shrinks view freshness: [$(printf '%s' "$VOUT" | grep -i fresh)]"
+VCRIT=$(printf '%s' "$VOUT" | sed -n 's/^  criteria: *//p')
+JCRIT=$(jq -r '.criteria // "?"' "$BK/shrink/$STAMP/shrink.json")
+[ "$VCRIT" = "$JCRIT" ] && ok "shrinks view prints the full criteria sentence, verbatim from shrink.json" || bad "shrinks view criteria: [$VCRIT] vs [$JCRIT]"
+VIT=$(printf '%s' "$VOUT" | sed -n 's/^  integrity: *//p')
+JINT=$(jq -r '.integrity_check' "$BK/shrink/$STAMP/shrink.json")
+printf '%s' "$VIT" | grep -q "$JINT" && ok "shrinks view reports the recorded integrity_check" || bad "shrinks view integrity: [$VIT] vs [$JINT]"
+printf '%s' "$VOUT" | sed -n '/^  files:/,$p' | grep -q 'shrink.json' && ok "shrinks view lists the produced files" || bad "shrinks view files: [$(printf '%s' "$VOUT" | tail -5)]"
+# --json is the machine view: the file, byte for byte (the pretty screen is IN FRONT
+# of it, never in place of it)
+VJSON=$(run shrinks view "$STAMP" --json)
+printf '%s' "$VJSON" | jq -e . >/dev/null 2>&1 && ok "shrinks view --json is valid json" || bad "shrinks view --json invalid"
+[ "$VJSON" = "$(cat "$BK/shrink/$STAMP/shrink.json")" ] && ok "shrinks view --json is shrink.json verbatim" || bad "shrinks view --json differs from the file"
+cp "$BK/shrink/$STAMP/shrink.json" "$TMP/syn-base.json"
+printf '%s' "$VJSON" | grep -q '== Shrink copy:' && bad "shrinks view --json carries the human banner" || ok "shrinks view --json carries no banner"
 run shrinks view "nonesuch-000000" >/dev/null; [ $? -ne 0 ] && ok "shrinks view unknown stamp -> error" || bad "shrinks view unknown rc"
 run shrinks remove "nonesuch-000000" >/dev/null; [ $? -ne 0 ] && ok "shrinks remove unknown stamp -> error" || bad "shrinks remove unknown rc"
 ROUT=$(run shrinks remove "$STAMP" </dev/null)
@@ -1139,6 +1321,20 @@ run shrinks remove "$STAMP" --yes >/dev/null
 run shrinks prune 0 >/dev/null; [ $? -ne 0 ] && ok "shrinks prune 0 rejected" || bad "shrinks prune 0 rc"
 run shrinks prune 2 --yes >/dev/null
 [ "$(find "$BK/shrink" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] && ok "shrinks prune 2 keeps the 2 newest" || bad "shrinks prune 2"
+
+# A synthetic run dir (12 selected ids, no .db): the view caps the id list and the
+# list row says the copy is gone, so a swapped-out copy cannot look healthy.
+SYN="$BK/shrink/20991231-235959"
+mkdir -p "$SYN"
+jq '.selection.ids = [range(0;12) | "ses_synthetic" + (tostring|("00"+.)[-2:])] | .selection.rule = "discard_sessions"' \
+    "$TMP/syn-base.json" > "$SYN/shrink.json"
+VSYN=$(run shrinks view 20991231-235959)
+[ "$(printf '%s\n' "$VSYN" | grep -c '^    ses_')" -eq 8 ] && ok "shrinks view caps the id list at 8" || bad "shrinks view id cap: $(printf '%s\n' "$VSYN" | grep -c '^    ses_')"
+printf '%s' "$VSYN" | grep -qE '^    … 4 more' && ok "shrinks view says how many ids it left out (4 more)" || bad "shrinks view id overflow line: [$(printf '%s' "$VSYN" | grep more)]"
+printf '%s' "$VSYN" | grep -q '12 id(s)' && ok "shrinks view states the real id count even when capped" || bad "shrinks view id count: [$(printf '%s' "$VSYN" | grep selection)]"
+run shrinks list | grep -q '2099-12-31 23:59:59 UTC' && ok "shrinks list renders a synthetic stamp" || bad "shrinks list synthetic stamp"
+run shrinks list | grep -q 'swapped/no copy' && ok "shrinks list flags a run whose copy is gone" || bad "shrinks list no-copy state"
+run shrinks remove 20991231-235959 --yes >/dev/null
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"
