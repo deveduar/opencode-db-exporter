@@ -321,34 +321,43 @@ oc_sessions_picker >/dev/null
 [ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
     && ok "browse lists every session" || bad "browse row count"
 
-# The compact label contract: short id + full title + ONE short MM-DD date
-# (the updated date, no year, no time) +  suffixes. A subagent row names its
+# The compact label contract: short id + title (capped with a `_` marker) +
+# `@<agent>` + ONE date (the updated YYYY-MM-DD HH:MM) + suffixes + the
+# session's OWN path LAST (the field fzf may cut). A subagent row names its
 # parent as a short token `→ <short-parent-id><first-word>`; a root with
 # subagents wears the `(N sub)` badge; an ORPHAN (parent row gone) renders
 # exactly like a root, so there is no empty parent slot anywhere.
-grep -qE "^ses_A0002$TAB[A-Z0-9_]+  Explore gaps .*[0-9]{2}-[0-9]{2}  → A0001_Project$" "$BR" \
-    && ok "a subagent row ends with the -> short parent token" \
+grep -qE "^ses_A0002$TAB[A-Z0-9_]+  Explore gaps \(@explore subage_  @explore  2026-09-10 00:30  → A0001_Project  /tmp/projA$" "$BR" \
+    && ok "a subagent row ends with the -> parent token and its path" \
     || bad "subagent parent token: $(grep -m1 '^ses_A0002' "$BR")"
-grep -qE "^ses_ORPHAN01$TAB[A-Z0-9_]+  Orphan .*[0-9]{2}-[0-9]{2}$" "$BR" \
+grep -qE "^ses_ORPHAN01$TAB[A-Z0-9_]+  Orphan .*  @explore  2026-09-10 01:01  /tmp/projC$" "$BR" \
     && ok "an orphan renders like a root (no parent slot)" \
     || bad "orphan row: $(grep -m1 '^ses_ORPHAN01' "$BR")"
-grep -qE "^ses_A0001$TAB[A-Z0-9_]+  Project Alpha  09-10  \(2 sub\)$" "$BR" \
-    && ok "roots with subagents carry the (N sub) badge" \
+grep -qE "^ses_A0001$TAB[A-Z0-9_]+  Project Alpha  @build  2026-09-10 00:36  \(2 sub\)  /tmp/projA$" "$BR" \
+    && ok "roots with subagents carry the (N sub) badge (no arrow)" \
     || bad "sub badge: $(grep -m1 '^ses_A0001' "$BR")"
-grep -qE "^ses_A0003$TAB[A-Z0-9_]+  Find false bugs .*  [0-9]{2}-[0-9]{2}  → A0001_Project$" "$BR" \
+grep -qE "^ses_A0003$TAB[A-Z0-9_]+  Find false bugs \(@explore sub_  @explore  2026-09-10 00:33  → A0001_Project  /tmp/projA$" "$BR" \
     && ok "nested subagents get the token from their own parent" \
     || bad "nested token: $(grep -m1 '^ses_A0003' "$BR")"
-[ "$(grep -cE '202[0-9]-|:[0-9]{2}' "$BR")" -eq 0 ] \
-    && ok "rows carry one short MM-DD date (no year/time/date columns)" \
-    || bad "long dates leaked into browse rows"
-# The menu feed is the raw `list --tsv` shape (7 plain fields, the last one the
-# PARENT title), NOT the `list --info` -column output: no padded columns, no
-# DIR/TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.
+grep -q '2026-09-10 00:28' "$BR" && \
+    bad "created date leaked into a row" || \
+    { grep -qE '2026-09-10 00:30' "$BR" && [ "$(grep -cE ':[0-9]{2}:' "$BR")" -eq 0 ] && \
+        ok "rows carry ONE YYYY-MM-DD HH:MM date, the updated one" || \
+        bad "long/wrong dates leaked into browse rows"; }
+grep -qE 'Explore gaps \(@explore subage_' "$BR" && { grep -q '…' "$BR" && bad "ellipsis rather than _ marker" \
+    || ok "long titles truncate with a _ continuation marker"; } \
+    || bad "title truncation: $(grep -m1 '^ses_A0002' "$BR")"
+[ "$(grep -cE ' /tmp/proj[ABC]$' "$BR")" -eq 6 ] \
+    && ok "every row ends with its session's own path" \
+    || bad "path missing on some row: $(grep -Lc 'test' "$BR")"
+# The menu feed is the raw `list --tsv` shape (8 plain fields, the last one the
+# session DIRECTORY), NOT the `list --info` -column output: no padded columns,
+# no TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.
 TSVF=$(session_rows)
-printf '%s' "$TSVF" | grep -q 'TOK_IN\|^\s*DIR\|COST' && bad "menu feed carries -info columns" \
+printf '%s' "$TSVF" | grep -q 'TOK_IN\|COST' && bad "menu feed carries -info columns" \
     || ok "menu feed has no -info column noise"
-R7=$(printf '%s' "$TSVF" | awk -F'\t' 'NR==1{print NF}')
-[ "$R7" = "7" ] && ok "menu feed is the 7-field list --tsv shape" || bad "menu feed fields: $R7"
+R8=$(printf '%s' "$TSVF" | awk -F'\t' 'NR==1{print NF}')
+[ "$R8" = "8" ] && ok "menu feed is the 8-field list --tsv shape" || bad "menu feed fields: $R8"
 
 # The two REPORT toggles are exclusive to browse mode. In a SELECT picker they
 # would be dead keys (nothing is reported there), so their absence there is part

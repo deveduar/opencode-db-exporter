@@ -244,8 +244,8 @@ oced_list() {
     if [ "$tsv" -eq 1 ]; then
         # The MENU feed: clean tab-separated rows, no -column padding, no banner
         # and no token/cost columns (the picker builds its own label from these
-        # fields). PARENT_ID travels too so the picker can render the compact
-        # `→ <shortid_word>` token of the session a subagent belongs to.
+        # fields). PARENT_ID and DIRECTORY travel too so the row can render the
+        # compact `→ <shortid_word>` parent token and the session's own path.
         o_q -separator $'\t' "
             SELECT s.id,
                    coalesce(NULLIF(s.title,''), s.slug),
@@ -253,7 +253,8 @@ oced_list() {
                    datetime(s.time_updated/1000,'unixepoch'),
                    coalesce(s.agent,''),
                    coalesce(p.id,''),
-                   coalesce(p.title,'')
+                   coalesce(p.title,''),
+                   coalesce(s.directory,'')
             FROM session s LEFT JOIN session p ON p.id = s.parent_id
             $where ORDER BY $orderby;"
         return 0

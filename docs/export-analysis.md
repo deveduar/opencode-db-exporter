@@ -1427,7 +1427,7 @@ Three small contracts that closed the gaps §35 opened and made the shelves read
 The two suites now pin all of it: the cascade run is *linked back* (positive and negative
 cases), the `verify-bk` shelf shows `(stale)`/`(unverifiable)` and an up-to-date copy
 stays clean — all keyed by the copy's own stamp, and every picker's rows really reorder
-after a flip. `export_smoke.sh` is 384 asserts, `menu_flow.sh` 332.
+after a flip. `export_smoke.sh` is 384 asserts, `menu_flow.sh` 334.
 
 ### §40 The legacy `metadatos.json` name is gone (current)
 
@@ -1444,7 +1444,7 @@ still labels its selection `(legacy record)`. `tests/export_smoke.sh` pins both 
 a legacy-only dir is refused, and the same minimal record as `metadata.json` still
 renders. `export_smoke.sh` stays 384 asserts.
 
-### §41 Compact session rows: one label, one helper (current)
+### §41 Compact session rows: one label, one helper
 
 The browse/export/shrink pickers were fed `list --info` (sqlite `-column` output):
 padded columns, TWO full datetimes, DIR + TOK_IN/TOK_OUT + COST the pickers never
@@ -1477,3 +1477,32 @@ means the same everywhere and one wrong SQL cannot drift. `menu_flow.sh` pins th
 whole label: the `→`-token on plain and nested subagents, the absent parent slot on
 the orphan, the `(2 sub)` badge, the one short MM-DD (no year/time anywhere), and the
 7-field `--tsv` feed with no `--info` column noise. `menu_flow.sh` is 332 asserts.
+
+### §42 The row goes back to the data: `@agent`, a readable date, the path (current)
+
+§41's row had drifted too far from what `list --info` used to show — the user reviewed
+it and asked what had been lost, then chose one by one: the date back to
+`YYYY-MM-DD HH:MM` (updated only), the session's own path back (it goes LAST, the one
+field fzf may cut, so the relationship tokens survive), an always-visible `@<agent>`
+token taken from the `agent` COLUMN — the `(@explore subagent)` suffix seen on some
+rows and not others was never a token, it is literal TITLE text, so the reliable signal
+is the column, never a parse of the title — and the title capped to `TITLE_W`=30 with
+a trailing `_` instead of being printed in full (a `_` says "the title continues"; a
+title that fits is printed verbatim). Final label: `oc_short_id + oc_title_fit(title) +
+@agent + YYYY-MM-DD HH:MM + [(N sub) | → token] + path`. The `→ token`'s word
+truncation switched from `…` to `_` as well — one truncation language everywhere —
+and a test fails if any `…` reappears in the rows.
+
+Adding the 8th feed field (`directory`) exposed a bash pitfall that had been dormant
+since round 1: `read` with `IFS=$'\t'` COLLAPSES runs of tabs, so a root row's two
+EMPTY middle fields (`parent_id`/`parent_title`) merged with the new `directory` and
+swallowed it — root rows rendered `→ ` (empty parent token) with no path at all. It
+never bit before because the empty fields were the LAST ones: collapsed to nothing,
+which is exactly what a root wanted. The loop now splits on `\x1f` (a non-whitespace
+IFS keeps every empty field, verbatim). That and round 1's `local title`-inside-the-loop
+shadowing bug (the loop's `local` persists past the loop and clobbered the picker's
+`title` cfg — the fzf prompt became the last session title) are now both in AGENTS.md's
+known pitfalls. `menu_flow.sh` pins the new contract: the UPDATED minute (the fake DB
+distinguishes created/updated by minute), no seconds anywhere, `@agent` on every row,
+the `_` title truncation with no `…`, the path on all six rows, and the 8-field feed.
+`menu_flow.sh` is 334 asserts.

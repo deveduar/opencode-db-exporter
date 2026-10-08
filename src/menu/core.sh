@@ -258,11 +258,12 @@ run_menu() {
 # Selection helpers
 #-----------------------------------------------------------------------
 # session_rows [args...] -> one TAB-separated row per session: id, title,
-# created, updated, agent, parent_id, parent_title (default: every session).
-# With --root it returns only the ROOT sessions (no parent, or an orphan whose
-# parent is gone): the shrink picker works on roots because a subagent always
-# follows its root. The rows come from `list --tsv` (clean fields, no sqlite
-# -column padding, no token/cost columns): the picker builds its own label.
+# created, updated, agent, parent_id, parent_title, directory (default: every
+# session). With --root it returns only the ROOT sessions (no parent, or an
+# orphan whose parent is gone): the shrink picker works on roots because a
+# subagent always follows its root. The rows come from `list --tsv` (clean
+# fields, no sqlite -column padding, no token/cost columns): the picker builds
+# its own label from them.
 session_rows() {
     oced_out list --tsv "$@" 2>/dev/null | awk -F'\t' '$1 ~ /^ses_/'
 }
@@ -281,16 +282,31 @@ oc_short_id() {
 
 # PARENT_WORD_W -> how much of the parent's title the `→ <parent>` token carries
 # after the parent's short id. A cap keeps the token readable when the first word
-# is long or hyphenated (opencode-db, portability...); truncation adds a `…`.
+# is long or hyphenated (opencode-db, portability...); truncation adds a `_`
+# (the same "the word continues" marker as the short id and the capped title).
 PARENT_WORD_W=9
 oc_parent_token() {   # <parent_id> <parent_title> -> "f4fecb3_mejoras"
     local pid="${1:-}" ptitle="${2:-}" word
     [ -n "$ptitle" ] || { printf ''; return 0; }
     word=$(printf '%s' "$ptitle" | awk '{print $1}')
     if [ "${#word}" -gt "$PARENT_WORD_W" ]; then
-        word="${word:0:PARENT_WORD_W}…"
+        word="${word:0:PARENT_WORD_W}_"
     fi
     printf '%s%s' "$(oc_short_id "$pid")" "$word"
+}
+
+# TITLE_W -> the widest the row's TITLE may be. A longer title is cut to
+# TITLE_W-1 chars with a trailing `_` ("the title continues"); a title that fits
+# keeps its exact text (no marker). Capping the title keeps the @agent/date/path
+# suffixes on screen instead of letting one long title push them past fzf's edge.
+TITLE_W=30
+oc_title_fit() {   # <title> -> the title as it appears in a row label
+    local t="${1:-}"
+    if [ "${#t}" -gt "$TITLE_W" ]; then
+        printf '%s_' "${t:0:$((TITLE_W - 1))}"
+    else
+        printf '%s' "$t"
+    fi
 }
 
 # oc_root_sub_counts -> "root-id\tN_sub" for ROOT sessions that have subagents
@@ -479,21 +495,28 @@ oc_session_picker() {
         [ "$roots_only" = "1" ] && row_args=("--root" "--order" "$ord")
         while IFS= read -r line; do
             [ -n "$line" ] || continue
-            local rid rtitle rcreated rupdated ragent rpid rptitle disp
-            IFS=$'\t' read -r rid rtitle rcreated rupdated ragent rpid rptitle <<<"$line"
+            local rid rtitle rcreated rupdated ragent rpid rptitle rdir disp
+            # bash `read` collapses runs of IFS whitespace, so three empty
+            # fields in a row would eat the path: split on \x1f instead (a
+            # non-whitespace IFS keeps every empty field, verbatim).
+            IFS=$'\x1f' read -r rid rtitle rcreated rupdated ragent rpid rptitle rdir <<<"${line//$'\t'/$'\x1f'}"
             # A hidden subagent is not rendered, so it can never be marked and
             # never reaches the CSV: the selection cascades to it by construction.
             if [ "$hide_subs" = "1" ] && [ -n "${is_sub[$rid]+set}" ]; then
                 continue
             fi
             ids+=("$rid")
-            # The compact label: short id + full title, ONE short date (the
-            # updated MM-DD). The `→ <parent>` token renders ONLY on subagent
-            # rows (parent title present) and the `(N sub)` badge only on rows
-            # that have them, so a root row never carries a gap column.
-            disp="$(oc_short_id "$rid")  $rtitle  ${rupdated:5:5}"
-            [ -n "$rptitle" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
+            # The compact label: short id + title (capped with a `_` marker),
+            # the agent token, ONE full-ish date (the updated YYYY-MM-DD HH:MM)
+            # and the session's own path LAST (it is the field fzf may cut).
+            # The `→ <parent>` token renders only on subagent rows (a parent id
+            # present) and the `(N sub)` badge only on rows that have them.
+            disp="$(oc_short_id "$rid")  $(oc_title_fit "$rtitle")"
+            [ -n "$ragent" ] && disp+="  @$ragent"
+            disp+="  ${rupdated:0:16}"
+            [ -n "$rpid" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
             [ -n "${sub_n[$rid]:-}" ] && disp+="  (${sub_n[$rid]} sub)"
+            [ -n "$rdir" ] && disp+="  $rdir"
             local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")
 
