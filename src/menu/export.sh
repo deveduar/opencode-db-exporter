@@ -175,7 +175,7 @@ oc_export_sessions_pick() {
         [make_label]="[>] choose the preset"
         [make_action]=_oc_export_make_action
         [empty_guard_msg]="Nothing marked — an export needs at least one session."
-        [get_sub_count]=oc_export_sub_counts
+        [get_sub_count]=oc_root_sub_counts
         [get_sub_ids]=oc_export_sub_ids
     )
     oc_session_picker _cfg
@@ -206,19 +206,6 @@ oc_export_sub_ids() {
     o_q "SELECT s.id FROM session s
           WHERE s.parent_id IS NOT NULL AND s.parent_id <> ''
             AND EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id);" 2>/dev/null
-}
-
-# oc_export_sub_counts -> "id\tN_sub" for ROOT sessions that have subagents.
-# Mirror of oc_shrink_sub_counts but used by the export session picker to
-# display a badge for all-sessions mode (roots_only=0).
-oc_export_sub_counts() {
-    o_q -separator $'\t' "WITH RECURSIVE d(id, root) AS (
-            SELECT s.id, s.id FROM session s
-             WHERE s.parent_id IS NULL OR s.parent_id = ''
-                OR NOT EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id)
-            UNION ALL
-            SELECT c.id, d.root FROM session c JOIN d ON c.parent_id = d.id)
-         SELECT root, count(*) - 1 FROM d GROUP BY root HAVING count(*) > 1;" 2>/dev/null
 }
 
 # oc_export_sql_ids <csv> -> sanitized SQL IN-list ('id1','id2') for export queries.

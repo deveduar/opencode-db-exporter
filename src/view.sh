@@ -200,7 +200,7 @@ oced_version() {
 oced_list() {
     o_check_deps
     o_db_exists
-    local scope=all filter="" showinfo=0 order=created-asc oby="" odir=""
+    local scope=all filter="" showinfo=0 order=created-asc oby="" odir="" tsv=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --root) scope=root ;;
@@ -208,6 +208,7 @@ oced_list() {
             --all) scope=all ;;
             --filter) [ "$#" -ge 2 ] || o_die "--filter needs a pattern"; filter="$2"; shift ;;
             --info) showinfo=1 ;;
+            --tsv) tsv=1 ;;
             --order)
                 [ "$#" -ge 2 ] || o_die "--order needs a value ($OCED_LIST_ORDERS)"
                 order="$2"; shift ;;
@@ -239,6 +240,24 @@ oced_list() {
 
     local cols="s.id AS ID, coalesce(NULLIF(s.title,''), s.slug) AS TITLE, datetime(s.time_created/1000,'unixepoch') AS CREATED, datetime(s.time_updated/1000,'unixepoch') AS UPDATED, coalesce(s.agent,'') AS AGENT, coalesce(p.title,'') AS PARENT, s.directory AS DIR"
     [ "$showinfo" -eq 1 ] && cols="$cols, s.tokens_input AS TOK_IN, s.tokens_output AS TOK_OUT, s.cost AS COST"
+
+    if [ "$tsv" -eq 1 ]; then
+        # The MENU feed: clean tab-separated rows, no -column padding, no banner
+        # and no token/cost columns (the picker builds its own label from these
+        # fields). PARENT_ID travels too so the picker can render the compact
+        # `→ <shortid_word>` token of the session a subagent belongs to.
+        o_q -separator $'\t' "
+            SELECT s.id,
+                   coalesce(NULLIF(s.title,''), s.slug),
+                   datetime(s.time_created/1000,'unixepoch'),
+                   datetime(s.time_updated/1000,'unixepoch'),
+                   coalesce(s.agent,''),
+                   coalesce(p.id,''),
+                   coalesce(p.title,'')
+            FROM session s LEFT JOIN session p ON p.id = s.parent_id
+            $where ORDER BY $orderby;"
+        return 0
+    fi
 
     echo "== Sessions ($scope) =="
     o_q -header -column "SELECT $cols FROM session s LEFT JOIN session p ON p.id = s.parent_id $where ORDER BY $orderby;"

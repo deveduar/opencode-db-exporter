@@ -1221,7 +1221,7 @@ expands".
 **An id is not a name.** The block above listed two 36-character ids for sessions the
 user was about to lose, in a screen whose whole purpose is "this shrink WILL DISCARD…".
 `oc_shrink_discard_rows` now answers id + title + descendant count in one read-only query
-(the `o_q -separator $'\t'` idiom `oc_shrink_sub_counts` already used), capped at
+(the `o_q -separator $'\t'` idiom in today's shared `oc_root_sub_counts`), capped at
 `DISCARD_LIST_MAX` rows with `… N more` + the full csv. The cap is not decoration: the
 whole point of a mass shrink is that the list is long, and a 500-line dump would push the
 y/N gate off screen. Division of labour, same as the backup plan in §34: **the menu shows
@@ -1427,7 +1427,7 @@ Three small contracts that closed the gaps §35 opened and made the shelves read
 The two suites now pin all of it: the cascade run is *linked back* (positive and negative
 cases), the `verify-bk` shelf shows `(stale)`/`(unverifiable)` and an up-to-date copy
 stays clean — all keyed by the copy's own stamp, and every picker's rows really reorder
-after a flip. `export_smoke.sh` is 384 asserts, `menu_flow.sh` 325.
+after a flip. `export_smoke.sh` is 384 asserts, `menu_flow.sh` 332.
 
 ### §40 The legacy `metadatos.json` name is gone (current)
 
@@ -1443,3 +1443,37 @@ legacy is removed, but the content **shape** fallbacks stay — `.sessions` with
 still labels its selection `(legacy record)`. `tests/export_smoke.sh` pins both halves:
 a legacy-only dir is refused, and the same minimal record as `metadata.json` still
 renders. `export_smoke.sh` stays 384 asserts.
+
+### §41 Compact session rows: one label, one helper (current)
+
+The browse/export/shrink pickers were fed `list --info` (sqlite `-column` output):
+padded columns, TWO full datetimes, DIR + TOK_IN/TOK_OUT + COST the pickers never
+show, and an always-empty PARENT column that left a visual gap on subagent rows
+(this screen has no header row, so a gap reads as "something is missing" instead of
+"this is not a subagent"). The fix is two-sided.
+
+**The menu gets its own additive feed** — a new `--tsv` flag on `list` (`oced_list`):
+raw tab-separated `id \t title \t created \t updated \t agent \t parent_id \t
+parent_title`, no banner, no padding, no token/cost columns. `parent_id` travels so
+the row can name the parent. The row source is `session_rows` → `list --tsv`, and the
+old `parse` layer (which is why nothing depended on `--info`) is untouched: the human
+`list --info` screen is unchanged, and `--root/--order/--filter` all work on both.
+Runtime cost per render: one cheap 7-column query where three pickers used to run three.
+
+**One compact label, built from constants** — `oc_short_id + full title + MM-DD` (the
+UPDATED date, no year, no time), then suffixes that only exist when they must: the
+`(N sub)` badge on roots that have subagents and a `→ <token>` on subagent rows, where
+the token = parent short id + first word of the parent's title (capped via
+`PARENT_WORD_W`). Root rows never carry a trailing "empty slot" for a parent, an orphan
+(parent row gone) renders exactly like a root, and every row ends in a real value — the
+fitness function of the whole redesign is "no two consecutive spaces at end of line".
+The date is the updated one because that is the column the picker sorts by default.
+
+**The badge is one helper now.** The three pickers each ran their own recursive count
+SQL (`oc_export_sub_counts` / `oc_shrink_sub_counts`); browse had none. They are gone,
+replaced by the single shared `oc_root_sub_counts` (same recursive closure, `o_q
+-separator $'\t'`), which the browse cfg gained as `get_sub_count` too — so the badge
+means the same everywhere and one wrong SQL cannot drift. `menu_flow.sh` pins the
+whole label: the `→`-token on plain and nested subagents, the absent parent slot on
+the orphan, the `(2 sub)` badge, the one short MM-DD (no year/time anywhere), and the
+7-field `--tsv` feed with no `--info` column noise. `menu_flow.sh` is 332 asserts.

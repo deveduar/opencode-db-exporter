@@ -29,18 +29,6 @@ oc_shrink_desc() { # <recipe> -> one-line summary of its operations
     oc_shrink_py descr "$1" || return 1
 }
 
-# oc_shrink_sub_counts -> "<root-id>\t<descendant-count>" for roots WITH
-# subagents (recursive: nested subagents included). Read-only, live DB.
-oc_shrink_sub_counts() {
-    o_q -separator $'\t' "WITH RECURSIVE d(id, root) AS (
-            SELECT s.id, s.id FROM session s
-             WHERE s.parent_id IS NULL OR s.parent_id = ''
-                OR NOT EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id)
-            UNION ALL
-            SELECT c.id, d.root FROM session c JOIN d ON c.parent_id = d.id)
-         SELECT root, count(*) - 1 FROM d GROUP BY root HAVING count(*) > 1;" 2>/dev/null
-}
-
 # oc_shrink_sql_ids <id-csv> -> a SQL id-list ('a','b') ready to be pasted into
 # an IN (...) — the picker passes the unmarked roots (the engine then closes the
 # set over their descendants) or the full root list. Ids are sanitized to
@@ -290,7 +278,7 @@ oc_shrink_sessions_pick() {
         [make_label]="[>] continue"
         [make_action]=_shr_make_action
         [empty_guard_msg]="Nothing marked — the copy would be an EMPTY database."
-        [get_sub_count]=oc_shrink_sub_counts
+        [get_sub_count]=oc_root_sub_counts
     )
     oc_session_picker _shr_cfg
 }

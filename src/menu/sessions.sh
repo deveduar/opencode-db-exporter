@@ -49,6 +49,7 @@ oc_sessions_picker() {
         [view_action]="oc_sessions_view_one"
         [view_action_all]="oc_sessions_view_all"
         [view_all_header]="== Details of all sessions =="
+        [get_sub_count]=oc_root_sub_counts
         [get_sub_ids]="oc_export_sub_ids"
     )
     oc_session_picker sess_cfg

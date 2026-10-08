@@ -257,12 +257,14 @@ run_menu() {
 #-----------------------------------------------------------------------
 # Selection helpers
 #-----------------------------------------------------------------------
-# session rows -> one per line: id title date ... (sqlite column separators excluded).
-# session_rows [args...] -> `list` rows (default: every session). With --root it
-# returns only the ROOT sessions (no parent, or an orphan whose parent is gone):
-# the shrink picker works on roots because a subagent always follows its root.
+# session_rows [args...] -> one TAB-separated row per session: id, title,
+# created, updated, agent, parent_id, parent_title (default: every session).
+# With --root it returns only the ROOT sessions (no parent, or an orphan whose
+# parent is gone): the shrink picker works on roots because a subagent always
+# follows its root. The rows come from `list --tsv` (clean fields, no sqlite
+# -column padding, no token/cost columns): the picker builds its own label.
 session_rows() {
-    oced_out list "$@" --info 2>/dev/null | awk 'NR>2 && $1 ~ /^ses_/'
+    oced_out list --tsv "$@" 2>/dev/null | awk -F'\t' '$1 ~ /^ses_/'
 }
 
 # oc_short_id <id> -> the id as it appears in a menu LABEL: the `ses_` prefix
@@ -275,6 +277,34 @@ ID_LABEL_W=8
 oc_short_id() {
     local rest="${1#ses_}"
     printf '%s_' "${rest:0:$((ID_LABEL_W - 1))}"
+}
+
+# PARENT_WORD_W -> how much of the parent's title the `→ <parent>` token carries
+# after the parent's short id. A cap keeps the token readable when the first word
+# is long or hyphenated (opencode-db, portability...); truncation adds a `…`.
+PARENT_WORD_W=9
+oc_parent_token() {   # <parent_id> <parent_title> -> "f4fecb3_mejoras"
+    local pid="${1:-}" ptitle="${2:-}" word
+    [ -n "$ptitle" ] || { printf ''; return 0; }
+    word=$(printf '%s' "$ptitle" | awk '{print $1}')
+    if [ "${#word}" -gt "$PARENT_WORD_W" ]; then
+        word="${word:0:PARENT_WORD_W}…"
+    fi
+    printf '%s%s' "$(oc_short_id "$pid")" "$word"
+}
+
+# oc_root_sub_counts -> "root-id\tN_sub" for ROOT sessions that have subagents
+# (recursive: nested subagents included). ONE helper for every session picker
+# (browse/export/shrink) so the `(N sub)` badge means the same everywhere.
+# Read-only, live DB. A session whose parent row is gone is itself a root.
+oc_root_sub_counts() {
+    o_q -separator $'\t' "WITH RECURSIVE d(id, root) AS (
+            SELECT s.id, s.id FROM session s
+             WHERE s.parent_id IS NULL OR s.parent_id = ''
+                OR NOT EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id)
+            UNION ALL
+            SELECT c.id, d.root FROM session c JOIN d ON c.parent_id = d.id)
+         SELECT root, count(*) - 1 FROM d GROUP BY root HAVING count(*) > 1;" 2>/dev/null
 }
 
 # session_ids -> one session id per line (all sessions, for "all sessions" loops).
@@ -395,16 +425,6 @@ oc_shrinks_view_all() { oc_view_all "== Details of all shrink copies ==" "Shrink
 # session row -> toggle 0 <-> 1
 # ESC in fzf  -> return 0 (caller climbs one level)
 #-----------------------------------------------------------------------
-# Session rows as `id<TAB>label`: the row format every session list uses. It
-# lives next to the picker (not in the screens) because the export ALL-rows and
-# the sessions browser are two consumers of the same list.
-oc_sessions_rows() {
-    session_rows | while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        printf '%s\t%s\n' "$(awk '{print $1}' <<<"$line")" "$line"
-    done
-}
-
 oc_session_picker() {
     local cfg_ref="$1"
     local -n cfg="$cfg_ref"
@@ -459,14 +479,22 @@ oc_session_picker() {
         [ "$roots_only" = "1" ] && row_args=("--root" "--order" "$ord")
         while IFS= read -r line; do
             [ -n "$line" ] || continue
-            id=$(awk '{print $1}' <<<"$line")
+            local rid rtitle rcreated rupdated ragent rpid rptitle disp
+            IFS=$'\t' read -r rid rtitle rcreated rupdated ragent rpid rptitle <<<"$line"
             # A hidden subagent is not rendered, so it can never be marked and
             # never reaches the CSV: the selection cascades to it by construction.
-            if [ "$hide_subs" = "1" ] && [ -n "${is_sub[$id]+set}" ]; then
+            if [ "$hide_subs" = "1" ] && [ -n "${is_sub[$rid]+set}" ]; then
                 continue
             fi
-            ids+=("$id")
-            local_disp["$id"]="${line#* }"
+            ids+=("$rid")
+            # The compact label: short id + full title, ONE short date (the
+            # updated MM-DD). The `→ <parent>` token renders ONLY on subagent
+            # rows (parent title present) and the `(N sub)` badge only on rows
+            # that have them, so a root row never carries a gap column.
+            disp="$(oc_short_id "$rid")  $rtitle  ${rupdated:5:5}"
+            [ -n "$rptitle" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
+            [ -n "${sub_n[$rid]:-}" ] && disp+="  (${sub_n[$rid]} sub)"
+            local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")
 
         if [ "${#ids[@]}" -eq 0 ]; then
@@ -542,17 +570,13 @@ oc_session_picker() {
                          # [>] = opens a FLOW (the session detail). A browse row
                          # is not selectable, so it must not wear a [x]/[ ] mark:
                          # a mark there would promise a selection that is never
-                         # built.
-                         local id_short
-                         id_short="$(oc_short_id "$id")"
-                         printf '%s\t%s %s\n' "$id" "$id_short" "${local_disp[$id]:-}"
+                         # built. The label is already complete (id+title+date+
+                         # suffixes), so it is printed as-is.
+                         printf '%s\t%s\n' "$id" "${local_disp[$id]:-}"
                          continue
                      fi
                      [ "${marks[$id]:-0}" = 1 ] && mark='[x]' || mark='[ ]'
-                     local badge=''
-                     [ -n "${sub_n[$id]:-}" ] && badge=" (${sub_n[$id]} sub)"
-                     id_short="$(oc_short_id "$id")"
-                     printf '%s\t%s %s %s%s\n' "$id" "$mark" "$id_short" "${local_disp[$id]:-}" "$badge"
+                     printf '%s\t%s %s\n' "$id" "$mark" "${local_disp[$id]:-}"
                  done
                } | oc_fzf_sel "$title" "$subs_note") || return $?
 

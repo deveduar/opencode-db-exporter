@@ -321,6 +321,35 @@ oc_sessions_picker >/dev/null
 [ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
     && ok "browse lists every session" || bad "browse row count"
 
+# The compact label contract: short id + full title + ONE short MM-DD date
+# (the updated date, no year, no time) +  suffixes. A subagent row names its
+# parent as a short token `→ <short-parent-id><first-word>`; a root with
+# subagents wears the `(N sub)` badge; an ORPHAN (parent row gone) renders
+# exactly like a root, so there is no empty parent slot anywhere.
+grep -qE "^ses_A0002$TAB[A-Z0-9_]+  Explore gaps .*[0-9]{2}-[0-9]{2}  → A0001_Project$" "$BR" \
+    && ok "a subagent row ends with the -> short parent token" \
+    || bad "subagent parent token: $(grep -m1 '^ses_A0002' "$BR")"
+grep -qE "^ses_ORPHAN01$TAB[A-Z0-9_]+  Orphan .*[0-9]{2}-[0-9]{2}$" "$BR" \
+    && ok "an orphan renders like a root (no parent slot)" \
+    || bad "orphan row: $(grep -m1 '^ses_ORPHAN01' "$BR")"
+grep -qE "^ses_A0001$TAB[A-Z0-9_]+  Project Alpha  09-10  \(2 sub\)$" "$BR" \
+    && ok "roots with subagents carry the (N sub) badge" \
+    || bad "sub badge: $(grep -m1 '^ses_A0001' "$BR")"
+grep -qE "^ses_A0003$TAB[A-Z0-9_]+  Find false bugs .*  [0-9]{2}-[0-9]{2}  → A0001_Project$" "$BR" \
+    && ok "nested subagents get the token from their own parent" \
+    || bad "nested token: $(grep -m1 '^ses_A0003' "$BR")"
+[ "$(grep -cE '202[0-9]-|:[0-9]{2}' "$BR")" -eq 0 ] \
+    && ok "rows carry one short MM-DD date (no year/time/date columns)" \
+    || bad "long dates leaked into browse rows"
+# The menu feed is the raw `list --tsv` shape (7 plain fields, the last one the
+# PARENT title), NOT the `list --info` -column output: no padded columns, no
+# DIR/TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.
+TSVF=$(session_rows)
+printf '%s' "$TSVF" | grep -q 'TOK_IN\|^\s*DIR\|COST' && bad "menu feed carries -info columns" \
+    || ok "menu feed has no -info column noise"
+R7=$(printf '%s' "$TSVF" | awk -F'\t' 'NR==1{print NF}')
+[ "$R7" = "7" ] && ok "menu feed is the 7-field list --tsv shape" || bad "menu feed fields: $R7"
+
 # The two REPORT toggles are exclusive to browse mode. In a SELECT picker they
 # would be dead keys (nothing is reported there), so their absence there is part
 # of the contract: the export and shrink pickers must not show them.
@@ -925,7 +954,7 @@ confirm_action() { return 0; }
 RROWS=$(session_rows --root)
 [ "$(printf '%s\n' "$RROWS" | grep -c '^ses_')" = "3" ] && ok "sessions picker lists only the 3 root sessions" || bad "root rows: $RROWS"
 printf '%s\n' "$RROWS" | grep -q '^ses_A0002' && bad "a subagent leaked into the picker rows" || ok "no subagent rows in the picker"
-SUBS=$(oc_shrink_sub_counts)
+SUBS=$(oc_root_sub_counts)
 printf '%s' "$SUBS" | grep -q "$(printf 'ses_A0001\t2')" && ok "the root row can show its subagent count (A0001 -> 2)" || bad "sub counts: [$SUBS]"
 
 # the picker sorts by time_updated (newest first), and the two axes really

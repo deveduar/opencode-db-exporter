@@ -20,12 +20,13 @@ Usage: opencode-db.sh [command]
   status               DB exists/size/integrity + counts + last session + backup alignment
                        + version/schema probe + dependency check
   version              tool version (opencode-db) + opencode CLI version + schema compatibility probe
-  list [--root|--sub|--all] [--filter PATTERN] [--info]
+  list [--root|--sub|--all] [--filter PATTERN] [--info] [--tsv]
                        [--order created-asc|created-desc|updated-asc|updated-desc]
                        list sessions (id | title | date | agent | dir | tokens);
                        --filter: SQL LIKE pattern on id/title, e.g. 'ses_f7%'
                        --order: sort axis + direction (default created-asc = oldest
                        first); ties always fall back to time_created
+                       --tsv: raw tab-separated rows (menu feed, no padding/tokens)
   info <id>            full detail of one session (tokens, digests, counts)
   digest <id> [show [last|N|all]]
                        a compaction MARKER is the event opencode records (date +
