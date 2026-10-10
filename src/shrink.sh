@@ -834,7 +834,7 @@ oced_shrinks_view() {
     # Freshness here, by the same rule as `backups view`: a detail screen must not
     # show an artifact nobody validated. Same helper as verify/swap/remove.
     if fresh=$(o_shrink_stale "$j" 2>&1); then
-        printf '  %-11s %s\n' "freshness:" "ok — the live DB has no newer session than this copy"
+        printf '  %-11s %s\n' "freshness:" "ok — nothing in the live DB is newer than this copy"
     else
         printf '  %-11s %s\n' "freshness:" "STALE — $fresh"
     fi
@@ -935,7 +935,7 @@ o_shrink_stale() {
         return 1
     fi
     if [ "$live_max" -gt "$shrink_max" ]; then
-        echo "live DB has newer sessions (max_updated=$live_max) than the shrink copy ($shrink_max)."
+        echo "the live DB has content newer than this copy (max_updated=$live_max > copy $shrink_max) — sessions may have been added or edited since."
         return 1
     fi
     return 0
@@ -1083,7 +1083,7 @@ oced_shrinks_verify() {
             echo "  ${sc%%$'\t'*}  —  ${sc#*$'\t'}"
         done
         echo ""
-        echo "   Swapping any of these loses the sessions added since; each one is"
+        echo "   Swapping any of these loses the sessions added or edited since; each one is"
         echo "   only as fresh as its own shrink.json says. Create a new copy instead."
         echo "   The pre-shrink safety copy is your only rollback."
         echo ""

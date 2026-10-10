@@ -280,6 +280,12 @@ oc_short_id() {
     printf '%s_' "${rest:0:$((ID_LABEL_W - 1))}"
 }
 
+# TITLE_COL_W — width of the label's SECOND column (the title), the 3rd column
+# (agent/date/badge/ref) starts right after it, so the columns line up across
+# rows. Padding only: the title is NEVER cut (a title longer than the column
+# pushes the metadata to the right; fzf truncates the row's end anyway).
+TITLE_COL_W=36
+
 # PARENT_WORD_W -> how much of the parent's title the `→ <parent>` token carries
 # after the parent's short id. A cap keeps the token readable when the first word
 # is long or hyphenated (opencode-db, portability...); truncation adds a `_`
@@ -305,6 +311,35 @@ oc_title_display() {
     local t="${1:-}"
     [[ "$t" =~ ^(.*)\ \(@[^\)]*\ subagent\)$ ]] && [ -n "${BASH_REMATCH[1]}" ] && t="${BASH_REMATCH[1]}"
     printf '%s' "$t"
+}
+
+# ROW_COL_GAP — the spaces guaranteed between the title column and the metadata
+# column. Padding alone cannot do this: `printf %-37s` adds NOTHING once the
+# title is already 37+ chars, so an overlong title ran straight into `@agent`
+# (the reported bug). The gap is added ONLY in that overflow case, so rows whose
+# title fits keep their existing alignment (and their pinned tests) untouched.
+ROW_COL_GAP=2
+
+# oc_row_label <id> <title> <agent> <updated> <sub_count> <parent_id> <parent_title>
+# -> the menu's compact THREE-column label (`id | title | metadata`). A helper so
+# the overflow rule is unit-testable without a fake DB: a title longer than the
+# column is followed by ROW_COL_GAP spaces, never glued to `@agent`.
+oc_row_label() {
+    local rid="$1" rtitle="$2" ragent="$3" rupdated="$4" rsub="$5" rpid="$6" rptitle="$7"
+    local tw=$((TITLE_COL_W + 1)) tt field disp
+    tt="$(oc_title_display "$rtitle")"
+    if [ "${#tt}" -ge "$tw" ]; then
+        field="$tt$(printf '%*s' "$ROW_COL_GAP" '')"
+    else
+        field="$(printf "%-${tw}s" "$tt")"
+    fi
+    disp="$(printf "%-$((ID_LABEL_W + 1))s" "$(oc_short_id "$rid")")"
+    disp+="$field"
+    [ -n "$ragent" ] && disp+="@$ragent  "
+    disp+="${rupdated:0:16}"
+    [ -n "$rsub" ] && disp+="  (${rsub} sub)"
+    [ -n "$rpid" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
+    printf '%s' "$disp"
 }
 
 # oc_root_sub_counts -> "root-id\tN_sub" for ROOT sessions that have subagents
@@ -504,23 +539,22 @@ oc_session_picker() {
                 continue
             fi
             ids+=("$rid")
-            # The compact label: the short id and the FULL title as ONE token
-            # (`A0001_Project Alpha` — oc_short_id always ends in `_`, so the
-            # underscore joins id_title and NOTHING truncates the title; the
-            # title is passed through oc_title_display, which sheds opencode's
-            # generated ` (@<agent> subagent)` suffix because the `@<agent>`
-            # token and the `→ <parent>` reference already say it), the agent
-            # token, ONE full-ish date (the updated YYYY-MM-DD HH:MM), the
-            # `→ <parent>` token on subagent rows (a parent id present) and the
-            # `(N sub)` badge LAST. The session's own path is deliberately NOT
+            # The compact label as THREE columns: `id | title | metadata`. The
+            # FIRST COLUMN is the short id on a fixed width (oc_short_id drops
+            # `ses_`, cuts to ID_LABEL_W-1 and always ends in `_`, so the
+            # underscore terminates the id — it is NOT glued to the title any
+            # more). The SECOND COLUMN is the FULL title, padded to TITLE_COL_W
+            # (padding only, never truncated; a longer one pushes the metadata
+            # right but is ALWAYS followed by ROW_COL_GAP spaces, so it never
+            # glues to the metadata; fzf truncates the row's end), passed through
+            # oc_title_display which sheds opencode's generated ` (@<agent>
+            # subagent)` suffix (the `@<agent>` token and the `→ <parent>`
+            # reference already say it). The THIRD COLUMN is the metadata: the
+            # agent token, ONE full-ish date (the updated YYYY-MM-DD HH:MM), the
+            # `(N sub)` badge and the `→ <parent>` token on subagent rows (a
+            # parent id present). The session's own path is deliberately NOT
             # rendered (it bloated every row; it stays in `list` and `info`).
-            # fzf cuts the END of a long row, so the tail (token/badge) is what
-            # may fall off screen — identity, agent and date always survive.
-            disp="$(oc_short_id "$rid")$(oc_title_display "$rtitle")"
-            [ -n "$ragent" ] && disp+="  @$ragent"
-            disp+="  ${rupdated:0:16}"
-            [ -n "$rpid" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
-            [ -n "${sub_n[$rid]:-}" ] && disp+="  (${sub_n[$rid]} sub)"
+            disp="$(oc_row_label "$rid" "$rtitle" "$ragent" "$rupdated" "${sub_n[$rid]:-}" "$rpid" "$rptitle")"
             local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")
 

@@ -394,31 +394,43 @@ def _preset_row(key: str, pdata: dict) -> str:
         products = [pdata.get("product", "")]
         p = pdata.get("product") or "?"
         to = str(pdata.get("tool_output", "default") or "default").lower()
+    # Three columns: name | [products] | description, exactly like the session
+    # rows. The old row chained `key  [products]  —  · purpose` and the `—`
+    # (no-selection placeholder) plus the `·` tag marker were pure noise on the
+    # shipped presets, which pin no selection and always carry a purpose. The
+    # third column now holds the purpose when we know one, the pinned selection
+    # when the preset has one, and is EMPTY when neither applies — an empty
+    # third column IS the "plain defaults" case, never a placeholder glyph.
     if "filter" in pdata:
-        sel = "filter:" + _jq_tostring(pdata["filter"])
+        sel = "filter " + _jq_tostring(pdata["filter"])
     elif "sessions" in pdata:
-        sel = "sessions:" + str(len(pdata["sessions"]))
+        n = len(pdata["sessions"])
+        sel = f"{n} session id{'s' if n != 1 else ''}"
     else:
-        sel = "—"
-    tag = ""
+        sel = ""
     if p == "transcript+memory" and to == "full":
-        tag = "· lossless (full outputs + JSON)"
+        desc = "lossless (full outputs + JSON)"
     elif p == "transcript+memory" and to == "truncated":
-        tag = "· daily (truncated outputs + JSON)"
+        desc = "daily (truncated outputs + JSON)"
     elif p == "transcript" and pdata.get("sanitize") is True:
-        tag = "· share (sanitized, no reasoning)"
+        desc = "share (sanitized, no reasoning)"
     elif p == "transcript" and pdata.get("no_reasoning") is True and pdata.get("json") is True:
-        tag = "· share (no reasoning, JSON)"
+        desc = "share (no reasoning, JSON)"
     elif p == "transcript":
-        tag = "· read (transcript defaults)"
+        desc = "read (transcript defaults)"
     elif p == "memory":
-        tag = "· RAG (memory defaults)"
+        desc = "RAG (memory defaults)"
     elif p == "digest":
-        tag = "· digest (summaries only)"
-    disp = "+".join(p for p in products if p)
-    if tag:
-        return f"__PRESET_{key}\t{key}  [{disp}]  {sel}  {tag}"
-    return f"__PRESET_{key}\t{key}  [{disp}]  {sel}"
+        desc = "digest (summaries only)"
+    else:
+        desc = ""
+    col3 = "  ".join(x for x in (sel, desc) if x)
+    disp = "+".join(x for x in products if x)
+    # Padding ONLY (name at 10, products at 22): a long name or product list
+    # pushes the description right; fzf truncates the row's end, never the name.
+    name = f"{key:<10}"
+    row = f"{name} [{disp}]" if not col3 else f"{name} {f'[{disp}]':<22} {col3}"
+    return f"__PRESET_{key}\t{row}"
 
 
 def preset_names(presets: dict | None = None) -> list[str]:

@@ -198,7 +198,8 @@ Three behaviours worth knowing:
   view mode, and only when the list is not empty. Backups has no such row: hashing
   every file twice is not worth it, and `backups view` already validates each one you open.
 - **`[?] verify` on shrinks** is a real audit, not a display: a copy is **stale** when
-  the live DB has newer sessions than the copy (or when it predates the last backup),
+  the live DB has content newer than the copy — a session added, edited or compacted
+  since it was made (or when it predates the last backup),
   and a directory without a `shrink.json` is reported once, as an orphan. Delete a stale
   copy knowing this.
 - **`[>] create backup` shows the plan before asking.** It runs `backup --dry-run`

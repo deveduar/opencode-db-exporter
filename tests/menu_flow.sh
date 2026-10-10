@@ -321,26 +321,28 @@ oc_sessions_picker >/dev/null
 [ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
     && ok "browse lists every session" || bad "browse row count"
 
-# The compact label contract: short id + FULL title as ONE token (the short id
-# always ends in `_`, so `A0002_Explore gaps` is id_title with NOTHING
-# truncated) + `@<agent>` + ONE date (the updated YYYY-MM-DD HH:MM) + suffixes:
-# the `→ <short-parent-id><first-word>` parent token on subagent rows and the
-# `(N sub)` badge LAST. The title is passed through oc_title_display, so
-# opencode's generated ` (@explore subagent)` suffix is GONE from the row (the
+# The compact label contract: THREE columns — `id | title | metadata`. The
+# short id is its own fixed-width column (oc_short_id drops `ses_` and always
+# ends in `_`, so `A0002_  ` terminates the id and does NOT glue to the title),
+# the SECOND column is the FULL title padded to TITLE_COL_W (padding only,
+# never truncated), and the THIRD column is `@<agent>  YYYY-MM-DD HH:MM` (the
+# updated date) + the `→ <short-parent-id><first-word>` parent token on subagent
+# rows + the `(N sub)` badge LAST. The title is passed through oc_title_display,
+# so opencode's generated ` (@explore subagent)` suffix is GONE from the row (the
 # `@<agent>` token + the `→ <parent>` reference already say it). The session's
 # own path is deliberately NOT rendered any more. A subagent row has no badge;
 # an ORPHAN (parent row gone) renders exactly like a root, so there is no empty
 # parent slot anywhere.
-grep -qE "^ses_A0002${TAB}A0002_Explore gaps  @explore  2026-09-10 00:30  → A0001_Project$" "$BR" \
-    && ok "a subagent row ends with the -> parent token (no path, cleaned title)" \
+grep -qE "^ses_A0002${TAB}A0002_   Explore gaps                         @explore  2026-09-10 00:30  → A0001_Project$" "$BR" \
+    && ok "a subagent row: id column, aligned title, -> parent token last" \
     || bad "subagent parent token: $(grep -m1 '^ses_A0002' "$BR")"
-grep -qE "^ses_ORPHAN01${TAB}ORPHAN0_Orphan subagent  @explore  2026-09-10 01:01$" "$BR" \
+grep -qE "^ses_ORPHAN01${TAB}ORPHAN0_ Orphan subagent                      @explore  2026-09-10 01:01$" "$BR" \
     && ok "an orphan renders like a root (no parent slot)" \
     || bad "orphan row: $(grep -m1 '^ses_ORPHAN01' "$BR")"
-grep -qE "^ses_A0001${TAB}A0001_Project Alpha  @build  2026-09-10 00:36  \(2 sub\)$" "$BR" \
+grep -qE "^ses_A0001${TAB}A0001_   Project Alpha                        @build  2026-09-10 00:36  \(2 sub\)$" "$BR" \
     && ok "roots with subagents carry the (N sub) badge LAST" \
     || bad "sub badge: $(grep -m1 '^ses_A0001' "$BR")"
-grep -qE "^ses_A0003${TAB}A0003_Find false bugs  @explore  2026-09-10 00:33  → A0001_Project$" "$BR" \
+grep -qE "^ses_A0003${TAB}A0003_   Find false bugs                      @explore  2026-09-10 00:33  → A0001_Project$" "$BR" \
     && ok "nested subagents get the token from their own parent" \
     || bad "nested token: $(grep -m1 '^ses_A0003' "$BR")"
 grep -q '2026-09-10 00:28' "$BR" && \
@@ -348,14 +350,25 @@ grep -q '2026-09-10 00:28' "$BR" && \
     { grep -qE '2026-09-10 00:30' "$BR" && [ "$(grep -cE ':[0-9]{2}:' "$BR")" -eq 0 ] && \
         ok "rows carry ONE YYYY-MM-DD HH:MM date, the updated one" || \
         bad "long/wrong dates leaked into browse rows"; }
-grep -q 'A0002_Explore gaps' "$BR" && ! grep -q '(@explore subagent)' "$BR" && \
+grep -q 'A0002_   Explore gaps' "$BR" && ! grep -q '(@explore subagent)' "$BR" && \
     ! grep -qE 'subage_|…' "$BR" && \
-    ok "the title is full, with the generated (@agent subagent) suffix stripped" || \
+    ok "the title is full, in its own column, with the (@agent subagent) suffix stripped" || \
     bad "title display: $(grep -m1 '^ses_A0002' "$BR")"
 ! grep -q '/tmp/proj' "$BR" && [ "$(grep -cE '→ [A-Za-z0-9]+_' "$BR")" -eq 3 ] && \
     [ "$(grep -cE '  \([0-9]+ sub\)$' "$BR")" -eq 2 ] && \
     ok "rows drop the path: 3 subagents end in -> token, 2 roots in the (N sub) badge" \
     || bad "row tails: path leaked or token/badge count off"
+# Overflow contract: `printf %-37s` adds NO padding once the title is already
+# that long, so an overlong title used to run straight into `@agent`. The helper
+# now appends ROW_COL_GAP spaces in that case — the fix is testable on its own
+# (a synthetic title wider than the column), no fake-DB session needed.
+LONG="A very long session title that is far wider than the title column here"
+RLOK=$(oc_row_label "ses_ABC12345deadbeef" "$LONG" "build" "2026-09-10 00:36" "" "" "")
+case "$RLOK" in
+    *"$LONG$(printf '%*s' "$ROW_COL_GAP" '')@build  2026-09-10 00:36"*)
+        ok "an overlong title keeps a ${ROW_COL_GAP}-space gap before @agent (never glued)" ;;
+    *)  bad "overlong title glued to metadata: [$RLOK]" ;;
+esac
 # The menu feed is the raw `list --tsv` shape (8 plain fields, the last one the
 # session DIRECTORY), NOT the `list --info` -column output: no padded columns,
 # no TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.
@@ -484,6 +497,24 @@ printf '%s' "$(oc_preset_descr everything)" | grep -q 'products transcript+memor
     && ok "oc_preset_purpose annotates shipped plans only" || bad "preset purpose"
 printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless' \
     && ok "preset rows include purpose tag (archive shows lossless)" || bad "preset rows missing purpose: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
+# Preset rows are THREE columns (name | [products] | description) and carry no
+# operator symbology: the old row chained `key  [products]  —  · purpose`, and
+# the `—` placeholder + `·` marker were noise on every shipped preset (which
+# pins no selection and always carries a purpose).
+PROWS=$(oc_export_rows)
+printf '%s\n' "$PROWS" | grep -qE ' · |—' \
+    && bad "export preset rows reintroduced symbology: [$(printf '%s\n' "$PROWS" | grep -nE ' · |—' | head -1)]" \
+    || ok "export preset rows have no ' · ' marker and no em dash"
+ACT_ARCH=$(printf '%s\n' "$PROWS" | grep '^__PRESET_archive' | cut -f2)
+EXPECT_ARCH="archive    [transcript+memory]    lossless (full outputs + JSON)"
+[ "$ACT_ARCH" = "$EXPECT_ARCH" ] \
+    && ok "export preset row is three columns (name | [products] | description)" \
+    || bad "archive preset row shape: [$ACT_ARCH]"
+ACT_CLEAN=$(printf '%s\n' "$PROWS" | grep '^__PRESET_clean' | cut -f2)
+EXPECT_CLEAN="clean      [transcript]           filter Project Beta  share (sanitized, no reasoning)"
+[ "$ACT_CLEAN" = "$EXPECT_CLEAN" ] \
+    && ok "a pinned selection rides in the description column" \
+    || bad "clean preset row: [$ACT_CLEAN]"
 printf '%s\n' "$(oc_preset_legend)" | grep -q 'lossless full backup' \
     && ok "oc_preset_legend explains each shipped plan in the header" || bad "preset legend: $(printf '%s\n' "$(oc_preset_legend)")"
 # New helper tests. One phrase per LINE: no separator, no leading marker, because

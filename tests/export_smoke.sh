@@ -1289,7 +1289,7 @@ printf '%s' "$VCLEAN" | grep -q "all $NCOPIES shrink copies are up to date" \
 # keyed by that copy's own stamp (the row used to be the literal live_vs_shrink).
 sqlite3 "$FAKE" "UPDATE session SET time_updated=time_updated+1000000;" >/dev/null 2>&1
 VSTALE=$(OCED_BACKUP_DIR="$CBK" run shrinks verify)
-printf '%s' "$VSTALE" | grep -q "has newer sessions" && ok "shrinks verify flags a stale shrink vs live" || bad "shrinks verify stale: [$(printf '%s' "$VSTALE" | tail -2)]"
+printf '%s' "$VSTALE" | grep -q "has content newer than this copy" && ok "shrinks verify flags a stale shrink vs live" || bad "shrinks verify stale: [$(printf '%s' "$VSTALE" | tail -2)]"
 printf '%s' "$VSTALE" | grep -q "2 of 2 vs the live DB" \
     && ok "shrinks verify counts BOTH copies as stale (2 of 2), not just the newest" \
     || bad "shrinks verify stale count: [$(printf '%s' "$VSTALE" | tail -3)]"

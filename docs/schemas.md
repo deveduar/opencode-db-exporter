@@ -563,7 +563,7 @@ as the tag, so the column never empties.
   date:       <ISO-8601 UTC from shrink.json>
   db:         <source path from shrink.json>
   integrity:  <integrity_check> · foreign keys <foreign_key_check>
-  freshness:  ok — the live DB has no newer session than this copy
+  freshness:  ok — nothing in the live DB is newer than this copy
               STALE — <reason from o_shrink_stale>
   ids (<n>):  ses_... (first 8)
               … N more (--json has all of them)

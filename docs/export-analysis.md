@@ -1560,7 +1560,7 @@ the `--swap` test had already shrunk the shared fake DB to one session, so the f
 is regenerated first) and drives the shelf itself through the whole lifecycle.
 `export_smoke.sh` is 396 asserts, `menu_flow.sh` 334.
 
-### §44 The row sheds the path and the generated subagent suffix (current)
+### §44 The row sheds the path and the generated subagent suffix (superseded by §45: the row is now three columns, and the export preset rows drop their `·`/`—`)
 
 Two cuts on the same round as §43, once the real pickers were looked at rather than the
 fake ones. The label had grown a tail nobody read and a suffix that repeated the column
@@ -1595,3 +1595,51 @@ rather than creation: it does — `${rupdated:0:16}` is the feed's 4th field,
 
 `menu_flow.sh` stays 334 asserts (the path/tail asserts were rewritten, not added);
 `export_smoke.sh` is unaffected (it never pins the picker label), 396.
+
+### §45 Columns, not conclusions: a three-column row everywhere, `verify` tells the truth about *content* (current)
+
+Two unrelated complaints landed in the same round, both about wording that misled the eye.
+
+**The session row is three columns, not a run of words.** §42-§44 packed the label as one
+string (`id_title  @agent  date  → token  (N sub)`); the fields touched and the id column
+had to be re-derived by the reader every time. The label is now THREE padded columns: the
+id (`ID_LABEL_W`=8, cut with a `_` that TERMINATES the id, so it no longer glues to the
+title) padded one past; the title (full, `oc_title_display`-cleaned, padded to
+`TITLE_COL_W`=36 — padding ONLY, a longer title pushes the metadata right and fzf truncates
+the row's end); and the metadata (`@<agent>` + one `YYYY-MM-DD HH:MM` date + the `(N sub)`
+badge + the `→ <parent token>` on subagents). `menu_flow.sh` pins the expected literal for
+each of the four rows (`cut -f2`) and the `\x1f` read trick survives the consecutive empty
+middle fields of a root. Same three columns in browse/export/shrink, because they share
+the one `oc_session_picker` builder.
+
+**The export preset rows lose their glyphs.** The old row chained `key  [products]  —  ·
+purpose`: the `—` marked "no selection" and the `·` marked the purpose tag. On every
+shipped preset both were noise (a shipped preset pins no selection and always carries a
+purpose). `plan.py::_preset_row` now emits three columns `name | [products] | description`
+(padding only): the purpose alone, or the pinned selection (`filter "x"` / `N session
+ids`) followed by the purpose, or nothing at all when neither applies — an EMPTY third
+column IS the plain-defaults case, never a placeholder glyph. `menu_flow.sh` guards both
+the absence of ` · `/`—` (mirroring the plan-block symbology guard) and the exact
+`archive` / `clean` rows.
+
+**An overlong title is never glued to the metadata.** `printf %-37s` adds NO padding once
+the title is already that long, so on the user's real DB a long title ran straight into
+`@build`/`@explore` (reported right after §44/§45 shipped). The label builder is now the
+helper `oc_row_label`, and in the overflow case it appends `ROW_COL_GAP`=2 spaces before
+the metadata; rows whose title fits keep the exact old alignment (their four pinned
+literals are unchanged). Extracting the builder also makes the rule unit-testable without
+a fake DB: `menu_flow.sh` calls it with a synthetic long title and asserts the gap.
+
+**`shrink verify` said "newer sessions" when it meant "newer content".** The stale check
+compares `max(time_updated)` against the copy's recorded `sessions.max_updated`, so a
+session that merely GREW since the copy (same id, newer edit) trips it just like a brand
+new one — but three messages said "has newer sessions", which a user reads as "a session
+was added". They now say the truth: `the live DB has content newer than this copy
+(max_updated=… > copy …) — sessions may have been added or edited since` (`shrink.sh`),
+`ok — nothing in the live DB is newer than this copy`, and the swap warning `loses the
+sessions added or edited since`. `export_smoke.sh` re-anchors its grep on
+`has content newer than this copy`. Docs (`AGENTS.md`, `export-guide.md`, `schemas.md`)
+followed.
+
+`menu_flow.sh` 334 -> 338 (three preset-row/column guards + one overflow gap guard);
+`export_smoke.sh` stays 396.
