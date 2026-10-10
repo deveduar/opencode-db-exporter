@@ -215,7 +215,7 @@ oced_shrink() {
     o_check_deps
     o_db_exists
     local keep_n=10 keep_all=0 older_than=0 since_ms=0 dry=0 strip=0 swap=0 yes=0 outdir="$OCED_BACKUP_DIR" criteria=""
-    local rule="" since_date="" discard_exported=""
+    local rule="" since_date="" discard_exported="" discard_cascade=""
     local -a keep_sessions=() discard_sessions=()
 
     # Named recipe/preset: the first non-flag token is resolved via shrinklib
@@ -447,6 +447,11 @@ oced_shrink() {
             SELECT group_concat(id) FROM (
                 SELECT d.id FROM d JOIN session s ON s.id = d.id ORDER BY s.time_created);" 2>/dev/null)
         [ -n "$disc_csv" ] || disc_csv="$ids_csv"
+        # The closed discard set is stored too (.selection.cascade): the live
+        # verify check re-asks "is THIS set exported?" from shrink.json alone,
+        # without the live DB (after --swap the discarded sessions no longer
+        # exist there, so the cascade could not be re-expanded).
+        discard_cascade="$disc_csv"
         # The offer/hint exports EXACTLY this closed set (`--sessions $disc_csv`),
         # so the moment the user (menu gate or README/CLI hint) accepted, that exact
         # run is the newest one whose .sessions_selected equals the cascade; link it
@@ -563,6 +568,7 @@ oced_shrink() {
         --arg max_updated "$max_updated" \
         --argjson selection "$selection_json" \
         --arg discard_exported "$discard_exported" \
+        --arg discard_cascade "$discard_cascade" \
         --argjson before "$before_size" --argjson after "$after_size" \
         --argjson removed_ob "$removed_json" --argjson removed_total "$removed_total" \
         --argjson stripped_reasoning "$stripped_reasoning" \
@@ -578,6 +584,9 @@ oced_shrink() {
           removed_total: $removed_total,
           stripped_reasoning: $stripped_reasoning,
           file: "opencode.shrunk.db"}
+          | if $discard_cascade != "" then
+                .selection.cascade = ($discard_cascade | split(",") | map(select(length > 0)))
+            else . end
           | if $discard_exported == "" then del(.discard_exported) else . end' \
         > "$outdir/shrink/$stamp/shrink.json"
 
@@ -781,7 +790,7 @@ oced_shrinks_view() {
     # criteria sentence lives HERE and not in `shrinks list`: a detail screen has
     # room for the parentheticals, a list column does not.
     local total kept del before after strip removed
-    local rule nids pct integrity fkeys fresh
+    local nids pct integrity fkeys fresh
     total=$(jq -r '.sessions.total // 0' "$j")
     kept=$(jq -r '.sessions.kept // 0' "$j")
     del=$(jq -r '.sessions.deleted // 0' "$j")
@@ -789,7 +798,6 @@ oced_shrinks_view() {
     after=$(jq -r '.size.after // 0' "$j")
     strip=$(jq -r '.stripped_reasoning // 0' "$j")
     removed=$(jq -r '.removed_total // 0' "$j")
-    rule=$(jq -r '.selection.rule // "?"' "$j")
     nids=$(jq -r '(.selection.ids // []) | length' "$j")
     integrity=$(jq -r '.integrity_check // "?"' "$j")
     fkeys=$(jq -r '.foreign_key_check // "?"' "$j")
@@ -808,7 +816,9 @@ oced_shrinks_view() {
     else
         printf '  %-11s %s\n' "size:" "$(o_human_size "$(stat -c %s "$target/opencode.shrunk.db" 2>/dev/null || echo 0)")"
     fi
-    printf '  %-11s %s\n' "selection:" "$rule · $nids id(s)"
+    # No `selection:` line here: the rule in machine words + `· N id(s)` repeated
+    # what `criteria:` already says as a sentence and `ids (N):` says as a count
+    # (N appeared three times on one screen). --json keeps the raw .selection.
     printf '  %-11s %s\n' "criteria:" "$(jq -r '.criteria // "?"' "$j")"
     if [ "$strip" -gt 0 ] 2>/dev/null; then
         printf '  %-11s %s\n' "reasoning:" "$strip part(s) stripped"
@@ -931,6 +941,39 @@ o_shrink_stale() {
     return 0
 }
 
+# o_shrink_unexported <shrink.json> — is THIS copy's discarded cascade covered by
+# an export run? Echoes the reason (+rc 1) when it is NOT; silent rc 0 when it is,
+# or when the question cannot be answered (nothing deleted; a rule other than
+# discard_sessions — the only one that ever offers the cascade export; a legacy
+# shrink.json recorded before .selection.cascade existed with no stamp recorded:
+# never a false accusation). The stored cascade is checked LIVE with the same
+# o_shrink_discard_export the engine links with, so an export made AFTER the
+# shrink counts and one removed with `exports remove` stops counting. A legacy
+# copy has no cascade to re-check, so its only evidence is the stamp it DID
+# record: run still there = covered, run gone = flagged, no stamp = unknown.
+# One helper, asked only by `shrinks verify` (like o_shrink_stale for freshness).
+o_shrink_unexported() {
+    local j="${1:-}" cascade n rec d
+    [ -f "$j" ] || return 0
+    [ "$(jq -r '.selection.rule // ""' "$j" 2>/dev/null)" = "discard_sessions" ] || return 0
+    n=$(jq -r '.sessions.deleted // 0' "$j" 2>/dev/null)
+    case "$n" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$n" -gt 0 ] || return 0
+    cascade=$(jq -r '(.selection.cascade // []) | join(",")' "$j" 2>/dev/null)
+    if [ -n "$cascade" ]; then
+        [ -n "$(o_shrink_discard_export "$cascade")" ] && return 0
+        echo "no export run covers the $n discarded session(s)."
+        return 1
+    fi
+    rec=$(jq -r '.discard_exported // ""' "$j" 2>/dev/null)
+    [ -n "$rec" ] || return 0
+    while IFS= read -r d; do
+        [ "${d##*/}" = "$rec" ] && return 0
+    done < <(exports_runs_find)
+    echo "the export it recorded ($rec) no longer exists."
+    return 1
+}
+
 # oced_shrinks_verify — audits the produced copies: orphan run dirs (no valid
 # shrink.json), old pre-shrink files, and the freshness of EVERY copy vs the
 # live DB (o_shrink_stale, once per run — not once for the newest).
@@ -966,14 +1009,17 @@ oced_shrinks_verify() {
         )
     fi
 
-    # 3) Stale shrinks vs live DB -- EVERY copy, not just the newest one.
-    # A single freshness answer was a half-verification: 1 and 2 already walked
-    # every run dir, so a 3-run shelf reported the orphan in the third dir but
-    # never that copies 1 and 2 were stale. Each entry is "stamp<TAB>message".
-    # An orphan is NOT re-reported here (o_shrink_stale would answer "shrink.json
-    # missing" for it), so a broken dir shows up exactly once, as an orphan.
-    local -a stale_copies=()
-    local sc run
+    # 3) Two answers per valid copy, from the SAME walk: freshness vs the live DB
+    # (o_shrink_stale — EVERY copy, not just the newest: 1 and 2 already walk
+    # every run dir, so a 3-run shelf must not report the orphan in the third dir
+    # but never that copies 1 and 2 were stale) and the discard-export coverage
+    # (o_shrink_unexported — whose discarded cascade no export run records).
+    # Each entry is "stamp<TAB>message". An orphan is NOT re-reported here
+    # (o_shrink_stale would answer "shrink.json missing" for it and
+    # o_shrink_unexported has no json to read either), so a broken dir shows up
+    # exactly once, as an orphan.
+    local -a stale_copies=() unexp_copies=()
+    local sc ue run
     for run in "${runs[@]}"; do
         local is_orphan=0 od
         for od in "${orphan_dirs[@]}"; do
@@ -982,6 +1028,8 @@ oced_shrinks_verify() {
         [ "$is_orphan" -eq 1 ] && continue
         sc=$(o_shrink_stale "$run/shrink.json") || true
         [ -n "$sc" ] && stale_copies+=("${run##*/}"$'\t'"$sc")
+        ue=$(o_shrink_unexported "$run/shrink.json") || true
+        [ -n "$ue" ] && unexp_copies+=("${run##*/}"$'\t'"$ue")
     done
 
     # Output
@@ -996,6 +1044,11 @@ oced_shrinks_verify() {
         if [ ${#stale_copies[@]} -gt 0 ]; then
             for sc in "${stale_copies[@]}"; do
                 printf 'stale\t%s\t%s\n' "${sc%%$'\t'*}" "${sc#*$'\t'}"
+            done
+        fi
+        if [ ${#unexp_copies[@]} -gt 0 ]; then
+            for ue in "${unexp_copies[@]}"; do
+                printf 'unexported\t%s\t%s\n' "${ue%%$'\t'*}" "${ue#*$'\t'}"
             done
         fi
         return 0
@@ -1037,12 +1090,26 @@ oced_shrinks_verify() {
         issues=1
     fi
 
+    if [ ${#unexp_copies[@]} -gt 0 ]; then
+        echo "⚠️  Shrinks without a discard export (${#unexp_copies[@]} of ${#runs[@]}):"
+        for ue in "${unexp_copies[@]}"; do
+            echo "  ${ue%%$'\t'*}  —  ${ue#*$'\t'}"
+        done
+        echo ""
+        echo "   These copies dropped sessions no export run records. The ids live"
+        echo "   in each copy's shrink.json (.selection.cascade); export them so they"
+        echo "   stay readable outside the pruned copies:"
+        echo "     opencode-db export <profile> --sessions <the csv>"
+        echo ""
+        issues=1
+    fi
+
     if [ "$issues" -eq 0 ]; then
         # The count is the point (it says how many were asked), but "all 0
         # copies are up to date" is a sentence nobody should have to read.
         local scope="no shrink copies yet"
         [ "${#runs[@]}" -gt 0 ] && scope="all ${#runs[@]} shrink copies are up to date"
-        echo "All clean: no orphan dirs, no old pre-shrinks, $scope."
+        echo "All clean: no orphan dirs, no old pre-shrinks, no unexported discards, $scope."
         return 0
     fi
 
@@ -1060,5 +1127,6 @@ oced_shrinks_verify() {
     else
         echo "Run with --yes to auto-clean orphan dirs and old pre-shrinks."
         echo "Stale copies need a manual decision (re-run shrink; swap only on purpose)."
+        echo "Unexported discards need the export shown above (--yes never deletes them)."
     fi
 }

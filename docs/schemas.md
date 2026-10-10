@@ -394,7 +394,10 @@ finishes; `--dry-run` writes nothing):
                        // the rule that produced the run: keep|older_than|since|keep_all|
                        //   keep_sessions|discard_sessions; scalar rules carry "value",
                        //   session rules carry "ids": ["ses_…", …] (the rule/ids shape
-                       //   shrinklib/plan.py emits for the menu)
+                       //   shrinklib/plan.py emits for the menu); a discard ALSO carries
+                       //   "cascade": ["ses_…", …] = the listed ids closed over their
+                       //   descendants — what `shrinks verify` re-checks later (the live
+                       //   DB may no longer have them after --swap)
   "discard_exported": "20261006-150000"[,   // R?: the stamp of the newest export run whose
                        //   .sessions_selected EQUALS the discarded cascade (order-insensitive);
                        //   auto-detected by o_shrink_discard_export after a discard run,
@@ -422,7 +425,7 @@ Keep rules (`oced_shrink`, last one wins — exactly ONE applies):
 | `--since DATE` | sessions updated since DATE | `{"rule":"since","value":"DATE"}` |
 | `--keep-all` | all sessions (strip/vacuum only) | `{"rule":"keep_all"}` |
 | `--keep-sessions ID[,ID]` | the listed ids **+ their parents/subagents** (closed set) | `{"rule":"keep_sessions","ids":[…]}` |
-| `--discard-sessions ID[,ID]` | everything except the listed ids **+ their subagents** (the discard set is descendant-closed, FK-safe by construction) | `{"rule":"discard_sessions","ids":[…]}` |
+| `--discard-sessions ID[,ID]` | everything except the listed ids **+ their subagents** (the discard set is descendant-closed, FK-safe by construction); the closed set is stored as `.selection.cascade` | `{"rule":"discard_sessions","ids":[…],"cascade":[…]}` |
 
 `--strip-reasoning` also drops every `part` whose `data` JSON has `type=reasoning`
 (kept set unchanged). `--discard-sessions` prints a first-step hint to
@@ -443,16 +446,20 @@ newest export run whose `metadata.json`.`sessions_selected` list is exactly the
 discarded cascade (any order); the run notes `(recorded: the cascade export is <stamp>
 — see: opencode-db shrinks view <stamp>)` and `shrinks view` prints the
 `discard export:` line. The key is absent when no matching run exists — a discard
-without the export is fully valid, it just stays unlinked.
+without the export is fully valid, it just stays unlinked. The closed set itself is
+stored regardless (`.selection.cascade`): it is the evidence `shrinks verify` asks
+about later, when the live DB may no longer hold the sessions.
 
 The same closed keep-set is used to derive deleted counts. `--swap` additionally
 snapshots the live DB to `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db`
 (WAL-safe, newest-copy-only auto-cleanup) and performs the atomic swap — the one
 opt-in path that ever writes the live DB. `shrinks verify [--tsv] [--yes]` checks
-for orphan run dirs, old pre-shrink copies, and the freshness of **every** copy vs
+for orphan run dirs, old pre-shrink copies, the freshness of **every** copy vs
 the live DB (or unverifiable: a legacy shrink.json without `sessions.max_updated`
 is always flagged; the TTL rule is re-run-shrink-before-swap whenever opencode was
-used in between).
+used in between), and **discard-export coverage**: every copy whose rule is
+`discard_sessions` with sessions deleted must have an export run covering its
+`.selection.cascade`.
 
 Freshness is asked **once per run**, never once for the newest: a stale answer for
 `runs[0]` left every older copy unverified, which is the one thing a copy shelf
@@ -463,10 +470,23 @@ needs to know. The `--tsv` rows are `type<TAB>key<TAB>display`:
 | `orphan` | the run dir | no valid `shrink.json` |
 | `preshrink` | the file name | an old `pre-shrink` copy |
 | `stale` | **the copy's stamp** | that copy is stale or unverifiable vs the live DB |
+| `unexported` | **the copy's stamp** | its discarded cascade has no covering export run |
 
-An orphan dir is reported **once**, as an orphan: it is never also a `stale` row
-(`o_shrink_stale` would answer "shrink.json missing" for it, which would count the
-same broken dir twice).
+Coverage (`o_shrink_unexported <shrink.json>`, the sibling of `o_shrink_stale`,
+asked only by `verify`) is a **live** re-check: the stored cascade is matched
+against the exports shelf at verify time, so an export made AFTER the shrink
+clears the flag and one removed with `exports remove` brings it back. A root-only
+export of the same root is a different set and never clears it (order-insensitive
+equality, the same `o_shrink_discard_export` the engine links with). A legacy
+copy has no cascade to re-check: only the stamp it DID record can condemn it
+(`discard_exported` pointing at a vanished run is flagged; a live one is not) and
+no record at all is never a false charge. A `--keep` run is out of scope by
+construction — its json carries no cascade — so a non-discard copy is never
+flagged.
+
+An orphan dir is reported **once**, as an orphan: it is never also a `stale` or
+`unexported` row (`o_shrink_stale` would answer "shrink.json missing" for it,
+which would count the same broken dir twice).
 
 ---
 
@@ -538,7 +558,6 @@ as the tag, so the column never empties.
 ```
   sessions:   <total> total · <kept> kept · <deleted> deleted
   size:       <before> -> <after> (freed <freed>, -<pct>%)
-  selection:  <rule> · <n> id(s)
   criteria:   <full criteria sentence from shrink.json>
   reasoning:  <n> part(s) stripped          # only when stripped_reasoning > 0
   date:       <ISO-8601 UTC from shrink.json>
@@ -555,12 +574,15 @@ as the tag, so the column never empties.
     shrink.json          <human size>
 ```
 
+- NO `selection:` line: the rule is already named in words by `criteria:` and the
+  count opens `ids (<n>):` — `selection: <rule> · <n> id(s)` repeated the same
+  fact a third time on one screen (`--json` keeps `.selection` untouched).
 - The `criteria` sentence is the full parenthetical text from `shrink.json` — the list
   column only carries the compact tag (same fact, two formats).
 - The `freshness` line is the **same check** `shrinks verify` uses (`o_shrink_stale`), so
   a detail screen can never show a copy nobody validated. A legacy shrink.json without
   `sessions.max_updated` prints `STALE — shrink.json has no sessions.max_updated; cannot verify freshness`.
-- IDs are capped at 8 with `… N more`; the real count stays in `selection:`.
+- IDs are capped at 8 with `… N more`; the real count is the `ids (<n>):` header.
 
 **Machine mode (`--json`):** returns `shrink.json` **verbatim**, byte for byte, no banner,
 no aggregation. This is the contract the menu picker depends on.

@@ -399,7 +399,8 @@ Produced copies accumulate under `backups/shrink/`; manage them like export runs
 opencode-db shrinks list              # date / tag / kept/total / size delta
 opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
 opencode-db shrinks view <stamp> [--json]  # detail screen (sessions/size/criteria/freshness/ids); --json = raw shrink.json
-opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, old pre-shrinks, and freshness of EVERY copy vs live DB
+opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, old pre-shrinks, freshness of EVERY copy vs live DB,
+                                            # and that every discard's cascade still has a covering export run
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
 ```

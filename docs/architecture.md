@@ -511,9 +511,11 @@ screens with two widths:
   the tag from `plan.py rule-tag` (the SSoT for the compact form), one size delta,
   the copy's state only when anomalous (`(swapped/no copy)`).
 * `shrinks view` — a **DETAIL** screen shaped like `exports view`
-  (`== Shrink copy: <stamp> ==` then `sessions:`/`size:`/`selection:`/`criteria:`/
-  `reasoning:`/`date:`/`db:`/`integrity:`/`freshness:` + per-table removals + files);
-  `--json` returns `shrink.json` verbatim, byte for byte, no banner.
+  (`== Shrink copy: <stamp> ==` then `sessions:`/`size:`/`criteria:`/
+  `reasoning:`/`date:`/`db:`/`integrity:`/`freshness:` + per-table removals + files;
+  no `selection:` line — `criteria:` names the rule and the `ids (<n>):` header
+  counts them, so the compact form would only repeat both; `--json` returns
+  `shrink.json` verbatim, byte for byte, no banner).
 
 Both formats are generated from the same `shrink.json`; the sentence and the tag are
 two formats of ONE fact living side by side in `plan.py` (`rule-line` / `rule-tag`).
@@ -540,8 +542,9 @@ while opencode is running can lose the WAL tail. `opencode-db shrink
 can be skipped with `--yes`.
 
 `shrinks verify [--tsv] [--yes]` audits the produced copies: orphan run dirs (no
-valid `shrink.json`), old `pre-shrink/*` copies, and **every copy's** freshness vs
-the live DB. Freshness is asked once per run, not once for the newest: a stale
+valid `shrink.json`), old `pre-shrink/*` copies, **every copy's** freshness vs
+the live DB, and **every discard's export coverage**. Freshness is asked once per
+run, not once for the newest: a stale
 answer for `runs[0]` was a half-verification — a 3-copy shelf reported the orphan in
 the third directory but never that copies 1 and 2 were stale, which is the one thing
 you want to know before choosing one to swap. `shrink.json` records
@@ -552,6 +555,16 @@ once, as an orphan, never also as a stale copy. The clean verdict names how many
 were asked (`all 7 shrink copies are up to date`): the count is the only visible proof
 that the loop ran, and a fresh-looking verdict over three unchecked copies is exactly
 the answer that hid the other two.
+
+Coverage is the same shape of question with a shelf that ages differently: a discard
+copy stores its closed cascade in `.selection.cascade` (the live DB cannot re-expand
+it after `--swap`), and `o_shrink_unexported` re-matches it against the exports shelf
+at **verify** time — an export made after the shrink clears the flag, `exports remove`
+brings it back, a root-only export of the same root never clears it. Only
+`discard_sessions` runs that deleted sessions are asked, and `--yes` never deletes an
+unexported copy: the sessions are already gone, and the copy is the evidence. A legacy
+copy without a cascade is condemned only by a recorded `discard_exported` whose run
+has vanished — no record is never a false charge.
 
 ## 7. Links
 

@@ -1415,8 +1415,10 @@ fi
 
 VOUT=$(run shrinks view "$STAMP")
 printf '%s' "$VOUT" | grep -qF "== Shrink copy: $STAMP ==" && ok "shrinks view leads with the copy banner" || bad "shrinks view banner: [$(printf '%s' "$VOUT" | head -2)]"
-# one fact per line, and the criteria sentence the list row had to leave out
-for F in "sessions:" "size:" "selection:" "criteria:" "date:" "db:" "integrity:" "freshness:" "files:"; do
+# one fact per line, and the criteria sentence the list row had to leave out.
+# NO `selection:` line: the rule + `· N id(s)` repeated what `criteria:` says in
+# words and `ids (N):` says as a count (N appeared three times on one screen).
+for F in "sessions:" "size:" "criteria:" "date:" "db:" "integrity:" "freshness:" "files:"; do
     printf '%s' "$VOUT" | grep -qE "^  $F" && ok "shrinks view: $F field" || bad "shrinks view missing $F"
 done
 printf '%s' "$VOUT" | grep -qE '^  freshness: +(ok|STALE)' \
@@ -1455,10 +1457,109 @@ jq '.selection.ids = [range(0;12) | "ses_synthetic" + (tostring|("00"+.)[-2:])] 
 VSYN=$(run shrinks view 20991231-235959)
 [ "$(printf '%s\n' "$VSYN" | grep -c '^    ses_')" -eq 8 ] && ok "shrinks view caps the id list at 8" || bad "shrinks view id cap: $(printf '%s\n' "$VSYN" | grep -c '^    ses_')"
 printf '%s' "$VSYN" | grep -qE '^    … 4 more' && ok "shrinks view says how many ids it left out (4 more)" || bad "shrinks view id overflow line: [$(printf '%s' "$VSYN" | grep more)]"
-printf '%s' "$VSYN" | grep -q '12 id(s)' && ok "shrinks view states the real id count even when capped" || bad "shrinks view id count: [$(printf '%s' "$VSYN" | grep selection)]"
+printf '%s' "$VSYN" | grep -qE '^  ids \(12\):' && ok "shrinks view states the real id count in the ids header" || bad "shrinks view id count: [$(printf '%s' "$VSYN" | grep 'ids (')]"
+printf '%s' "$VSYN" | grep -qE '^  selection:' && bad "shrinks view still prints the redundant selection: line" || ok "shrinks view has no selection: line (criteria + ids header carry it)"
 run shrinks list | grep -q '2099-12-31 23:59:59 UTC' && ok "shrinks list renders a synthetic stamp" || bad "shrinks list synthetic stamp"
 run shrinks list | grep -q 'swapped/no copy' && ok "shrinks list flags a run whose copy is gone" || bad "shrinks list no-copy state"
 run shrinks remove 20991231-235959 --yes >/dev/null
+
+echo "== shrinks verify: a discard's cascade export coverage is checked LIVE =="
+# The --swap test above REPLACED the shared fake DB with a 1-session copy (and
+# bumped its time_updated), so a discard of ses_B0001 would match nothing there
+# (deleted=0, cascade falls back to the listed ids). This section needs the full
+# fixture: regenerate it — it is the last section of the suite, nothing below
+# depends on the swapped-down live DB.
+rm -f "$FAKE" "$FAKE-wal" "$FAKE-shm"
+bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
+# OWN shelf + OWN export dir: o_shrink_unexported re-asks the exports shelf at
+# VERIFY time (the stored cascade vs o_shrink_discard_export), so these
+# assertions drive the shelf itself — an export made AFTER the shrink must clear
+# the flag, and removing that run must bring it back. An isolated shelf also
+# keeps the CBK fixture's "2 of 2" counts pinned above.
+UMK="$TMP/umk"; UOU="$TMP/umk-out"
+rm -rf "$UMK" "$UOU"; mkdir -p "$UMK" "$UOU"
+# 1) a discard copy whose cascade was never exported anywhere -> flagged.
+OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" OCED_PRESETS="$EX_PRESETS" \
+    run shrink --discard-sessions ses_B0001 >/dev/null
+USJ=$(ls -t "$UMK"/shrink/*/shrink.json | head -1)
+USTAMP=$(basename "$(dirname "$USJ")")
+jq -r '.selection.cascade | join(",")' "$USJ" | grep -qx 'ses_B0001,ses_B0002' \
+    && ok "a discard run stores its closed cascade in .selection.cascade" \
+    || bad "cascade: $(jq -c '.selection' "$USJ" 2>/dev/null)"
+jq -e 'has("discard_exported") | not' "$USJ" >/dev/null \
+    && ok "with no export yet the fresh discard copy records no link" \
+    || bad "discard_exported present on a never-exported discard"
+UV=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify)
+printf '%s' "$UV" | grep -q "Shrinks without a discard export (1 of 1)" \
+    && printf '%s' "$UV" | grep -q "no export run covers the 2 discarded session(s)." \
+    && ok "verify flags a discard whose cascade no export covers" \
+    || bad "verify unexported: $UV"
+printf '%s' "$UV" | grep -q "opencode-db export <profile> --sessions <the csv>" \
+    && ok "the flag comes with the exact command that fixes it" \
+    || bad "missing fix-it line: $UV"
+UVT=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
+[ "$(printf '%s\n' "$UVT" | grep -c '^unexported')" -eq 1 ] \
+    && [ "$(printf '%s\n' "$UVT" | grep '^unexported' | cut -f1,2)" = "unexported"$'\t'"$USTAMP" ] \
+    && ok "verify --tsv keys the flag by the copy's stamp" \
+    || bad "unexported tsv: [$UVT]"
+# 2) a ROOT-ONLY export of the same root is a DIFFERENT set: exact ids, so it
+# must never clear the flag (the whole reason the offer hands the full cascade).
+OSTAB=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export archive --sessions ses_B0001)
+SSTAB=$(stamp_of "$OSTAB")
+UVT2=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
+[ "$(printf '%s\n' "$UVT2" | grep -c '^unexported')" -eq 1 ] \
+    && printf '%s\n' "$UVT2" | grep -q "^unexported	$USTAMP" \
+    && ok "a root-only export is a different set: the discard stays flagged" \
+    || bad "root-only export cleared the flag: [$UVT2]"
+# 3) the CASCADE exported AFTER the shrink -> the live re-check finds it: clean.
+OCAS=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export archive --sessions ses_B0001,ses_B0002)
+SCAS=$(stamp_of "$OCAS")
+UV2=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify)
+printf '%s' "$UV2" | grep -q "All clean: no orphan dirs, no old pre-shrinks, no unexported discards" \
+    && ok "an export made AFTER the shrink clears the flag (the check is live)" \
+    || bad "post-export verify: $UV2"
+# 4) legacy copies (no .selection.cascade): only the stamp they DID record can
+# condemn them. Built from C1's json: live recorded run -> silent, recorded run
+# that vanished -> flagged, no record at all -> unknown = never a false charge.
+LEG_OK="$UMK/shrink/20990101-000001"; LEG_HUNG="$UMK/shrink/20990101-000002"
+LEG_NONE="$UMK/shrink/20990101-000003"
+mkdir -p "$LEG_OK" "$LEG_HUNG" "$LEG_NONE"
+jq 'del(.selection.cascade) | .discard_exported = $s' --arg s "$SSTAB" "$USJ" \
+    > "$LEG_OK/shrink.json"
+jq 'del(.selection.cascade) | .discard_exported = "19990101-000000"' "$USJ" \
+    > "$LEG_HUNG/shrink.json"
+jq 'del(.selection.cascade) | del(.discard_exported)' "$USJ" \
+    > "$LEG_NONE/shrink.json"
+UVT3=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
+[ "$(printf '%s\n' "$UVT3" | grep -c '^unexported')" -eq 1 ] \
+    && printf '%s\n' "$UVT3" | grep -q "^unexported	20990101-000002" \
+    && ok "legacy: only the vanished record is flagged (live record and unknown stay silent)" \
+    || bad "legacy unexported rows: [$(printf '%s\n' "$UVT3" | grep '^unexported')]"
+printf '%s\n' "$UVT3" | grep '^unexported' | cut -f3 | grep -qF "no longer exists" \
+    && ok "the legacy reason names the export that vanished" \
+    || bad "legacy reason: $(printf '%s\n' "$UVT3" | grep '^unexported')"
+rm -rf "$LEG_OK" "$LEG_HUNG" "$LEG_NONE"
+# 5) remove the covering export -> flagged again (coverage is re-asked LIVE).
+OCED_OUT="$UOU" run exports remove "$SCAS" --yes >/dev/null
+UVT4=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
+[ "$(printf '%s\n' "$UVT4" | grep -c '^unexported')" -eq 1 ] \
+    && printf '%s\n' "$UVT4" | grep -q "^unexported	$USTAMP" \
+    && printf '%s\n' "$UVT4" | grep '^unexported' | cut -f3 | grep -qF "covers the 2 discarded" \
+    && ok "exports remove brings the flag back (the live check is re-run)" \
+    || bad "after remove: [$(printf '%s\n' "$UVT4" | grep '^unexported')]"
+# 6) scope: a --keep run that DELETED sessions is NOT a discard and is never
+# flagged — the helper's gate (rule == discard_sessions) is what makes that
+# structural, so the json must not even carry a cascade.
+OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrink --keep 1 >/dev/null
+K1SJ=$(ls -t "$UMK"/shrink/*/shrink.json | head -1)
+jq -e '.sessions.deleted > 0 and (.selection | has("cascade") | not)' "$K1SJ" >/dev/null \
+    && ok "a --keep run that deleted sessions stores no cascade (scope is structural)" \
+    || bad "keep-run selection: $(jq -c '{d: .sessions.deleted, sel: .selection}' "$K1SJ")"
+UVT5=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
+[ "$(printf '%s\n' "$UVT5" | grep -c '^unexported')" -eq 1 ] \
+    && printf '%s\n' "$UVT5" | grep -q "^unexported	$USTAMP" \
+    && ok "verify never flags a non-discard copy (discard-only scope)" \
+    || bad "keep copy flagged: [$(printf '%s\n' "$UVT5" | grep '^unexported')]"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

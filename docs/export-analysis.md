@@ -1478,7 +1478,7 @@ whole label: the `→`-token on plain and nested subagents, the absent parent sl
 the orphan, the `(2 sub)` badge, the one short MM-DD (no year/time anywhere), and the
 7-field `--tsv` feed with no `--info` column noise. `menu_flow.sh` is 332 asserts.
 
-### §42 The row goes back to the data: `@agent`, a readable date, the path (current)
+### §42 The row goes back to the data: `@agent`, a readable date, the path (superseded by §43: the title is no longer capped)
 
 §41's row had drifted too far from what `list --info` used to show — the user reviewed
 it and asked what had been lost, then chose one by one: the date back to
@@ -1506,3 +1506,92 @@ known pitfalls. `menu_flow.sh` pins the new contract: the UPDATED minute (the fa
 distinguishes created/updated by minute), no seconds anywhere, `@agent` on every row,
 the `_` title truncation with no `…`, the path on all six rows, and the 8-field feed.
 `menu_flow.sh` is 334 asserts.
+
+### §43 The title wins its column, the view drops its third repetition, and verify audits the discard's export (superseded by §44: the row sheds the path and the generated suffix)
+
+Three decisions from one review round, each the same rule in a different screen: state a
+fact once, in the format the width allows — and let the data answer when it ages.
+
+**The row: full title, badge last.** §42 capped the title (`TITLE_W`=30, `oc_title_fit`,
+trailing `_`). The user looked at the pickers and chose the opposite: the title is the
+only reason to open a session, so it gets its column whole — `oc_title_fit`/`TITLE_W`
+are deleted, `oc_short_id` joins the full title in ONE `id_title` column (no separator,
+no cap), and the `(N sub)` badge moved to the very END, after the path. Nothing is cut
+on purpose any more: fzf truncates the right edge, so what may disappear is the tail
+(path + badge), never the id and — unless a title is enormous — never the meaning. The
+`→ parent token` keeps its `PARENT_WORD_W` cut (it is a token, not a title). Label now:
+`short_id+title  @agent  YYYY-MM-DD HH:MM  [→ token]  path  [(N sub)]`. `menu_flow.sh`
+pins the exact rows: the subagent's trailing `→ A0001_Project  /tmp/projA`, the root's
+badge AFTER the path, the orphan's parent-less shape, and — negatively — that the old
+truncated spelling (`subage_|`) appears nowhere: the title is never cut.
+
+**`shrinks view` loses `selection:`.** The screen said the same fact three times:
+`criteria:` names the rule in words, `selection: <rule> · <n> id(s)` named it again in
+compact form, and `ids (<n>):` counted the ids it was about to list. The line is gone
+(the count lives in the `ids` header; the ids themselves are still capped at 8 with
+`… N more`); `--json` still returns `.selection` verbatim. A negative test keeps the
+line from coming back.
+
+**`shrinks verify` audits the discard's export — live.** §39 recorded the cascade export
+at shrink time (`discard_exported`, when a matching run existed *then*). But the shelf
+ages: an export can be made later, or removed with `exports remove`, and the question
+"is what this copy dropped still readable somewhere?" had no answer on the shelf. The
+engine now stores the closed set itself — `.selection.cascade`, the listed ids closed
+over their descendants, because after `--swap` the live DB can no longer re-expand it —
+and `verify` re-asks the exports shelf at audit time (`o_shrink_unexported`, the sibling
+of `o_shrink_stale`, asked only by verify): the stored cascade must equal some run's
+`.sessions_selected` (order-insensitive, the same `o_shrink_discard_export` the engine
+links with). Consequences, each tested: an export made AFTER the shrink clears the
+flag; `exports remove` brings it back; a ROOT-ONLY export of the same root is a
+different set and never clears it (the exact-ids contract that forced the cascade offer
+in the first place). Scope is structural: only `discard_sessions` with `deleted > 0` is
+asked, and a non-discard copy carries no cascade in its json at all — `--yes` cleans
+orphans and pre-shrinks but never deletes an unexported copy (the sessions are already
+gone; deleting the copy too would erase the evidence). A legacy copy (recorded before
+`.selection.cascade`) is judged only by the stamp it DID record: a `discard_exported`
+pointing at a vanished run is flagged; a live one is not; no record is never a false
+charge. The TSV gains the `unexported` row (key = the copy's stamp) and the human mode
+its own `⚠️  Shrinks without a discard export (N of M):` section with the fix-it
+command (`export <profile> --sessions <the csv>`); "All clean" now also says there are
+no unexported discards.
+
+The new smoke block runs on its OWN shelf + export dir (the shared shelf cannot answer:
+the `--swap` test had already shrunk the shared fake DB to one session, so the fixture
+is regenerated first) and drives the shelf itself through the whole lifecycle.
+`export_smoke.sh` is 396 asserts, `menu_flow.sh` 334.
+
+### §44 The row sheds the path and the generated subagent suffix (current)
+
+Two cuts on the same round as §43, once the real pickers were looked at rather than the
+fake ones. The label had grown a tail nobody read and a suffix that repeated the column
+next to it.
+
+**The path is gone from the rows.** §42 had added the session's own `directory` at the
+end of every row; it is the single widest field per session and it bloated all three
+pickers (browse, export, shrink). It is no longer rendered — the builder simply stops
+appending `rdir` — while the feed still carries it (the 8th `list --tsv` field). The
+path remains available where a detail screen can afford it: `list` and `info`. The `(N
+sub)` badge stays LAST.
+
+**The generated ` (@<agent> subagent)` suffix is stripped from the displayed title.**
+opencode writes subagent titles as `<task> (@explore subagent)` / `(@general subagent)`
+(confirmed against the user's real DB: every subagent title ends that way, no other
+parenthesis). Since a subagent row already carries the `@<agent>` token AND the `→
+<parent>` reference, the suffix only repeated the agent on every subagent row. A new
+display-only helper `oc_title_display` removes a TRAILING ` (@<agent> subagent)` (and
+keeps the original if that would empty the title); it is applied only when building the
+row label, so the data path is untouched: `list --tsv`, reports, exports and the `info`
+banner keep the real title. The orphan `Orphan subagent (@explore subagent)` becomes
+`Orphan subagent` — the word in the prose survives, only the parenthesis goes.
+
+New label: `short_id+title  @agent  YYYY-MM-DD HH:MM  [→ token]  [(N sub)]` (no path;
+title display-cleaned). `menu_flow.sh` pins the four rows and the new tail contract: no
+row contains `/tmp/proj`, the three subagents end in `→ <token>`, the two roots in the
+`(N sub)` badge.
+
+**The date was already the right one.** Asked whether the row showed the last edit
+rather than creation: it does — `${rupdated:0:16}` is the feed's 4th field,
+`datetime(s.time_updated/1000)`. No change.
+
+`menu_flow.sh` stays 334 asserts (the path/tail asserts were rewritten, not added);
+`export_smoke.sh` is unaffected (it never pins the picker label), 396.

@@ -321,22 +321,26 @@ oc_sessions_picker >/dev/null
 [ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
     && ok "browse lists every session" || bad "browse row count"
 
-# The compact label contract: short id + title (capped with a `_` marker) +
-# `@<agent>` + ONE date (the updated YYYY-MM-DD HH:MM) + suffixes + the
-# session's OWN path LAST (the field fzf may cut). A subagent row names its
-# parent as a short token `→ <short-parent-id><first-word>`; a root with
-# subagents wears the `(N sub)` badge; an ORPHAN (parent row gone) renders
-# exactly like a root, so there is no empty parent slot anywhere.
-grep -qE "^ses_A0002$TAB[A-Z0-9_]+  Explore gaps \(@explore subage_  @explore  2026-09-10 00:30  → A0001_Project  /tmp/projA$" "$BR" \
-    && ok "a subagent row ends with the -> parent token and its path" \
+# The compact label contract: short id + FULL title as ONE token (the short id
+# always ends in `_`, so `A0002_Explore gaps` is id_title with NOTHING
+# truncated) + `@<agent>` + ONE date (the updated YYYY-MM-DD HH:MM) + suffixes:
+# the `→ <short-parent-id><first-word>` parent token on subagent rows and the
+# `(N sub)` badge LAST. The title is passed through oc_title_display, so
+# opencode's generated ` (@explore subagent)` suffix is GONE from the row (the
+# `@<agent>` token + the `→ <parent>` reference already say it). The session's
+# own path is deliberately NOT rendered any more. A subagent row has no badge;
+# an ORPHAN (parent row gone) renders exactly like a root, so there is no empty
+# parent slot anywhere.
+grep -qE "^ses_A0002${TAB}A0002_Explore gaps  @explore  2026-09-10 00:30  → A0001_Project$" "$BR" \
+    && ok "a subagent row ends with the -> parent token (no path, cleaned title)" \
     || bad "subagent parent token: $(grep -m1 '^ses_A0002' "$BR")"
-grep -qE "^ses_ORPHAN01$TAB[A-Z0-9_]+  Orphan .*  @explore  2026-09-10 01:01  /tmp/projC$" "$BR" \
+grep -qE "^ses_ORPHAN01${TAB}ORPHAN0_Orphan subagent  @explore  2026-09-10 01:01$" "$BR" \
     && ok "an orphan renders like a root (no parent slot)" \
     || bad "orphan row: $(grep -m1 '^ses_ORPHAN01' "$BR")"
-grep -qE "^ses_A0001$TAB[A-Z0-9_]+  Project Alpha  @build  2026-09-10 00:36  \(2 sub\)  /tmp/projA$" "$BR" \
-    && ok "roots with subagents carry the (N sub) badge (no arrow)" \
+grep -qE "^ses_A0001${TAB}A0001_Project Alpha  @build  2026-09-10 00:36  \(2 sub\)$" "$BR" \
+    && ok "roots with subagents carry the (N sub) badge LAST" \
     || bad "sub badge: $(grep -m1 '^ses_A0001' "$BR")"
-grep -qE "^ses_A0003$TAB[A-Z0-9_]+  Find false bugs \(@explore sub_  @explore  2026-09-10 00:33  → A0001_Project  /tmp/projA$" "$BR" \
+grep -qE "^ses_A0003${TAB}A0003_Find false bugs  @explore  2026-09-10 00:33  → A0001_Project$" "$BR" \
     && ok "nested subagents get the token from their own parent" \
     || bad "nested token: $(grep -m1 '^ses_A0003' "$BR")"
 grep -q '2026-09-10 00:28' "$BR" && \
@@ -344,12 +348,14 @@ grep -q '2026-09-10 00:28' "$BR" && \
     { grep -qE '2026-09-10 00:30' "$BR" && [ "$(grep -cE ':[0-9]{2}:' "$BR")" -eq 0 ] && \
         ok "rows carry ONE YYYY-MM-DD HH:MM date, the updated one" || \
         bad "long/wrong dates leaked into browse rows"; }
-grep -qE 'Explore gaps \(@explore subage_' "$BR" && { grep -q '…' "$BR" && bad "ellipsis rather than _ marker" \
-    || ok "long titles truncate with a _ continuation marker"; } \
-    || bad "title truncation: $(grep -m1 '^ses_A0002' "$BR")"
-[ "$(grep -cE ' /tmp/proj[ABC]$' "$BR")" -eq 6 ] \
-    && ok "every row ends with its session's own path" \
-    || bad "path missing on some row: $(grep -Lc 'test' "$BR")"
+grep -q 'A0002_Explore gaps' "$BR" && ! grep -q '(@explore subagent)' "$BR" && \
+    ! grep -qE 'subage_|…' "$BR" && \
+    ok "the title is full, with the generated (@agent subagent) suffix stripped" || \
+    bad "title display: $(grep -m1 '^ses_A0002' "$BR")"
+! grep -q '/tmp/proj' "$BR" && [ "$(grep -cE '→ [A-Za-z0-9]+_' "$BR")" -eq 3 ] && \
+    [ "$(grep -cE '  \([0-9]+ sub\)$' "$BR")" -eq 2 ] && \
+    ok "rows drop the path: 3 subagents end in -> token, 2 roots in the (N sub) badge" \
+    || bad "row tails: path leaked or token/badge count off"
 # The menu feed is the raw `list --tsv` shape (8 plain fields, the last one the
 # session DIRECTORY), NOT the `list --info` -column output: no padded columns,
 # no TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.

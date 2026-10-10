@@ -283,7 +283,8 @@ oc_short_id() {
 # PARENT_WORD_W -> how much of the parent's title the `→ <parent>` token carries
 # after the parent's short id. A cap keeps the token readable when the first word
 # is long or hyphenated (opencode-db, portability...); truncation adds a `_`
-# (the same "the word continues" marker as the short id and the capped title).
+# (the same "the word continues" marker as the short id). The row's own title is
+# NEVER capped — it is rendered in full, joined to the id.
 PARENT_WORD_W=9
 oc_parent_token() {   # <parent_id> <parent_title> -> "f4fecb3_mejoras"
     local pid="${1:-}" ptitle="${2:-}" word
@@ -295,18 +296,15 @@ oc_parent_token() {   # <parent_id> <parent_title> -> "f4fecb3_mejoras"
     printf '%s%s' "$(oc_short_id "$pid")" "$word"
 }
 
-# TITLE_W -> the widest the row's TITLE may be. A longer title is cut to
-# TITLE_W-1 chars with a trailing `_` ("the title continues"); a title that fits
-# keeps its exact text (no marker). Capping the title keeps the @agent/date/path
-# suffixes on screen instead of letting one long title push them past fzf's edge.
-TITLE_W=30
-oc_title_fit() {   # <title> -> the title as it appears in a row label
+# oc_title_display <title> -> the title with opencode's generated subagent
+# suffix ` (@<agent> subagent)` stripped (DISPLAY ONLY). A subagent row already
+# carries the `@<agent>` token and the `→ <parent>` reference, so the suffix
+# only repeats the agent on every subagent row. Never touches the data path:
+# `list --tsv`, reports, exports and the `info` banner keep the real title.
+oc_title_display() {
     local t="${1:-}"
-    if [ "${#t}" -gt "$TITLE_W" ]; then
-        printf '%s_' "${t:0:$((TITLE_W - 1))}"
-    else
-        printf '%s' "$t"
-    fi
+    [[ "$t" =~ ^(.*)\ \(@[^\)]*\ subagent\)$ ]] && [ -n "${BASH_REMATCH[1]}" ] && t="${BASH_REMATCH[1]}"
+    printf '%s' "$t"
 }
 
 # oc_root_sub_counts -> "root-id\tN_sub" for ROOT sessions that have subagents
@@ -506,17 +504,23 @@ oc_session_picker() {
                 continue
             fi
             ids+=("$rid")
-            # The compact label: short id + title (capped with a `_` marker),
-            # the agent token, ONE full-ish date (the updated YYYY-MM-DD HH:MM)
-            # and the session's own path LAST (it is the field fzf may cut).
-            # The `→ <parent>` token renders only on subagent rows (a parent id
-            # present) and the `(N sub)` badge only on rows that have them.
-            disp="$(oc_short_id "$rid")  $(oc_title_fit "$rtitle")"
+            # The compact label: the short id and the FULL title as ONE token
+            # (`A0001_Project Alpha` — oc_short_id always ends in `_`, so the
+            # underscore joins id_title and NOTHING truncates the title; the
+            # title is passed through oc_title_display, which sheds opencode's
+            # generated ` (@<agent> subagent)` suffix because the `@<agent>`
+            # token and the `→ <parent>` reference already say it), the agent
+            # token, ONE full-ish date (the updated YYYY-MM-DD HH:MM), the
+            # `→ <parent>` token on subagent rows (a parent id present) and the
+            # `(N sub)` badge LAST. The session's own path is deliberately NOT
+            # rendered (it bloated every row; it stays in `list` and `info`).
+            # fzf cuts the END of a long row, so the tail (token/badge) is what
+            # may fall off screen — identity, agent and date always survive.
+            disp="$(oc_short_id "$rid")$(oc_title_display "$rtitle")"
             [ -n "$ragent" ] && disp+="  @$ragent"
             disp+="  ${rupdated:0:16}"
             [ -n "$rpid" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
             [ -n "${sub_n[$rid]:-}" ] && disp+="  (${sub_n[$rid]} sub)"
-            [ -n "$rdir" ] && disp+="  $rdir"
             local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")
 
