@@ -282,6 +282,14 @@ pickers, so the id is a fixed-width field and the title/date columns stay aligne
 display only — a `__REPORT_ALL__` id is never shortened in the data path, and the
 `info <id>` banner keeps the full id on purpose (it is copy-pasteable there).
 
+**The title is capped and the agent column is fixed.** After the id field the title is a
+fixed `TITLE_COL_W`=57 column: padded when short, cut to `TITLE_COL_W-1` + `…` when long, so
+it can never push the metadata right. Then `COL_GAP`=2 spaces, then `@<agent>` in a fixed
+`AGENT_COL_W`=10 column (always reserved, so `@build`/`@general`/`@explore`/empty all leave
+the date at the same offset), then the updated `YYYY-MM-DD HH:MM` date. The old "full title,
+never truncated" rule pushed the metadata right on a long title; the row is now
+deterministic on every row (see export-analysis §47).
+
 **The export flow is sessions → preset → confirm.** The sessions picker comes first
 (all sessions marked, `(N sub)` badges, `subagents: shown ⇄ hidden`, recency-ordered with
 a flip row, marks in a 1/0 array so a re-sort or a bulk row cannot resurrect an

@@ -13,6 +13,20 @@ CLI filters, no writes — so every prompt history, agent path and metric stays
 exportable. The full design rationale (data model, export pipeline, sanitization, menu
 and `shrink --swap` safeguards) is in **[docs/architecture.md](docs/architecture.md)**.
 
+## Related tools
+
+opencode ships a built-in `opencode export [sessionID]` (and `opencode session export`),
+which dumps **one** session as JSON; `opencode session list` and `opencode db path` cover
+listing and locating the DB. `opencode-db-exporter` is an independent tool that overlaps
+only partly, and focuses on:
+
+- **direct, strictly read-only access** to the SQLite file (`mode=ro`) — no CLI filters, so
+  sessions hidden by opencode's Git binding are still exportable;
+- **batch** work across many sessions and the whole hierarchy (roots + subagents);
+- readable **Markdown**, a RAG-ready **corpus**, **digests**, and a faithful `--json`;
+- **backups** with a sha256 manifest, and **`shrink`** (with an opt-in, guarded `--swap`);
+- named **presets**, an **fzf menu**, and a portable, no-install layout.
+
 ## Requirements
 
 - Linux (tested on Debian/Ubuntu) and the opencode CLI
@@ -77,6 +91,10 @@ menus. There is **no TAB multi-select** — mode switching and bulk operations a
 rows. The `backups`, `exports` and `shrinks` pickers have a `view`/`remove` toggle; the
 `sessions` picker is details-only and the export picker is **preset-only** (it needs a
 presets file).
+
+Picker rows show dates in **local time**, auto-detected from the system `TZ` (override with
+`OCED_TZ`, e.g. `OCED_TZ=Europe/Madrid`). Every CLI command, report and written file stays in
+**UTC** (`Z`), so the archives are reproducible and machine-readable.
 
 Every row carries one marker that says what it does:
 
@@ -342,7 +360,7 @@ is stored in the DB (markers vs. the following `mode=compaction` message) is exp
 
 ## shrink — a lighter DB copy to swap over opencode
 
-The opencode DB only grows, and most of the weight is the event store (`event` alone is ~375 MB of a typical 490 MB file): deleting sessions frees pages for reuse but does **not** shrink the file (only a `VACUUM` does, and it needs exclusive locks on the live DB). `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot and never writes to the live database — you swap the copy in manually:
+The opencode DB only grows, and most of the weight is the event store (`event` alone is ~375 MB of a typical 490 MB file): deleting sessions frees pages for reuse but does **not** shrink the file (only a `VACUUM` does, and it needs exclusive locks on the live DB). `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot: by default it never touches the live database (you swap the copy in manually), while `--swap` installs it over the live DB after taking its own safety snapshot:
 
 ```bash
 opencode-db shrink                         # default: copy with the 10 most recent sessions
@@ -449,6 +467,10 @@ A few facts that are good to know anyway:
   is `~/.config/opencode-db/<file>` if present, else the repo-shipped copy, else the
   built-in: an explicitly exported `OPENCODE_DB`/`OCED_OUT`/`OCED_ACTIVITY_LOG`/... is
   never clobbered by the conf.
+- Dates are stored and printed in **UTC** everywhere (ISO-8601, `Z`), except the **menu
+  picker rows**, which show your local time; set `OCED_TZ` (e.g. `Europe/Madrid`) to pin
+  the display zone instead of auto-detecting the system one. It never affects files or the
+  CLI.
 - Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf`
   (that is `opencode-db.conf`). Running from the repo, the shipped
   `opencode-db.conf`/`presets.json`/`shrink-presets.json` are read directly (see below).
@@ -483,8 +505,8 @@ Environment variables still win over that file, which in turn wins over the per-
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 377 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 312 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 396 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 341 OK / 0 FAIL
 ```
 
 ## Layout

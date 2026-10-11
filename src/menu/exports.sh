@@ -39,12 +39,13 @@ exports_run_count() {
     find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l
 }
 
-# oc_stamp_human <stamp> -> human readable date of an export run stamp.
+# oc_stamp_human <stamp> -> human readable date of an export run stamp, in LOCAL
+# time (MENU ONLY: the stamp is UTC; `exports list` keeps rendering UTC itself).
 oc_stamp_human() {
     local s="$1"
     case "$s" in
         [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
-            printf '%s %s UTC' "${s:0:10}" "${s:11:2}:${s:14:2}" ;;
+            o_local_ts "${s:0:10} ${s:11:2}:${s:14:2}:00" '+%Y-%m-%d %H:%M %Z' ;;
         *) printf '%s' "$s" ;;
     esac
 }

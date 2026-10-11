@@ -626,17 +626,23 @@ shrinks_runs_find() {
     find "$(shrinks_dir)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort $cmp
 }
 
-# shrinks_stamp_human <stamp 20260921-083000> -> "2026-09-21 08:30:00 UTC".
+# shrinks_stamp_human <stamp 20260921-083000> [local] -> "2026-09-21 08:30:00 UTC".
+# With `local` (menu picker rows ONLY) the date is shown in the display TZ; the
+# CLI list keeps the UTC form (its arg is omitted).
 shrinks_stamp_human() {
-    local s="$1"
+    local s="$1" local_mode="${2:-}"
     case "$s" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9])
-            printf '%s-%s-%s %s:%s:%s UTC' "${s:0:4}" "${s:4:2}" "${s:6:2}" "${s:9:2}" "${s:11:2}" "${s:13:2}" ;;
+            if [ "$local_mode" = local ]; then
+                o_local_ts "${s:0:4}-${s:4:2}-${s:6:2} ${s:9:2}:${s:11:2}:${s:13:2}" '+%Y-%m-%d %H:%M:%S %Z'
+            else
+                printf '%s-%s-%s %s:%s:%s UTC' "${s:0:4}" "${s:4:2}" "${s:6:2}" "${s:9:2}" "${s:11:2}" "${s:13:2}"
+            fi ;;
         *) printf '%s' "$s" ;;
     esac
 }
 
-# shrinks_run_row <run-dir> [live_max] -> TSV 'stamp<TAB>display' (single source
+# shrinks_run_row <run-dir> [live_max] [local] -> TSV 'stamp<TAB>display' (single
 # for the menu picker, like exports view/list share one aggregation).
 #
 # The display cell is a COLUMN, so it carries the tag (plan.py rule-tag) and not
@@ -648,7 +654,7 @@ shrinks_stamp_human() {
 # o_shrink_stale helper — default live_max costs one query per row, so
 # `oced_shrinks_list` computes it once and passes it).
 shrinks_run_row() {
-    local run="$1" live_max="${2:-}" stamp j
+    local run="$1" live_max="${2:-}" local_mode="${3:-}" stamp j
     local rule rvalue nids tag db_state size pct
     local jtotal jkept jbefore jafter jstrip
     stamp="${run##*/}"
@@ -720,7 +726,7 @@ shrinks_run_row() {
     # what you compare against the DB you are looking at afterwards.
     printf '%s\t%s\n' "$stamp" \
         "$(printf '%-22s  %-22s  %s/%s kept  %s' \
-            "$(shrinks_stamp_human "$stamp")" "$tag" "$jkept" "$jtotal" "$db_state")"
+            "$(shrinks_stamp_human "$stamp" "$local_mode")" "$tag" "$jkept" "$jtotal" "$db_state")"
 }
 
 oced_shrinks() {

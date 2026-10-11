@@ -11,7 +11,7 @@
 # dependents manually until generator exists).
 # To add a new product: add to PRODUCTS list and register its flags.
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Literal
 
 FlagType = Literal["bool", "choice", "int", "string"]

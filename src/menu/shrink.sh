@@ -324,7 +324,7 @@ oc_shrinks_rows() {
         printf '__REPORT_ALL__\t[>] details of all copies\n'
     fi
     for run in "${runs[@]}"; do
-        shrinks_run_row "$run" "$live_max"
+        shrinks_run_row "$run" "$live_max" local
     done
 }
 
@@ -358,7 +358,7 @@ oc_shrinks_swap_pick() {
     local run sel key snap stale
     mapfile -t runs < <(shrinks_runs_find)
     [ "${#runs[@]}" -gt 0 ] || { echo "   (no shrink copies yet — create one first)."; return 0; }
-    sel=$(for run in "${runs[@]}"; do shrinks_run_row "$run"; done | oc_fzf_sel "swap (pick a copy)" \
+    sel=$(for run in "${runs[@]}"; do shrinks_run_row "$run" "" local; done | oc_fzf_sel "swap (pick a copy)" \
         $'Pick the copy to SWAP into the LIVE DB (DESTRUCTIVE).'$'\n'$'opencode MUST be closed first; a pre-shrink safety copy is auto-created. ESC: back') || return $?
     key=$(oc_sel_key "$sel")
     [ -n "$key" ] || return 0

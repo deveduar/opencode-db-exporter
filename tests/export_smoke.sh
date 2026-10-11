@@ -24,6 +24,9 @@ export OCED_BACKUP_DIR="$BK"
 # developer's ~/.config AND of the repo-shipped portable conf (env > conf; the
 # portable-detection tests below override this with env -u OCED_CONF ...).
 export OCED_CONF="$TMP/missing-conf.conf"
+# Pin the display TZ: any date formatting that is not explicitly `date -u` must
+# still be deterministic across hosts.
+export TZ=UTC
 
 pass=0; fail=0
 ok() { echo "  [OK]   $1"; pass=$((pass+1)); }

@@ -280,11 +280,23 @@ oc_short_id() {
     printf '%s_' "${rest:0:$((ID_LABEL_W - 1))}"
 }
 
-# TITLE_COL_W — width of the label's SECOND column (the title), the 3rd column
-# (agent/date/badge/ref) starts right after it, so the columns line up across
-# rows. Padding only: the title is NEVER cut (a title longer than the column
-# pushes the metadata to the right; fzf truncates the row's end anyway).
-TITLE_COL_W=36
+# TITLE_COL_W — width of the label's SECOND column (the title). The title is
+# CAPPED to this many characters: a longer one is cut to TITLE_COL_W-1 plus a `…`
+# marker, so the title column never grows and the `@agent`/date columns that
+# follow it always start at the same offset. (The old "padding only, never
+# truncate" rule let a long title push the metadata right and misaligned every
+# row on the screen.)
+TITLE_COL_W=57
+
+# COL_GAP — fixed spaces between two label columns (title -> agent). One constant
+# so the inter-column separation is identical everywhere.
+COL_GAP=2
+
+# AGENT_COL_W — width of the `@<agent>` column. The token is padded to it so the
+# date column stays put whether the agent is `@build` (short), `@general`/
+# `@explore` (long) or EMPTY: the block is always reserved, never dropped (an
+# omitted block shifted the date left on those rows).
+AGENT_COL_W=10
 
 # PARENT_WORD_W -> how much of the parent's title the `→ <parent>` token carries
 # after the parent's short id. A cap keeps the token readable when the first word
@@ -313,35 +325,30 @@ oc_title_display() {
     printf '%s' "$t"
 }
 
-# ROW_COL_GAP — the spaces guaranteed between the title column and the metadata
-# column. Padding alone cannot do this: `printf %-37s` adds NOTHING once the
-# title is already 37+ chars, so an overlong title ran straight into `@agent`
-# (the reported bug). The gap is added ONLY in that overflow case, so rows whose
-# title fits keep their existing alignment (and their pinned tests) untouched.
-ROW_COL_GAP=2
-
 # oc_row_label <id> <title> <agent> <updated> <sub_count> <parent_id> <parent_title>
-# -> the menu's compact THREE-column label (`id | title | metadata`). A helper so
-# the overflow rule is unit-testable without a fake DB: a title longer than the
-# column is followed by ROW_COL_GAP spaces, never glued to `@agent`.
+# -> the menu's compact label (`id | title | agent | date | badge/ref`). A helper
+# so the alignment rule is unit-testable without a fake DB: a title longer than
+# TITLE_COL_W is cut to `TITLE_COL_W-1` + `…`, and the agent column is a fixed
+# AGENT_COL_W field, so every column after the title starts at the same offset.
 oc_row_label() {
     local rid="$1" rtitle="$2" ragent="$3" rupdated="$4" rsub="$5" rpid="$6" rptitle="$7"
-    local tw=$((TITLE_COL_W + 1)) tt field disp
+    local tt field disp ag
     tt="$(oc_title_display "$rtitle")"
-    if [ "${#tt}" -ge "$tw" ]; then
-        field="$tt$(printf '%*s' "$ROW_COL_GAP" '')"
+    if [ "${#tt}" -gt "$TITLE_COL_W" ]; then
+        field="${tt:0:$((TITLE_COL_W - 1))}…"
     else
-        field="$(printf "%-${tw}s" "$tt")"
+        field="$(printf "%-${TITLE_COL_W}s" "$tt")"
     fi
     disp="$(printf "%-$((ID_LABEL_W + 1))s" "$(oc_short_id "$rid")")"
-    disp+="$field"
-    [ -n "$ragent" ] && disp+="@$ragent  "
+    disp+="$field$(printf '%*s' "$COL_GAP" '')"
+    ag=""
+    [ -n "$ragent" ] && ag="@$ragent"
+    disp+="$(printf "%-${AGENT_COL_W}s" "$ag")"
     disp+="${rupdated:0:16}"
     [ -n "$rsub" ] && disp+="  (${rsub} sub)"
     [ -n "$rpid" ] && disp+="  → $(oc_parent_token "$rpid" "$rptitle")"
     printf '%s' "$disp"
 }
-
 # oc_root_sub_counts -> "root-id\tN_sub" for ROOT sessions that have subagents
 # (recursive: nested subagents included). ONE helper for every session picker
 # (browse/export/shrink) so the `(N sub)` badge means the same everywhere.
@@ -539,21 +546,25 @@ oc_session_picker() {
                 continue
             fi
             ids+=("$rid")
-            # The compact label as THREE columns: `id | title | metadata`. The
+            # The compact label as columns: `id | title | agent | date | …`. The
             # FIRST COLUMN is the short id on a fixed width (oc_short_id drops
             # `ses_`, cuts to ID_LABEL_W-1 and always ends in `_`, so the
             # underscore terminates the id — it is NOT glued to the title any
-            # more). The SECOND COLUMN is the FULL title, padded to TITLE_COL_W
-            # (padding only, never truncated; a longer one pushes the metadata
-            # right but is ALWAYS followed by ROW_COL_GAP spaces, so it never
-            # glues to the metadata; fzf truncates the row's end), passed through
+            # more). The SECOND COLUMN is the title CAPPED to TITLE_COL_W (a
+            # longer one is cut to TITLE_COL_W-1 + `…`), passed through
             # oc_title_display which sheds opencode's generated ` (@<agent>
             # subagent)` suffix (the `@<agent>` token and the `→ <parent>`
-            # reference already say it). The THIRD COLUMN is the metadata: the
-            # agent token, ONE full-ish date (the updated YYYY-MM-DD HH:MM), the
+            # reference already say it); the cap is what keeps the columns to its
+            # right aligned across rows. The THIRD COLUMN is `@<agent>` padded to
+            # AGENT_COL_W (a fixed field, so a short/long/empty agent never shifts
+            # the date). Then the date (the updated YYYY-MM-DD HH:MM), the
             # `(N sub)` badge and the `→ <parent>` token on subagent rows (a
             # parent id present). The session's own path is deliberately NOT
             # rendered (it bloated every row; it stays in `list` and `info`).
+            # MENU ONLY: the date is shown in LOCAL time (the feed `list --tsv`
+            # and every CLI surface stay UTC). The conversion lives here, so
+            # `oc_row_label` itself never learns about timezones.
+            rupdated="$(o_local_ts "$rupdated")"
             disp="$(oc_row_label "$rid" "$rtitle" "$ragent" "$rupdated" "${sub_n[$rid]:-}" "$rpid" "$rptitle")"
             local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")

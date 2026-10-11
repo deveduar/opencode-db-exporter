@@ -25,7 +25,8 @@ OCED_CONF="${OCED_CONF:-$(o_cfg_default opencode-db.conf)}"
 
 # Optional path config (no secrets): $OCED_CONF (permissions 600; the repo-shipped
 # portable conf is left as-is so git never sees a 644 -> 600 mode change per run).
-# Variables: OPENCODE_DB, OCED_OUT, OCED_BACKUP_DIR, OCED_COMPRESS, OCED_LOG.
+# Variables: OPENCODE_DB, OCED_OUT, OCED_BACKUP_DIR, OCED_COMPRESS, OCED_LOG,
+# OCED_TZ (display-only: the menu renders picker-row dates in local time).
 load_conf() {
     [ -f "$OCED_CONF" ] || return 0
     [ "$OCED_PORTABLE" = 1 ] || chmod 600 "$OCED_CONF" 2>/dev/null || true
@@ -34,7 +35,7 @@ load_conf() {
     # cannot clobber them (env wins over conf).
     local v
     local -A conf_env_set=() conf_env_val=()
-    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS OCED_SHRINK_DISCARD_EXPORT_PROFILE; do
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS OCED_SHRINK_DISCARD_EXPORT_PROFILE OCED_TZ; do
         if [ "${!v+x}" = x ]; then
             conf_env_set[$v]=1
             conf_env_val[$v]="${!v}"
@@ -234,6 +235,23 @@ o_human_ms() {
     [ "$ms" -gt 0 ] 2>/dev/null || { printf '%s' "-"; return 0; }
     out=$(date -u -d "@$((ms / 1000))" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null) || out=""
     printf '%s' "${out:--}"
+}
+
+# o_local_ts <"YYYY-MM-DD HH:MM:SS"[ " UTC"|"Z"]> [strftime-fmt] -> the same
+# instant in the DISPLAY timezone. MENU PICKER ROWS ONLY: the menu shows local
+# time (auto-detected from the system TZ; OCED_TZ overrides it), while every CLI
+# surface, report and persisted file keeps UTC. Default format drops the zone;
+# pass a fmt with %Z to render it. A parse failure passes the input through.
+o_local_ts() {
+    local ts="${1:-}" fmt="${2:-+%Y-%m-%d %H:%M:%S}" tz="${OCED_TZ:-}" out=""
+    [ -n "$ts" ] || { printf '%s' "${1:-}"; return 0; }
+    ts="${ts% UTC}"; ts="${ts%Z}"; ts="${ts% }"; ts="${ts/T/ }"
+    if [ -n "$tz" ]; then
+        out=$(TZ="$tz" date -d "$ts UTC" "$fmt" 2>/dev/null) || out=""
+    else
+        out=$(date -d "$ts UTC" "$fmt" 2>/dev/null) || out=""
+    fi
+    printf '%s' "${out:-${1:-}}"
 }
 
 o_check_deps() {

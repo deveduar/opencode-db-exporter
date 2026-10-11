@@ -37,7 +37,6 @@ from exportlib.util import (
     selection_meta,
     session_record,
     sha256_file,
-    ts_iso,
 )
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
 from exportlib.flags import FLAGS

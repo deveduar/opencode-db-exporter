@@ -108,7 +108,7 @@ oced_status() {
         echo "          1. opencode-db backup                     (safe snapshot first)"
         echo "          2. opencode-db exports prune N            (drop old export runs)"
         echo "          3. opencode-db shrink --older-than 90         (pruned + VACUUMed copy)"
-        echo "        shrink never writes to the live DB; it writes a copy you swap manually."
+        echo "        shrink builds a copy; only --swap replaces the live DB (it snapshots first)."
     fi
 
     local tables rc

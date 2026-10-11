@@ -25,6 +25,9 @@ export OCED_PRESETS="$TMP/no-presets.json" # hermetic: ignore any real ~/.config
 export OCED_SHRINK_PRESETS="$TMP/no-shrink-presets.json" # hermetic: built-in shrink recipes only
 export OCED_CONF="$TMP/missing-conf.conf" # hermetic: ignore the repo-shipped portable conf
 export OCED_DISPATCHER="$MOD/opencode-db.sh"
+# Pickers render dates in LOCAL time (o_local_ts); pin the display TZ to UTC so
+# every row assertion stays byte-identical to the UTC feed regardless of host TZ.
+export TZ=UTC
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
 . "$MOD/common.sh"
@@ -88,6 +91,17 @@ ARROW=$'\u2192'
 [ "$(oc_toggle_row view remove)" = "__TOGGLE__"$'\t'"[*] view  ${ARROW}  remove" ] && ok "oc_toggle_row builds the [*] toggle row" || bad "oc_toggle_row: $(oc_toggle_row view remove)"
 [ "$(oc_toggle_row 'subagents: shown' hidden __SUBS__ | cut -f1)" = "__SUBS__" ] && ok "oc_toggle_row takes an optional key" || bad "oc_toggle_row key"
 [ "$(oc_stamp_human '2026-09-21_08-30')" = "2026-09-21 08:30 UTC" ] && ok "oc_stamp_human formats a stamp" || bad "oc_stamp_human"
+# o_local_ts is the ONE display-timezone converter: picker rows only, UTC stays
+# the storage/CLI form. TZ auto-detects, OCED_TZ overrides, garbage passes through.
+[ "$(TZ=Europe/Madrid o_local_ts '2026-09-21 08:30:00')" = "2026-09-21 10:30:00" ] \
+    && ok "o_local_ts renders a UTC instant in the display TZ" \
+    || bad "o_local_ts shift: $(TZ=Europe/Madrid o_local_ts '2026-09-21 08:30:00')"
+[ "$(OCED_TZ=Europe/Madrid o_local_ts '2026-09-21 08:30:00')" = "2026-09-21 10:30:00" ] \
+    && ok "o_local_ts honors OCED_TZ over TZ" \
+    || bad "o_local_ts OCED_TZ: $(OCED_TZ=Europe/Madrid o_local_ts '2026-09-21 08:30:00')"
+[ "$(TZ=UTC o_local_ts 'garbage')" = "garbage" ] \
+    && ok "o_local_ts passes an unparsable value through" \
+    || bad "o_local_ts passthrough: $(TZ=UTC o_local_ts 'garbage')"
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
 
@@ -321,29 +335,35 @@ oc_sessions_picker >/dev/null
 [ "$(grep -cE "^ses_" "$BR")" -eq "$(session_rows | wc -l)" ] \
     && ok "browse lists every session" || bad "browse row count"
 
-# The compact label contract: THREE columns — `id | title | metadata`. The
-# short id is its own fixed-width column (oc_short_id drops `ses_` and always
-# ends in `_`, so `A0002_  ` terminates the id and does NOT glue to the title),
-# the SECOND column is the FULL title padded to TITLE_COL_W (padding only,
-# never truncated), and the THIRD column is `@<agent>  YYYY-MM-DD HH:MM` (the
-# updated date) + the `→ <short-parent-id><first-word>` parent token on subagent
-# rows + the `(N sub)` badge LAST. The title is passed through oc_title_display,
-# so opencode's generated ` (@explore subagent)` suffix is GONE from the row (the
-# `@<agent>` token + the `→ <parent>` reference already say it). The session's
-# own path is deliberately NOT rendered any more. A subagent row has no badge;
-# an ORPHAN (parent row gone) renders exactly like a root, so there is no empty
-# parent slot anywhere.
-grep -qE "^ses_A0002${TAB}A0002_   Explore gaps                         @explore  2026-09-10 00:30  → A0001_Project$" "$BR" \
+# The compact label contract: `id | title | agent | date | badge/ref`, all
+# columns aligned. The short id is a fixed-width column (oc_short_id drops `ses_`
+# and always ends in `_`, so `A0002_   ` terminates the id and does NOT glue to
+# the title). The title is CAPPED to TITLE_COL_W (a longer one is cut to
+# TITLE_COL_W-1 + `…`), then COL_GAP spaces, then the `@<agent>` column padded
+# to a fixed AGENT_COL_W so the date column never moves whatever the agent is
+# (`@build` / `@general` / `@explore` / EMPTY). Then the updated
+# `YYYY-MM-DD HH:MM`, then the `(N sub)` badge / the
+# `→ <short-parent-id><first-word>` parent token LAST. The title is passed
+# through oc_title_display, so opencode's generated ` (@explore subagent)`
+# suffix is GONE from the row (the `@<agent>` token + the `→ <parent>` reference
+# already say it). The session's own path is deliberately NOT rendered. A
+# subagent row has no badge; an ORPHAN (parent row gone) renders exactly like a
+# root.
+# Build the expected label with the SAME column constants (mkrow): a width tweak
+# must not require editing the test, but the column ORDER/identity stays pinned.
+mkrow() { printf '%s%s%s%s%s%s' "$1" "$(printf "%-${TITLE_COL_W}s" "$2")" \
+    "$(printf "%*s" "$COL_GAP" '')" "$(printf "%-${AGENT_COL_W}s" "$3")" "$4" "$5"; }
+grep -qxF "ses_A0002${TAB}$(mkrow 'A0002_   ' 'Explore gaps' '@explore' '2026-09-10 00:30' '  → A0001_Project')" "$BR" \
     && ok "a subagent row: id column, aligned title, -> parent token last" \
     || bad "subagent parent token: $(grep -m1 '^ses_A0002' "$BR")"
-grep -qE "^ses_ORPHAN01${TAB}ORPHAN0_ Orphan subagent                      @explore  2026-09-10 01:01$" "$BR" \
-    && ok "an orphan renders like a root (no parent slot)" \
+grep -qxF "ses_ORPHAN01${TAB}$(mkrow 'ORPHAN0_ ' 'Orphan subagent' '@explore' '2026-09-10 01:01' '')" "$BR" \
+    && ok "an orphan row: id column, aligned title, -> parent token last" \
     || bad "orphan row: $(grep -m1 '^ses_ORPHAN01' "$BR")"
-grep -qE "^ses_A0001${TAB}A0001_   Project Alpha                        @build  2026-09-10 00:36  \(2 sub\)$" "$BR" \
-    && ok "roots with subagents carry the (N sub) badge LAST" \
+grep -qxF "ses_A0001${TAB}$(mkrow 'A0001_   ' 'Project Alpha' '@build' '2026-09-10 00:36' '  (2 sub)')" "$BR" \
+    && ok "a root row: id column, aligned title, (N sub) badge last" \
     || bad "sub badge: $(grep -m1 '^ses_A0001' "$BR")"
-grep -qE "^ses_A0003${TAB}A0003_   Find false bugs                      @explore  2026-09-10 00:33  → A0001_Project$" "$BR" \
-    && ok "nested subagents get the token from their own parent" \
+grep -qxF "ses_A0003${TAB}$(mkrow 'A0003_   ' 'Find false bugs' '@explore' '2026-09-10 00:33' '  → A0001_Project')" "$BR" \
+    && ok "a nested subagent row: id column, aligned title, -> parent token last" \
     || bad "nested token: $(grep -m1 '^ses_A0003' "$BR")"
 grep -q '2026-09-10 00:28' "$BR" && \
     bad "created date leaked into a row" || \
@@ -352,23 +372,30 @@ grep -q '2026-09-10 00:28' "$BR" && \
         bad "long/wrong dates leaked into browse rows"; }
 grep -q 'A0002_   Explore gaps' "$BR" && ! grep -q '(@explore subagent)' "$BR" && \
     ! grep -qE 'subage_|…' "$BR" && \
-    ok "the title is full, in its own column, with the (@agent subagent) suffix stripped" || \
+    ok "the title is shown with the (@agent subagent) suffix stripped (no short title truncated)" || \
     bad "title display: $(grep -m1 '^ses_A0002' "$BR")"
 ! grep -q '/tmp/proj' "$BR" && [ "$(grep -cE '→ [A-Za-z0-9]+_' "$BR")" -eq 3 ] && \
     [ "$(grep -cE '  \([0-9]+ sub\)$' "$BR")" -eq 2 ] && \
     ok "rows drop the path: 3 subagents end in -> token, 2 roots in the (N sub) badge" \
     || bad "row tails: path leaked or token/badge count off"
-# Overflow contract: `printf %-37s` adds NO padding once the title is already
-# that long, so an overlong title used to run straight into `@agent`. The helper
-# now appends ROW_COL_GAP spaces in that case — the fix is testable on its own
-# (a synthetic title wider than the column), no fake-DB session needed.
+# Truncation contract: a title longer than TITLE_COL_W is cut to TITLE_COL_W-1
+# plus a `…` marker, then COL_GAP spaces, then the @agent column — so it can
+# never push the metadata right and misalign the row. Testable on its own (a
+# synthetic title), no fake-DB session needed.
 LONG="A very long session title that is far wider than the title column here"
 RLOK=$(oc_row_label "ses_ABC12345deadbeef" "$LONG" "build" "2026-09-10 00:36" "" "" "")
+CAPPED="${LONG:0:$((TITLE_COL_W - 1))}…"
 case "$RLOK" in
-    *"$LONG$(printf '%*s' "$ROW_COL_GAP" '')@build  2026-09-10 00:36"*)
-        ok "an overlong title keeps a ${ROW_COL_GAP}-space gap before @agent (never glued)" ;;
-    *)  bad "overlong title glued to metadata: [$RLOK]" ;;
+    *"$CAPPED$(printf '%*s' "$COL_GAP" '')$(printf "%-${AGENT_COL_W}s" "@build")2026-09-10 00:36")
+        ok "an overlong title is capped to TITLE_COL_W with '…' (metadata stays put)" ;;
+    *)  bad "overlong title not capped: [$RLOK]" ;;
 esac
+# The @agent column is a fixed width: build/general/empty must leave the date at
+# the same offset, or a row where the agent token is short/long/absent shifts it.
+dp() { printf '%s' "$(oc_row_label ses_X Short "$1" "2026-09-10 00:36" "" "" "")" | awk '{print index($0,"2026")}'; }
+[ "$(dp build)" = "$(dp general)" ] && [ "$(dp build)" = "$(dp '')" ] \
+    && ok "the @agent column is fixed: build/general/empty leave the date aligned" \
+    || bad "agent column not fixed: build=$(dp build) general=$(dp general) empty=$(dp '')"
 # The menu feed is the raw `list --tsv` shape (8 plain fields, the last one the
 # session DIRECTORY), NOT the `list --info` -column output: no padded columns,
 # no TOK_IN/TOK_OUT/COST, so the wrapper can build the label from constants.

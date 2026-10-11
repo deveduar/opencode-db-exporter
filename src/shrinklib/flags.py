@@ -16,7 +16,6 @@
 # "what will this shrink produce?" plan — mirroring exportlib for exports.
 import os
 import sys
-from dataclasses import dataclass
 
 # Self-bootstrapping entry (like plan.py): running this file directly
 # (`python3 flags.py --help-shrinks`, `--usage`) needs `exportlib` resolvable.

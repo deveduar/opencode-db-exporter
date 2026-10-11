@@ -25,6 +25,8 @@ oc_backups_rows() {
     jq -r "$orderjq"' | .[] | [.file, (.date|sub("T";" ")|sub("Z$";"")), (.size|tostring), (.sessions|tostring), ((.messages//0)|tostring), ((.sha256//"-")[:8])] | @tsv' "$m" \
     | while IFS=$'\t' read -r file dt sz ss ms sha; do
         szh=$(o_human_size "$sz")
+        # MENU ONLY: the manifest date is UTC; show it in local time here.
+        dt=$(o_local_ts "$dt")
         printf '%s\t%s\n' "$file" "$(printf '%s  %-9s  %5s sess  %6s msg  sha:%s' "$dt" "$szh" "$ss" "$ms" "$sha")"
     done
 }

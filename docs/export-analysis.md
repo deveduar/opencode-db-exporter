@@ -1596,7 +1596,7 @@ rather than creation: it does — `${rupdated:0:16}` is the feed's 4th field,
 `menu_flow.sh` stays 334 asserts (the path/tail asserts were rewritten, not added);
 `export_smoke.sh` is unaffected (it never pins the picker label), 396.
 
-### §45 Columns, not conclusions: a three-column row everywhere, `verify` tells the truth about *content* (current)
+### §45 Columns, not conclusions: a three-column row everywhere, `verify` tells the truth about *content* (superseded by §47: the title column is capped and the agent column is fixed)
 
 Two unrelated complaints landed in the same round, both about wording that misled the eye.
 
@@ -1642,4 +1642,75 @@ sessions added or edited since`. `export_smoke.sh` re-anchors its grep on
 followed.
 
 `menu_flow.sh` 334 -> 338 (three preset-row/column guards + one overflow gap guard);
+`export_smoke.sh` stays 396.
+
+### §46 Dead code, the display timezone, and a "Related tools" row (current)
+
+Three cleanups that never change a command's output on the happy path.
+
+**Dead symbols are gone.** A sweep of the six leftovers found in the last rounds —
+`PRODUCT_KEYWORDS`/`SELECTION_KEYS`/`_PRESET_KEYS_SELECTION` imports in
+`exportlib/presets.py`, `ts_iso`'s import in `exportlib/cli.py`, a stray `field` in
+`exportlib/flags.py`'s dataclass import, `dataclass` in `shrinklib/flags.py`, and `json`
+in `shrinklib/plan.py` — each was an unused import or a module-level derived view nothing
+read. Removed, `py_compile` clean; `presets.py` now says out loud that its own
+`_PRESET_*` views are internal and flags.py is the SSoT.
+
+**Only the menu picker rows are in local time.** Every timestamp the tool stores, prints or
+writes stays UTC (CLI, reports, `index.md`, `metadata.json`, `corpus.jsonl`, `shrink.json`,
+backup manifest) — that is a machine contract (`schemas.md`). But a human picking a session
+in the fzf menu reads wall-clock time, not `Z`. The ONE converter is
+`o_local_ts <"YYYY-MM-DD HH:MM:SS"[ " UTC"|"Z"]> [fmt]` (system `TZ` by default,
+`OCED_TZ` override, garbage passes through), called only where a row is BUILT: the session
+picker (`oc_session_picker`, before `oc_row_label` — which stays pure), the backups rows
+(`oc_backups_rows`), the exports rows (`oc_stamp_human`), and the shrink rows
+(`shrinks_stamp_human`/`shrinks_run_row` via a new optional `local` arg; the CLI passes
+nothing, so `shrinks list` stays UTC). `%Z` is only appended where the old label already
+ended in ` UTC` (exports/shrinks); sessions/backups were suffix-less and stay so. The menu
+is the only entry point that ever passes `local`; a test pins `TZ=UTC` in both suites and
+asserts the shift, the `OCED_TZ` override, and passthrough. The suffix-less rule is why
+`o_local_ts` takes the format as an argument instead of hard-coding one.
+
+**README gains "Related tools".** The repo is one tool among several, so the README now
+names opencode's built-in `session export` and the third-party exporters by their
+category, then states the differential (read-only `mode=ro`, batch runs, the RAG `memory`
+corpus and `digest`, `snapshot: fresh` + sha256 backups, `shrink`/`--swap`, presets, the
+fzf menu, portable mode). Rationale and the full list stay here, out of the user-facing
+README.
+
+`menu_flow.sh` 338 -> 341 (three `o_local_ts` asserts); `export_smoke.sh` stays 396.
+
+### §47 The title column is capped and the agent column is fixed (current)
+
+§43/§45 chose "the full title, never truncated" and pushed the problem to fzf's right
+edge. On the real DB that backfired: a long title ran into `@agent` and pushed the agent
+token and the date right, so those two columns jittered on every row — the opposite of
+what the three-column row was for. Two changes make the row deterministic again, both in
+the one helper `oc_row_label` (`src/menu/core.sh`).
+
+**The title is capped, not merely padded.** The second column is now exactly `TITLE_COL_W`
+wide: a shorter title is padded, a longer one is cut to `TITLE_COL_W-1` plus a `…` marker.
+The marker language is `…` for a title (the id and the parent token keep their `_`, which
+reads as "this label continues" rather than "text was dropped") and the old
+`ROW_COL_GAP`-only-in-overflow branch is gone: with a fixed-width title column there is no
+overflow case left to special-case. `TITLE_COL_W` is 57 (the user's real titles are long, so
+the column is generous; a full row can exceed 80 cols and fzf truncates its right edge, but
+the agent/date columns stay put because they are absolute widths, not pushed by the title).
+
+**`@<agent>` is a fixed-width column.** The old row emitted the whole `@agent  ` block only
+when the agent was non-empty, and the block's width tracked the agent (`@build` vs
+`@explore`/`@general`), so a short/absent agent pulled the date left. It is now padded to
+`AGENT_COL_W`=10 and always reserved, so the date column starts at the same offset whether
+the agent is `@build`, `@general`, `@explore` or empty. A new `COL_GAP`=2 constant is the
+single "spaces between two columns" knob.
+
+The row is now `mark? | id(8) | title(44, capped) | COL_GAP | @agent(10) | date(16) |
+[(N sub) | → token]` — everything after the title is at a fixed offset, and only the
+trailing badge/ref is conditional (a root and a subagent legitimately end differently).
+`menu_flow.sh` re-pins the four fake-DB rows, replaces the "gap on overflow" guard with a
+cap guard (`TITLE_COL_W-1` + `…`), and adds an alignment guard: `oc_row_label` called with
+`build` / `general` / empty must place the date at the same index. It also keeps the
+"no `…` on a short title" check (none of the fake rows are long enough to be cut).
+
+`menu_flow.sh` 341 -> 342 (the cap+alignment guards replace the old single overflow guard);
 `export_smoke.sh` stays 396.

@@ -21,20 +21,17 @@ from exportlib.util import die
 from exportlib.flags import (
     FLAGS,
     PRODUCTS,
-    PRODUCT_KEYWORDS,
     PRODUCT_ALIASES,
     BUNDLE_PRODUCT_KEYS,
-    SELECTION_KEYS,
     SINGLE_PRESET_KEYS,
     BUNDLE_PRESET_KEYS,
 )
 
-# Re-export for backwards compat
+# Internal derived views of flags.py (the SSoT); no other module imports these.
 _PRODUCTS = PRODUCTS
 _PRODUCT_FLAG_KEYS = {k: v for k, v in BUNDLE_PRODUCT_KEYS.items()}
 _PRESET_KEYS_CHOICES = {f.name: f.choices for f in FLAGS if f.flag_type == "choice"}
 _PRESET_KEYS_BOOL = [f.name for f in FLAGS if f.flag_type == "bool"]
-_PRESET_KEYS_SELECTION = SELECTION_KEYS
 _PRESET_KEYS = SINGLE_PRESET_KEYS
 _PRESET_KEYS_BUNDLE = BUNDLE_PRESET_KEYS
 
