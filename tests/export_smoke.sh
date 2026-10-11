@@ -1238,6 +1238,9 @@ jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcrip
 run export share >/dev/null
 jq -e '.preset == "share" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'share' applies its single-product flags (no sanitize)" || bad "shipped share meta"
+run export prompts >/dev/null
+jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
+    && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
 export OCED_PRESETS="$PRESETS"
 
 echo "== shrink --swap (guarded replacement of the live fake DB) =="

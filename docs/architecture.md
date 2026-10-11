@@ -24,6 +24,11 @@ exports, but never modifies the database opencode uses live.
   a backup is never resolved inside `$(...)` (subshell) because that would create one
   temp per call that never gets cleaned.
 
+Reading the raw DB is also why this tool can export what `opencode export` cannot: the
+native command writes a **projected** transcript (post-compaction, context-epoch cutoffs,
+bounded tool output) and truncates piped output at 64 KiB boundaries (opencode issue
+#2803). The `mode=ro` read sees the full history and complete tool output regardless.
+
 ## 2. opencode data model (real schema)
 
 Verified information about the schema this tool consumes (not generic: other sources may
@@ -290,6 +295,14 @@ the date at the same offset), then the updated `YYYY-MM-DD HH:MM` date. The old 
 never truncated" rule pushed the metadata right on a long title; the row is now
 deterministic on every row (see export-analysis §47).
 
+**Heavy commands run under a light spinner.** The commands that stay quiet for a while
+before their one-line result (backup create, shrink build, `--swap`) are bracketed by
+`run_oced_tool_spin`, which draws frames on `/dev/tty` while the **same streaming**
+`run_oced_tool` runs. It never captures the output (the streaming contract holds), it is
+TTY-gated and a no-op under tests/pipes (and off with `OCED_SPINNER_DISABLE=1`), and the
+frames never reach stdout, so a pipe or the streamed log cannot see them (see
+export-analysis §48).
+
 **The export flow is sessions → preset → confirm.** The sessions picker comes first
 (all sessions marked, `(N sub)` badges, `subagents: shown ⇄ hidden`, recency-ordered with
 a flip row, marks in a 1/0 array so a re-sort or a bulk row cannot resurrect an
@@ -329,7 +342,7 @@ rows still come straight from `exportlib/plan.py products` but only as the CLI/t
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 `oc_preset_purpose` annotates the shipped plans
-(`archive`/`quick`/`share`/`notes`/`rag`/`digest`) with their intent (unknown names get
+(`archive`/`quick`/`share`/`notes`/`prompts`/`rag`/`digest`) with their intent (unknown names get
 the bare row). The confirm step prints the plan as a **flat, flush-left** block. The
 rationale is legibility at a glance: an indented tree forced the reader to decode a
 hierarchy that carries no extra meaning, and the bullets broke the alignment that made

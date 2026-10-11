@@ -56,6 +56,7 @@ PLAN_PURPOSE = {
     "quick": "light daily review: same backup, truncated tool outputs (fast, compact)",
     "share": "publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)",
     "notes": "plain conversation read: transcript with default options",
+    "prompts": "just your asks: only user prompts, no answers/reasoning/tools (task log)",
     "rag": "corpus for another AI: memory with default options",
     "digest": "knowledge arc: only the compaction summaries",
 }

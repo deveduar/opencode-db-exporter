@@ -28,6 +28,9 @@ export OCED_DISPATCHER="$MOD/opencode-db.sh"
 # Pickers render dates in LOCAL time (o_local_ts); pin the display TZ to UTC so
 # every row assertion stays byte-identical to the UTC feed regardless of host TZ.
 export TZ=UTC
+# Spinner is TTY-gated; force it off so a TTY-running suite stays deterministic
+# (and assert the disable switch below).
+export OCED_SPINNER_DISABLE=1
 bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 
 . "$MOD/common.sh"
@@ -1675,6 +1678,26 @@ CAPTURE=$(grep -n 'out=\$(bash "\$OC_DISPATCHER"' "$MOD/menu/core.sh")
 BARE=$(grep -rn 'run_oced_tool backup\s*\($\|;\)' "$MOD/menu/" | grep -v -- '--yes\|--dry-run')
 [ -z "$BARE" ] && ok "no bare 'run_oced_tool backup' in the menu (it would ask on stdin)" \
     || bad "menu calls a bare backup: $BARE"
+
+# Spinner: the heavy, quiet-until-the-end commands (backup create, shrink build,
+# swap) get a light spinner. It must be a NO-OP unless there is a TTY and the
+# caller did not disable it, must draw on /dev/tty (never stdout), and must NOT
+# capture the command (the "streams, never captures" contract above).
+grep -q 'OCED_SPINNER_DISABLE' "$MOD/menu/core.sh" && grep -q '>/dev/tty' "$MOD/menu/core.sh" \
+    && [ "$(grep -c '\[ -t 0 \]' "$MOD/menu/core.sh")" -ge 1 ] \
+    && ok "spinner is TTY-gated, disable-able and drawn on /dev/tty" \
+    || bad "spinner helper lost its TTY gate / disable switch / /dev/tty"
+SPIN_CAP=$(grep -n 'out=\$(.*bash "\$OC_DISPATCHER"' "$MOD/menu/core.sh")
+[ -z "$SPIN_CAP" ] && ok "run_oced_tool_spin never captures the command output" \
+    || bad "spinner path captures the dispatcher output (line $(cut -d: -f1 <<<"$SPIN_CAP"))"
+grep -q 'run_oced_tool_spin "Backing up" backup --yes' "$MOD/menu/backups.sh" \
+    && grep -q 'run_oced_tool_spin "Building shrink copy" shrink' "$MOD/menu/shrink.sh" \
+    && grep -q 'oc_spinner_start "Swapping"' "$MOD/menu/shrink.sh" \
+    && ok "heavy ops (backup create, shrink build, swap) run under the spinner" \
+    || bad "a heavy op is missing its spinner"
+( export OCED_SPINNER_DISABLE=1; unset OCED_SPINNER_PID; oc_spinner_start "x"; [ -z "${OCED_SPINNER_PID:-}" ] ) \
+    && ok "OCED_SPINNER_DISABLE=1 makes the spinner a no-op" \
+    || bad "spinner ignores OCED_SPINNER_DISABLE"
 
 if ! command -v script >/dev/null 2>&1; then
     echo "  [SKIP] pty streaming test: util-linux 'script' not available"

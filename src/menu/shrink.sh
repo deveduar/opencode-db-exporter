@@ -209,7 +209,7 @@ oc_shrink_confirm_run() {
     confirm_action "Build this shrink copy? The live DB is never modified; export memory first to keep its knowledge." \
         || { echo "   declined — back to the recipe step (ESC there cancels the flow)."; return 2; }
     # shellcheck disable=SC2086  # runargs must split ("--discard-sessions a,b")
-    run_oced_tool shrink $runargs
+    run_oced_tool_spin "Building shrink copy" shrink $runargs
     return $?
 }
 
@@ -387,8 +387,10 @@ oc_shrinks_swap_pick() {
     oc_confirm_typed "confirm" || return 0
     echo ""
     echo "   Swapping... (this may take a moment)"
+    oc_spinner_start "Swapping"
     oced_shrink_swap "$snap" 1
     local rc=$?
+    oc_spinner_stop
     [ "$rc" -ne 0 ] && return $rc
     # The pause rc travels to __SWAP__ so an ESC there closes the submenu
     # instead of silently redrawing the list.

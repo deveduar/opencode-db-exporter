@@ -107,6 +107,7 @@ their purpose:
 | `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
 | `share` | transcript (`json` + `no_reasoning`) | **publish transcript**: faithful JSON, no reasoning. It does **not** redact — add `--sanitize` (best effort) yourself, and read the output before you publish | medium |
 | `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
+| `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
 | `backup_then_full` | transcript (`snapshot: fresh` + `tool_output full`) | **archive-grade but safe to run any time**: offers a fresh backup first when the last one diverged from the live DB | heavy |
@@ -229,6 +230,7 @@ Three behaviours worth knowing:
 | review what I did today, fast | `export quick` | light, readable transcript + corpus |
 | send a session to a colleague / paste in an issue / publish | `export share` | no reasoning + faithful JSON; it does **not** redact — add `--sanitize` if you must (best effort) and **read the output before sharing** |
 | read a conversation plain | `export notes` | plain transcript defaults, nothing extra |
+| collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
 | archive-grade export, but make sure the backup is current first | `export backup_then_full` | offers a fresh backup when the last one diverged, then a full transcript |

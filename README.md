@@ -27,6 +27,15 @@ only partly, and focuses on:
 - **backups** with a sha256 manifest, and **`shrink`** (with an opt-in, guarded `--swap`);
 - named **presets**, an **fzf menu**, and a portable, no-install layout.
 
+Two caveats about the built-in `opencode export` explain the overlap and the gap this tool
+fills. First, it exports a **projected** transcript: the session *after* compaction and
+context-epoch cutoffs, with tool output bounded by opencode's own limits — so the earliest
+turns and the raw tool output can be missing. Second, piping its JSON to another program
+truncates large payloads to a multiple of 64 KiB (a known opencode bug; redirecting to a
+file avoids it). `opencode-db-exporter` sidesteps both by reading the raw SQLite file in
+`mode=ro`, so the full history, pre-compaction turns and complete tool outputs stay
+exportable. The full design rationale is in **[docs/architecture.md](docs/architecture.md)**.
+
 ## Requirements
 
 - Linux (tested on Debian/Ubuntu) and the opencode CLI
@@ -252,6 +261,7 @@ and the `exports list` line).
       "no_reasoning": true
     },
     "notes": { "product": "transcript" },
+    "prompts": { "product": "transcript", "role": "user" },
     "rag":   { "product": "memory" },
     "digest": { "product": "digest" },
     "backup_then_full": {
@@ -505,8 +515,8 @@ Environment variables still win over that file, which in turn wins over the per-
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 396 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 341 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 397 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 346 OK / 0 FAIL
 ```
 
 ## Layout

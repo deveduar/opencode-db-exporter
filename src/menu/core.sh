@@ -83,6 +83,53 @@ run_oced_tool() {
     return 0
 }
 
+#-----------------------------------------------------------------------
+# Light spinner for the heavy commands that stay QUIET for a while before
+# their one-line result (backup create, shrink create / --swap). It is:
+#   * TTY-only, a NO-OP otherwise (tests, pipes, a scripted menu) — and
+#     OCED_SPINNER_DISABLE=1 forces it off, so it can never alter captured
+#     output or make a suite flaky;
+#   * written to /dev/tty, NOT stdout, so it never enters a pipe or the
+#     streamed log that `run_oced_tool` writes;
+#   * it NEVER captures the command's output: `run_oced_tool_spin` calls the
+#     SAME streaming `run_oced_tool`, it only brackets it (the "streams, never
+#     captures" contract stays intact).
+#-----------------------------------------------------------------------
+OCED_SPINNER_PID=""
+oc_spinner_start() {
+    local label="${1:-Working}"
+    [ "${OCED_SPINNER_DISABLE:-0}" = "1" ] && return 0
+    [ -t 0 ] || return 0
+    { : >/dev/tty; } 2>/dev/null || return 0
+    local frames='|/-\'
+    (
+        local i=0
+        while :; do
+            printf '\r\033[K  %s %s…' "${frames:i++%${#frames}:1}" "$label" >/dev/tty 2>/dev/null
+            sleep 0.15
+        done
+    ) &
+    OCED_SPINNER_PID=$!
+}
+oc_spinner_stop() {
+    [ -n "${OCED_SPINNER_PID:-}" ] || return 0
+    kill "$OCED_SPINNER_PID" 2>/dev/null || true
+    wait "$OCED_SPINNER_PID" 2>/dev/null || true
+    OCED_SPINNER_PID=""
+    printf '\r\033[K' >/dev/tty 2>/dev/null
+    return 0
+}
+# run_oced_tool_spin <label> -- <command...> -> run_oced_tool under the spinner.
+run_oced_tool_spin() {
+    local label="$1"; shift
+    [ "${1:-}" = "--" ] && shift
+    oc_spinner_start "$label"
+    run_oced_tool "$@"
+    local rc=$?
+    oc_spinner_stop
+    return "$rc"
+}
+
 confirm_action() {
     local message="$1"
     local answer

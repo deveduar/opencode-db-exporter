@@ -20,6 +20,10 @@
     "notes": {
       "product": "transcript"
     },
+    "prompts": {
+      "product": "transcript",
+      "role": "user"
+    },
     "rag": {
       "product": "memory"
     },

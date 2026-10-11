@@ -68,8 +68,8 @@ oc_backups_picker() {
             # keypress arrived, which (being an empty line) cancelled the backup.
             __CREATE__)
                 run_oced_tool backup --dry-run
-                confirm_action "Create this backup now?" || { echo "   cancelled."; continue; }
-                run_oced_tool backup --yes
+                confirm_action "Create this backup now?" || { echo "   cancelled."; return 0; }
+                run_oced_tool_spin "Backing up" backup --yes
                 menu_pause "New backup" || return 0
                 continue
                 ;;

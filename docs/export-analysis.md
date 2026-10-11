@@ -1714,3 +1714,33 @@ cap guard (`TITLE_COL_W-1` + `…`), and adds an alignment guard: `oc_row_label`
 
 `menu_flow.sh` 341 -> 342 (the cap+alignment guards replace the old single overflow guard);
 `export_smoke.sh` stays 396.
+
+## §48 Truncation documented, a "prompts only" preset, and a light spinner (current)
+
+Three small, orthogonal answers to a Q&A round. None changes the read-only model.
+
+**opencode's own export is truncated — say so.** Reading the project's issues/docs makes the
+overlap with this tool explicit: `opencode export` writes a **projected** transcript (the
+session *after* compaction and context-epoch cutoffs, with tool output bounded by opencode's
+own limits) and, separately, piping its JSON truncates large payloads at multiples of 65536
+(opencode issue #2803; to a file it is fine). The README's *Related tools* section now states
+both and why reading the raw DB in `mode=ro` avoids them; it is a **doc** change, no code.
+
+**`prompts`: a preset is the right home, not a product.** `opencode-db` already has every
+piece — `role` is a real flag (`--role user|assistant|all`) and a preset key — so "give me
+just the user prompts" needed no engine change: the shipped `presets.json` gains
+`"prompts": { "product": "transcript", "role": "user" }`. The README's verbatim presets
+snippet was updated in the same commit because the anti-drift guard compares the two, and
+`export_smoke.sh` now runs the shipped preset and asserts `metadata.json` carries
+`.role == "user"`.
+
+**A light spinner, drawn where it cannot be captured.** The heavy commands that stay quiet
+for a while (backup create, shrink build, `--swap`) now run under `run_oced_tool_spin`, a
+thin bracket around the **same** streaming `run_oced_tool` — it does not capture. The spinner
+frames go to `/dev/tty`, never stdout, so they cannot enter the pipe/streamed log; it is
+TTY-gated and a no-op under tests/pipes, and `OCED_SPINNER_DISABLE=1` forces it off.
+`menu_flow.sh` guards the TTY gate, the `/dev/tty` target, the three wrapped call sites, the
+no-capture property and the disable switch; `OCED_SPINNER_DISABLE=1` is pinned in the suite.
+
+`export_smoke.sh` 396 -> 397 (the shipped `prompts` preset); `menu_flow.sh` 342 -> 346 (the
+spinner guards).
