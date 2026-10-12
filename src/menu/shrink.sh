@@ -116,7 +116,7 @@ oc_shrink_discard_offer() {
         printf '     … and %s more (all of them: %s)\n' "$((total - DISCARD_LIST_MAX))" "$cascade"
     fi
     if confirm_action "Export them first (opencode-db export $profile --sessions)? This is the SAFE order (backup -> export $profile -> shrink)."; then
-        run_oced_tool export "$profile" --sessions "$cascade"
+        run_oced_tool_spin "Exporting" export "$profile" --sessions "$cascade"
         echo ""
     else
         echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $cascade"

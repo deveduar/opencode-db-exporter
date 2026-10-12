@@ -71,7 +71,7 @@ oc_preset_run() {
             echo "   archive, so the last backup should match the live DB (currently: $align)."
             if confirm_action "Create a fresh backup first? (recommended)"; then
                 run_oced_tool backup --dry-run
-                run_oced_tool backup --yes
+                run_oced_tool_spin "Backing up" backup --yes
             fi
         fi
     fi
@@ -151,10 +151,10 @@ oc_preset_run() {
 
     if [ "$all_marked" = 1 ]; then
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool export "$name" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" "${extra[@]}"
     else
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool export "$name" --sessions "$run_csv" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" --sessions "$run_csv" "${extra[@]}"
     fi
     return 0
 }

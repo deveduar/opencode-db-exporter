@@ -1735,12 +1735,16 @@ snippet was updated in the same commit because the anti-drift guard compares the
 `.role == "user"`.
 
 **A light spinner, drawn where it cannot be captured.** The heavy commands that stay quiet
-for a while (backup create, shrink build, `--swap`) now run under `run_oced_tool_spin`, a
+for a while (backup create, export create, the shrink discard-offer export, shrink build,
+`--swap`) now run under `run_oced_tool_spin`, a
 thin bracket around the **same** streaming `run_oced_tool` — it does not capture. The spinner
 frames go to `/dev/tty`, never stdout, so they cannot enter the pipe/streamed log; it is
 TTY-gated and a no-op under tests/pipes, and `OCED_SPINNER_DISABLE=1` forces it off.
-`menu_flow.sh` guards the TTY gate, the `/dev/tty` target, the three wrapped call sites, the
+`menu_flow.sh` guards the TTY gate, the `/dev/tty` target, every wrapped call site, the
 no-capture property and the disable switch; `OCED_SPINNER_DISABLE=1` is pinned in the suite.
+The export run is not a special case: the picker's `oc_preset_run` and the shrink
+discard-offer confirm both go through the spinner, so "create an export" and "export them
+first" are covered wherever they are launched from.
 
 `export_smoke.sh` 396 -> 397 (the shipped `prompts` preset); `menu_flow.sh` 342 -> 346 (the
 spinner guards).

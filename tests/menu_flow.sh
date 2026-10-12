@@ -1679,10 +1679,11 @@ BARE=$(grep -rn 'run_oced_tool backup\s*\($\|;\)' "$MOD/menu/" | grep -v -- '--y
 [ -z "$BARE" ] && ok "no bare 'run_oced_tool backup' in the menu (it would ask on stdin)" \
     || bad "menu calls a bare backup: $BARE"
 
-# Spinner: the heavy, quiet-until-the-end commands (backup create, shrink build,
-# swap) get a light spinner. It must be a NO-OP unless there is a TTY and the
-# caller did not disable it, must draw on /dev/tty (never stdout), and must NOT
-# capture the command (the "streams, never captures" contract above).
+# Spinner: the heavy, quiet-until-the-end commands (backup create, export
+# create, the shrink discard-offer export, shrink build, swap) get a light
+# spinner. It must be a NO-OP unless there is a TTY and the caller did not
+# disable it, must draw on /dev/tty (never stdout), and must NOT capture the
+# command (the "streams, never captures" contract above).
 grep -q 'OCED_SPINNER_DISABLE' "$MOD/menu/core.sh" && grep -q '>/dev/tty' "$MOD/menu/core.sh" \
     && [ "$(grep -c '\[ -t 0 \]' "$MOD/menu/core.sh")" -ge 1 ] \
     && ok "spinner is TTY-gated, disable-able and drawn on /dev/tty" \
@@ -1691,9 +1692,12 @@ SPIN_CAP=$(grep -n 'out=\$(.*bash "\$OC_DISPATCHER"' "$MOD/menu/core.sh")
 [ -z "$SPIN_CAP" ] && ok "run_oced_tool_spin never captures the command output" \
     || bad "spinner path captures the dispatcher output (line $(cut -d: -f1 <<<"$SPIN_CAP"))"
 grep -q 'run_oced_tool_spin "Backing up" backup --yes' "$MOD/menu/backups.sh" \
+    && grep -q 'run_oced_tool_spin "Backing up" backup --yes' "$MOD/menu/export.sh" \
+    && grep -q 'run_oced_tool_spin "Exporting" export "\$name"' "$MOD/menu/export.sh" \
+    && grep -q 'run_oced_tool_spin "Exporting" export "\$profile" --sessions "\$cascade"' "$MOD/menu/shrink.sh" \
     && grep -q 'run_oced_tool_spin "Building shrink copy" shrink' "$MOD/menu/shrink.sh" \
     && grep -q 'oc_spinner_start "Swapping"' "$MOD/menu/shrink.sh" \
-    && ok "heavy ops (backup create, shrink build, swap) run under the spinner" \
+    && ok "heavy ops (backup/export/shrink create, discard-offer export, swap) run under the spinner" \
     || bad "a heavy op is missing its spinner"
 ( export OCED_SPINNER_DISABLE=1; unset OCED_SPINNER_PID; oc_spinner_start "x"; [ -z "${OCED_SPINNER_PID:-}" ] ) \
     && ok "OCED_SPINNER_DISABLE=1 makes the spinner a no-op" \

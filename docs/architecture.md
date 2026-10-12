@@ -296,7 +296,8 @@ never truncated" rule pushed the metadata right on a long title; the row is now
 deterministic on every row (see export-analysis §47).
 
 **Heavy commands run under a light spinner.** The commands that stay quiet for a while
-before their one-line result (backup create, shrink build, `--swap`) are bracketed by
+before their one-line result (backup create, export create, the shrink discard-offer export,
+shrink build, `--swap`) are bracketed by
 `run_oced_tool_spin`, which draws frames on `/dev/tty` while the **same streaming**
 `run_oced_tool` runs. It never captures the output (the streaming contract holds), it is
 TTY-gated and a no-op under tests/pipes (and off with `OCED_SPINNER_DISABLE=1`), and the
