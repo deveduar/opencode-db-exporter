@@ -249,27 +249,51 @@ and the `exports list` line).
 {
   "presets": {
     "archive": {
+      "description": "lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)",
       "products": {
-        "transcript": { "json": true, "tool_output": "full" },
-        "memory": { "files": true }
+        "transcript": {"json": true, "tool_output": "full"},
+        "memory": {"files": true}
       }
     },
     "quick": {
+      "description": "light daily review: same backup, truncated tool outputs (fast, compact)",
       "products": {
-        "transcript": { "json": true, "tool_output": "truncated" },
-        "memory": { "files": true }
+        "transcript": {"json": true, "tool_output": "truncated"},
+        "memory": {"files": true}
       }
     },
     "share": {
+      "description": "publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)",
       "product": "transcript",
       "json": true,
       "no_reasoning": true
     },
-    "notes": { "product": "transcript" },
-    "prompts": { "product": "transcript", "role": "user" },
-    "rag":   { "product": "memory" },
-    "digest": { "product": "digest" },
+    "notes": {
+      "description": "plain conversation read: the transcript product with default options",
+      "product": "transcript"
+    },
+    "conversation": {
+      "description": "conversation only: user + assistant text, no tools, patches or reasoning (light)",
+      "product": "transcript",
+      "tool_output": "omit",
+      "patch": "omit",
+      "no_reasoning": true
+    },
+    "prompts": {
+      "description": "just your asks: only user prompts, no answers/reasoning/tools (task log)",
+      "product": "transcript",
+      "role": "user"
+    },
+    "rag": {
+      "description": "corpus for another AI: the memory product with default options",
+      "product": "memory"
+    },
+    "digest": {
+      "description": "knowledge arc: only the compaction summaries",
+      "product": "digest"
+    },
     "audit_archive": {
+      "description": "audit-grade: full transcript + complete tool outputs + fresh-backup check (heavy)",
       "product": "transcript",
       "snapshot": "fresh",
       "tool_output": "full"

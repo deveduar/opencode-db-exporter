@@ -18,18 +18,13 @@ oc_preset_rows() {
     oc_plan_py rows
 }
 
-oc_preset_descr() { # $1=preset-name -> one-line selection summary (plan line)
-    [ -f "${OCED_PRESETS:-}" ] || return 1
-    oc_plan_py descr "$1" || return 1
-}
-
 oc_export_rows() {
     oc_preset_rows
 }
 
 oc_export_presets_picker() {
     local csv="$1" hide="${2:-0}"
-    local sel key header name seldesc
+    local sel key header name
     while true; do
         header=$'Export — pick a plan (preset): products + config from the presets file'
         [ "$hide" = "1" ] && header+=$'\n'"(subagents hidden: roots only)"
@@ -40,8 +35,7 @@ oc_export_presets_picker() {
             __NONE__)   continue ;;
             __PRESET_*)
                 name="${key#__PRESET_}"
-                seldesc=$(oc_preset_descr "$name") || seldesc=""
-                if oc_preset_run "$name" "$seldesc" "$csv" "$hide"; then
+                if oc_preset_run "$name" "$csv" "$hide"; then
                     # The run is done: hand control back up (make_action ->
                     # the session picker -> oc_export_picker -> __CREATE__ of the
                     # exports picker), which owns the pause and decides whether
@@ -53,15 +47,14 @@ oc_export_presets_picker() {
     done
 }
 
-# oc_preset_run <preset> <descr> <csv> [hide_subs] -> confirm and run.
+# oc_preset_run <preset> <csv> [hide_subs] -> confirm and run.
 # If the user did NOT narrow the selection (every row the picker rendered is
 # still marked), the preset runs AS CONFIGURED — its own filter/sessions apply
 # and no --sessions is passed. Once the user unmarks anything the menu wins:
 # with hide_subs=1 the marked roots expand to their full subagent cascade (no
 # --no-subagents, since a hidden subagent follows its root).
 oc_preset_run() {
-    local name="$1" descr="$2" csv="$3" hide="${4:-0}" purpose
-    purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
+    local name="$1" csv="$2" hide="${3:-0}"
 
     # snapshot: fresh — offer a backup when not aligned.
     if [ "$(oc_plan_py snapshot "$name" 2>/dev/null)" = "fresh" ]; then
@@ -298,12 +291,6 @@ oc_export_standalone_subs() {
 # oc_pick_product is gone (no manual flow): the menu exports through named
 # presets; product rows are still served by exportlib/plan.py `products` for
 # the CLI/tests (product-keyword exports work on the CLI without presets).
-
-# oc_preset_purpose <name> -> one-line purpose for the shipped plans (unknown -> 1).
-# The purpose map lives in exportlib/plan.py (PLAN_TEXT) — the single source.
-oc_preset_purpose() {
-    oc_plan_py purpose "$1"
-}
 
 # oc_preset_names -> preset names present in OCED_PRESETS (one per line).
 oc_preset_names() {

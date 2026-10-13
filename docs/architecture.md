@@ -309,8 +309,8 @@ export-analysis §48).
 (`(N sub)` badges, `subagents: shown ⇄ hidden` **starting hidden** so roots-only is the
 default, recency-ordered with a flip row, marks in a 1/0 array so a re-sort or a bulk row
 cannot resurrect an unmarked session). Then the **preset-only** picker lists each named
-preset as a direct action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle
-presets render as `[transcript+memory]`); **without the file it prints setup guidance**
+preset as a direct action (rows/descriptions/plans resolved by `exportlib/plan.py`;
+bundle presets render as `[transcript+memory]`); **without the file it prints setup guidance**
 (`cp presets.json …`) plus the raw CLI — **there is no manual session→product
 fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone).
 Asking for the selection *after* the plan was the old order and it was wrong twice
@@ -347,9 +347,10 @@ Product
 rows still come straight from `exportlib/plan.py products` but only as the CLI/test API
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
-`oc_preset_purpose` annotates the shipped plans
-(`archive`/`quick`/`share`/`notes`/`prompts`/`rag`/`digest`) with their intent (unknown names get
-the bare row). The confirm step prints the plan as a **flat, flush-left** block. The
+each preset carries its own `description` **in the presets file**, so the shipped
+plans (`archive`/`quick`/`share`/`notes`/`conversation`/`prompts`/`rag`/`digest`/`audit_archive`) annotate themselves
+from the same source that defines them (a preset with no `description` shows the bare
+row). The confirm step prints the plan as a **flat, flush-left** block. The
 rationale is legibility at a glance: an indented tree forced the reader to decode a
 hierarchy that carries no extra meaning, and the bullets broke the alignment that made
 the rows scannable. So `plan_text()` emits one line per product at the left margin with
@@ -507,7 +508,7 @@ shrinks picker), and it is the only way to create a shrink from the menu:
    and the marks live in an associative array, so re-sorting loses nothing. The session
    order is the *only* thing the toggle changes — the selection is run-time state.
 2. `oc_shrink_ops_pick <sel-args>` — the **recipe**, and nothing else: the recipe rows
-   (`shrinklib/plan.py rows`), each described by its purpose. There is no operation
+   (`shrinklib/plan.py rows`), each carrying its own `description`. There is no operation
    toggle and no "continue" row: every row is a named ops-only recipe (`lean` strips
    reasoning, `quiet` prunes + vacuums), and picking one bakes its operations and goes
    straight to the plan. Composition is expressed by writing a recipe, not by stacking

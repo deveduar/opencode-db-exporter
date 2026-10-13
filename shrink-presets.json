@@ -1,8 +1,11 @@
 {
   "presets": {
     "lean": {
+      "description": "strip the reasoning parts (smallest text; reasoning is not displayed anyway)",
       "strip_reasoning": true
     },
-    "quiet": {}
+    "quiet": {
+      "description": "prune + vacuum only: keep the full text of the sessions you keep"
+    }
   }
 }

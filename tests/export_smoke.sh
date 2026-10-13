@@ -1269,6 +1269,12 @@ jq -e '.preset == "share" and .reasoning == false and .json == true and .sanitiz
 run export prompts >/dev/null
 jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
+run export conversation >/dev/null
+CONV="$(last_meta transcript)"
+jq -e '.preset == "conversation" and .tool_output == "omit" and .reasoning == false' "$CONV" >/dev/null \
+    && ok "shipped 'conversation' drops tools and reasoning (tool_output omit, reasoning off)" || bad "shipped conversation meta"
+grep -q '^| Reasoning | `off` |$' "${CONV%/metadata.json}/index.md" \
+    && ok "shipped 'conversation' index records reasoning off" || bad "conversation index reasoning row"
 export OCED_PRESETS="$PRESETS"
 
 echo "== CLI plan discovery: --list-presets / --show / --dry-run =="
@@ -1296,19 +1302,19 @@ after=$(find "$OUT" -maxdepth 2 -name metadata.json | wc -l)
 NDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-presets); ndrc=$?
 { [ "$ndrc" -eq 0 ] && printf '%s' "$NDB" | grep -q "archive"; } \
     && ok "export --list-presets needs no database" || bad "list-presets without DB rc=$ndrc"
-# The purpose text is hand-written once (PLAN_TEXT): prompts is not a plain
-# transcript, and the renamed snapshot plan says what it does.
+# The description travels with the recipe (the presets file): prompts is not a
+# plain transcript, and the renamed snapshot plan says what it does.
 printf '%s' "$LP" | grep -q "just your asks" \
-    && ok "--list-presets carries the real purpose of prompts" || bad "prompts purpose: $(printf '%s' "$LP" | grep prompts)"
-printf '%s' "$LP" | grep -q "audit-grade full transcript" \
-    && ok "--list-presets carries the renamed audit_archive purpose" || bad "audit_archive purpose missing"
-# The picker rows use the same hand-written blurb (never a flag-derived guess):
+    && ok "--list-presets carries the description of prompts from the file" || bad "prompts description: $(printf '%s' "$LP" | grep prompts)"
+printf '%s' "$LP" | grep -q "audit-grade: full transcript" \
+    && ok "--list-presets carries the renamed audit_archive description" || bad "audit_archive description missing"
+# The picker rows use the same file description (never a flag-derived guess):
 # the old taxonomy labelled prompts AND the snapshot plan "read (transcript defaults)".
 PROWS=$(OCED_PRESETS="$EXAMPLE" python3 "$MOD/exportlib/plan.py" rows)
-printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only your prompts' \
-    && ok "picker row of prompts shows its real blurb" || bad "prompts blurb: $(printf '%s' "$PROWS" | grep prompts)"
-printf '%s' "$PROWS" | grep -q '^__PRESET_audit_archive.*fresh-backup guard' \
-    && ok "picker row of audit_archive shows its blurb" || bad "audit_archive blurb missing"
+printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only user prompts' \
+    && ok "picker row of prompts shows its file description" || bad "prompts description: $(printf '%s' "$PROWS" | grep prompts)"
+printf '%s' "$PROWS" | grep -q '^__PRESET_audit_archive.*complete tool outputs' \
+    && ok "picker row of audit_archive shows its file description" || bad "audit_archive description missing"
 printf '%s' "$PROWS" | grep -q "transcript defaults" \
     && bad "picker row still claims 'transcript defaults'" || ok "no picker row falls back to 'transcript defaults'"
 # --list-products names the document kinds and their aliases; no DB needed.

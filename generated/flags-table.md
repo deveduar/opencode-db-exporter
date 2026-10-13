@@ -1,5 +1,6 @@
 | `product` | string | `transcript` \| `memory` \| `digest` | single only (`full` is a CLI alias, **not** a preset product) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
+| `description` | string | — | optional human one-liner (picker row / `--list-presets` / legend); it travels with the recipe |
 | Product flags (top level for single, per product for bundle): | | | |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
 | `no_subagents` | bool | — | any |

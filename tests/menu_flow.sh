@@ -503,16 +503,16 @@ echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
 export OCED_PRESETS="$TMP/presets.json"
 cat > "$OCED_PRESETS" <<'EOF'
 {"presets": {
-   "clean": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true, "filter": "Project Beta"},
-   "everything": {"products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
-   "archive": {"products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
-   "notes": {"product": "transcript"},
-   "rag": {"product": "memory"},
-   "digest": {"product": "compactions"},
-   "snappy": {"product": "transcript", "snapshot": "fresh"},
-   "share": {"product": "transcript", "json": true, "sanitize": true, "no_reasoning": true},
-   "nosub": {"product": "transcript", "no_subagents": true},
-   "narrow": {"product": "transcript", "sub": "omit"}
+   "clean": {"description": "sanitized redacted transcript", "product": "transcript", "json": true, "sanitize": true, "no_reasoning": true, "filter": "Project Beta"},
+   "everything": {"description": "everything bundle", "products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
+   "archive": {"description": "lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)", "products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
+   "notes": {"description": "plain transcript read", "product": "transcript"},
+   "rag": {"description": "memory corpus", "product": "memory"},
+   "digest": {"description": "compaction digests", "product": "compactions"},
+   "snappy": {"description": "fresh-backup transcript", "product": "transcript", "snapshot": "fresh"},
+   "share": {"description": "sanitized share", "product": "transcript", "json": true, "sanitize": true, "no_reasoning": true},
+   "nosub": {"description": "transcript without subagents", "product": "transcript", "no_subagents": true},
+   "narrow": {"description": "narrow transcript", "product": "transcript", "sub": "omit"}
 }}
 EOF
 reset
@@ -525,34 +525,32 @@ printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_everything.*\[transcript+
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*\[transcript\]' \
     && ok "presets mode lists default plan notes [transcript]" || bad "notes row missing"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*plain transcript' \
-    && ok "presets mode row of notes uses the hand-written PLAN_TEXT blurb" || bad "notes blurb: $(printf '%s\n' "$(oc_export_rows)" | grep notes)"
+    && ok "presets mode row of notes uses the description from the presets file" || bad "notes description: $(printf '%s\n' "$(oc_export_rows)" | grep notes)"
 printf '%s\n' "$(oc_export_rows)" | grep -q "transcript defaults" \
     && bad "a preset row still claims 'transcript defaults'" || ok "no preset row falls back to 'transcript defaults'"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_rag.*\[memory\]' \
     && ok "presets mode lists default plan rag [memory]" || bad "rag row missing"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_digest.*\[compactions\]' \
     && ok "presets mode lists default plan digest [compactions]" || bad "digest row missing"
-printf '%s' "$(oc_preset_descr everything)" | grep -q 'products transcript+memory' \
-    && ok "oc_preset_descr names the bundle products" || bad "bundle descr: $(oc_preset_descr everything)"
-[ -n "$(oc_preset_purpose archive)" ] && [ -z "$(oc_preset_purpose unknownname || true)" ] \
-    && ok "oc_preset_purpose annotates shipped plans only" || bad "preset purpose"
 printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless' \
-    && ok "preset rows include purpose tag (archive shows lossless)" || bad "preset rows missing purpose: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
+    && ok "preset rows include the preset's own description (archive shows lossless)" || bad "preset rows missing description: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
+printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_clean' | grep -q 'sanitized redacted transcript' \
+    && ok "preset rows carry arbitrary file description text verbatim" || bad "clean description: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_clean')"
 # Preset rows are THREE columns (name | [products] | description) and carry no
 # operator symbology: the old row chained `key  [products]  —  · purpose`, and
 # the `—` placeholder + `·` marker were noise on every shipped preset (which
-# pins no selection and always carries a purpose).
+# pins no selection and always carries a description).
 PROWS=$(oc_export_rows)
 printf '%s\n' "$PROWS" | grep -qE ' · |—' \
     && bad "export preset rows reintroduced symbology: [$(printf '%s\n' "$PROWS" | grep -nE ' · |—' | head -1)]" \
     || ok "export preset rows have no ' · ' marker and no em dash"
 ACT_ARCH=$(printf '%s\n' "$PROWS" | grep '^__PRESET_archive' | cut -f2)
-EXPECT_ARCH="archive    [transcript+memory]    lossless everything (full + JSON + files)"
+EXPECT_ARCH="archive    [transcript+memory]    lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)"
 [ "$ACT_ARCH" = "$EXPECT_ARCH" ] \
     && ok "export preset row is three columns (name | [products] | description)" \
     || bad "archive preset row shape: [$ACT_ARCH]"
 ACT_CLEAN=$(printf '%s\n' "$PROWS" | grep '^__PRESET_clean' | cut -f2)
-EXPECT_CLEAN="clean      [transcript]           filter Project Beta  config json,no_reasoning,sanitize"
+EXPECT_CLEAN="clean      [transcript]           filter Project Beta  sanitized redacted transcript"
 [ "$ACT_CLEAN" = "$EXPECT_CLEAN" ] \
     && ok "a pinned selection rides in the description column" \
     || bad "clean preset row: [$ACT_CLEAN]"
@@ -967,19 +965,19 @@ ALL_IDS="ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01"
 #    confirmation says the marks are ignored (no silent surprise).
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
-oc_preset_run clean "" "$ALL_IDS" 0 > "$TMP/c1.txt" 2>&1
+oc_preset_run clean "$ALL_IDS" 0 > "$TMP/c1.txt" 2>&1
 grep -qE '^Sessions: +filter "Project Beta" \(from the preset\) — your 6 marks are not used' "$TMP/c1.txt" \
     && ok "all marked + pinned filter: the preset wins and says so" || bad "c1: $(grep 'Sessions:' "$TMP/c1.txt")"
 grep -qx 'export clean' "$CALLS" && ok "all marked passes no --sessions (the preset selection applies)" || bad "c1 cmd: $(cat "$CALLS")"
 # 2) a partial selection always overrides the preset, and says it does.
 : > "$CALLS"
-oc_preset_run clean "" "ses_A0001,ses_B0001" 0 > "$TMP/c2.txt" 2>&1
+oc_preset_run clean "ses_A0001,ses_B0001" 0 > "$TMP/c2.txt" 2>&1
 grep -qE '^Sessions: +the 2 sessions you marked \(the menu overrides the preset: filter "Project Beta"\)' "$TMP/c2.txt" \
     && ok "partial marks override the preset filter, and the plan says so" || bad "c2: $(grep 'Sessions:' "$TMP/c2.txt")"
 grep -qx 'export clean --sessions ses_A0001,ses_B0001' "$CALLS" && ok "partial marks pass --sessions" || bad "c2 cmd: $(cat "$CALLS")"
 # 3) everything marked + a preset that pins nothing -> the marks really are all.
 : > "$CALLS"
-oc_preset_run notes "" "$ALL_IDS" 0 > "$TMP/c3.txt" 2>&1
+oc_preset_run notes "$ALL_IDS" 0 > "$TMP/c3.txt" 2>&1
 grep -qE '^Sessions: +all 6 sessions in the DB' "$TMP/c3.txt" \
     && ok "all marked + no pinned selection = every session" || bad "c3: $(grep 'Sessions:' "$TMP/c3.txt")"
 grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is marked" || bad "c3 cmd: $(cat "$CALLS")"
@@ -987,7 +985,7 @@ grep -qx 'export notes' "$CALLS" && ok "no --sessions when every session is mark
 #    plan says that instead of letting the user toggle in vain.
 #    Use ALL_IDS (roots + subagents) so "explicitly unmarked" doesn't trigger.
 : > "$CALLS"
-oc_preset_run nosub "" "$ALL_IDS" 0 > "$TMP/c4.txt" 2>&1
+oc_preset_run nosub "$ALL_IDS" 0 > "$TMP/c4.txt" 2>&1
 grep -q 'the preset drops every subagent' "$TMP/c4.txt" \
     && ok "a subagent-dropping preset is called out in the plan" || bad "c4: $(grep 'Note:' "$TMP/c4.txt")"
 grep -qE '^Menu adds: +nothing' "$TMP/c4.txt" \
@@ -1202,7 +1200,7 @@ grep -qE "Discard: +2 root\(s\) \+ 1 subagent\(s\) = 3 session\(s\) \(cascade\)"
 grep -qE "^     part +[0-9]+$" "$TMP/plan.txt" && ok "the plan counts rows per table" || bad "plan per-table rows missing"
 grep -q "read-only counts" "$TMP/plan.txt" && ok "the plan says it is read-only" || bad "plan read-only note missing"
 grep -qE "Recipe: +quiet - prune \+ vacuum only" "$TMP/plan.txt" \
-    && ok "the plan names the recipe picked in the previous step (with its purpose)" || bad "plan recipe line: $(grep -E 'Recipe:|Command:' "$TMP/plan.txt")"
+    && ok "the plan names the recipe picked in the previous step (with its description)" || bad "plan recipe line: $(grep -E 'Recipe:|Command:' "$TMP/plan.txt")"
 grep -qE "Command: +shrink --discard-sessions" "$TMP/plan.txt" \
     && ok "the plan shows the effective command the engine will run" || bad "plan command line missing"
 

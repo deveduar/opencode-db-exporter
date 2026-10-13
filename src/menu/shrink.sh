@@ -157,7 +157,7 @@ oc_shrink_confirm_run() {
     printf '   %-11s %s\n' "Source:" "$OPENCODE_DB (LIVE DB, own snapshot)"
     printf '   %-11s %s\n' "Output:" "$OCED_BACKUP_DIR/shrink/<timestamp>/ (swap manually)"
     if [ -n "$recipe" ]; then
-        recipe_purpose=$(oc_shrink_py purpose "$recipe" 2>/dev/null)
+        recipe_purpose=$(oc_shrink_py description "$recipe" 2>/dev/null)
         printf '   %-11s %s\n' "Recipe:" "$recipe${recipe_purpose:+ - $recipe_purpose}"
     fi
     printf '   %-11s shrink %s\n' "Command:" "$runargs"

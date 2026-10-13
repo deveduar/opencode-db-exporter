@@ -17,7 +17,7 @@
 #   rows                 TSV operation-recipe rows for the fzf picker (key<TAB>display)
 #   names                recipe/preset names (merged, one per line)
 #   descr <name>         one-line summary of a recipe (its operations)
-#   purpose <name>       one-line purpose for the shipped recipes (unknown -> 1)
+#   description <name>   the recipe's own one-line description (unknown -> 1)
 #   plan <name>          multi-line "Will produce:" block for a recipe
 #   bake <name>          raw flags for the bash parser (operations; last-wins)
 #   ops-flags <strip>    raw flags for a TOGGLED operation set (menu: 0|1)
@@ -45,7 +45,7 @@ try:
         rule_lines,
         rule_tags,
     )
-    from shrinklib.flags import SHRINK_PRESET_PURPOSE
+    from shrinklib.flags import RECIPE_DESCRIPTION_KEY
 except ImportError:
     # fallback for in-place execution (python3 src/shrinklib/plan.py ...)
     from presets import (
@@ -56,7 +56,7 @@ except ImportError:
         rule_lines,
         rule_tags,
     )
-    from flags import SHRINK_PRESET_PURPOSE
+    from flags import RECIPE_DESCRIPTION_KEY
 
 
 def _cfg(name: str) -> dict:
@@ -125,7 +125,7 @@ def _cli() -> int:
             for n in preset_names():
                 print(n)
             return 0
-        if cmd in ("descr", "plan", "bake", "purpose"):
+        if cmd in ("descr", "plan", "bake", "description"):
             if len(args) < 2:
                 return 1
             name = args[1]
@@ -138,12 +138,13 @@ def _cli() -> int:
         if cmd == "bake":
             print(" ".join(bake_args(name)))
             return 0
-        if cmd == "purpose":
-            purpose = SHRINK_PRESET_PURPOSE.get(name)
-            if not purpose:
+        if cmd == "description":
+            descr = _cfg(name).get(RECIPE_DESCRIPTION_KEY, "")
+            if not descr:
                 return 1
-            print(purpose)
+            print(descr)
             return 0
+
         if cmd in ("ops-flags", "op-lines"):
             # Args: <strip 0|1> — the menu's operation toggles.
             if len(args) < 2:
@@ -154,9 +155,8 @@ def _cli() -> int:
         if cmd == "list-presets":
             for name in preset_names():
                 cfg = merged_presets()[name]
-                tag = ""
-                if name in SHRINK_PRESET_PURPOSE:
-                    tag = f"  → {SHRINK_PRESET_PURPOSE[name]}"
+                descr = cfg.get(RECIPE_DESCRIPTION_KEY, "")
+                tag = f"  → {descr}" if descr else ""
                 print(f"{name}\t{_short(cfg)}{tag}")
             return 0
         if cmd in ("rule-line", "rule-tag"):

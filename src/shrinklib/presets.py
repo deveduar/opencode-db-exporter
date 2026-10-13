@@ -21,6 +21,7 @@ from shrinklib.config import default_shrink_presets
 from shrinklib.flags import (
     DEFAULT_SHRINK_PRESETS,
     KEEP_RULE_KEYS,
+    RECIPE_DESCRIPTION_KEY,
     SHRINK_PRESET_KEYS,
 )
 from exportlib.util import die
@@ -58,8 +59,13 @@ def validate_preset(name: str, pdata: Any) -> dict:
     if unknown:
         die(
             f"shrink preset '{name}': unknown key '{unknown[0]}' "
-            f"(a recipe carries operations only: {' | '.join(SHRINK_PRESET_KEYS)})"
+            f"(a recipe carries operations, plus an optional '{RECIPE_DESCRIPTION_KEY}': "
+            f"{' | '.join(SHRINK_PRESET_KEYS)})"
         )
+    if RECIPE_DESCRIPTION_KEY in pdata and (
+        not isinstance(pdata[RECIPE_DESCRIPTION_KEY], str) or not pdata[RECIPE_DESCRIPTION_KEY]
+    ):
+        die(f"shrink preset '{name}': '{RECIPE_DESCRIPTION_KEY}' must be a non-empty string")
     if "strip_reasoning" in pdata and not isinstance(pdata["strip_reasoning"], bool):
         die(
             f"shrink preset '{name}': 'strip_reasoning' must be true/false "

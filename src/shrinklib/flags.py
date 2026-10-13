@@ -113,22 +113,29 @@ KEEP_RULE_KEYS: list[str] = [
 # The OPERATION keys: the only keys a shrink-presets.json preset may carry.
 OPERATION_KEYS: list[str] = [f.name for f in SHRINK_FLAGS if f.name not in KEEP_RULE_KEYS]
 
-# Preset keys accepted under one preset of shrink-presets.json (operations only).
-SHRINK_PRESET_KEYS: list[str] = list(OPERATION_KEYS)
+# The optional human one-liner a recipe may carry (the picker row / --list-presets
+# tag / the `Recipe:` line of the plan). It travels WITH the recipe — built-ins
+# below carry it, and a shrink-presets.json entry carries its own — so there is no
+# separate purpose catalog to drift from the recipe it describes.
+RECIPE_DESCRIPTION_KEY = "description"
+
+# Preset keys accepted under one preset of shrink-presets.json (operations + the
+# optional description meta key).
+SHRINK_PRESET_KEYS: list[str] = list(OPERATION_KEYS) + [RECIPE_DESCRIPTION_KEY]
 
 # Built-in recipes (always available, even without a shrink-presets file): named
 # combinations of OPERATIONS. The session selection is NOT part of a recipe — the
 # menu asks for it (sessions picker) and the CLI takes the selection flags, so
-# `shrink lean` = default selection (--keep 10) + strip reasoning.
+# `shrink lean` = default selection (--keep 10) + strip reasoning. The
+# `description` is the one-line human summary of the recipe.
 DEFAULT_SHRINK_PRESETS: dict[str, dict] = {
-    "lean": {"strip_reasoning": True},
-    "quiet": {},
-}
-
-# Built-in recipes -> one-line purpose (menu picker header / --list-presets).
-SHRINK_PRESET_PURPOSE: dict[str, str] = {
-    "lean": "strip the reasoning parts (smallest text; reasoning is not displayed anyway)",
-    "quiet": "prune + vacuum only: keep the full text of the sessions you keep",
+    "lean": {
+        "description": "strip the reasoning parts (smallest text; reasoning is not displayed anyway)",
+        "strip_reasoning": True,
+    },
+    "quiet": {
+        "description": "prune + vacuum only: keep the full text of the sessions you keep",
+    },
 }
 
 
@@ -138,7 +145,7 @@ def help_main_shrinks() -> str:
     recipe/flags help: edit here, never in opencode-db.sh/o shrink.sh."""
     lines = ["shrink presets (named OPERATIONS; the sessions are chosen separately):"]
     for name in DEFAULT_SHRINK_PRESETS:
-        lines.append(f"  {name:<7} {SHRINK_PRESET_PURPOSE[name]}")
+        lines.append(f"  {name:<7} {DEFAULT_SHRINK_PRESETS[name][RECIPE_DESCRIPTION_KEY]}")
     lines.append("")
     lines.append("session selection flags (CLI only — the menu asks you with its picker):")
     lines.append("  --keep N           keep the N most recent sessions (by last update); default 10")
@@ -181,7 +188,7 @@ def usage_main_shrinks() -> str:
         "Recipes (named OPERATIONS; no recipe = default selection + no operation):",
     ]
     for name in DEFAULT_SHRINK_PRESETS:
-        lines.append(f"  {name:<7} {SHRINK_PRESET_PURPOSE[name]}")
+        lines.append(f"  {name:<7} {DEFAULT_SHRINK_PRESETS[name][RECIPE_DESCRIPTION_KEY]}")
     lines.append("")
     lines.append("Named recipes also come from the OCED_SHRINK_PRESETS file (see")
     lines.append("`opencode-db shrink --list-presets`); they only carry operations — the session")

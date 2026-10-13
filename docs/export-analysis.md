@@ -1882,3 +1882,44 @@ No `FLAGS` change (the key set is identical), so nothing in `generated/` is rege
 blurb, the absence of any `transcript defaults` fallback, `--list-products` with no DB, and
 the guard in `--show`); `menu_flow.sh` 352 -> 354 (a shipped row carries its blurb, and no
 row claims `transcript defaults`).
+
+## §52 The prose travels with the recipe: `description` in the file, no fallback (current)
+
+**§51 kept the presets' text in code (`PLAN_TEXT`); it now lives in the file.** The root
+cause §51 fixed (a derived label lying about a plan) was cured with a hand-written catalog in
+`plan.py`, but that left the presets file as the source of truth for *what a preset does* and
+`plan.py` as the source of truth for *what it says* — two files to keep in step by hand, and
+a *user* preset (a name `PLAN_TEXT` never heard of) had no text at all. The prose now travels
+with the recipe: every preset in `presets.json` carries its own `description` (one optional
+string), and `plan.py` reads it straight from the file. The same key is used for the picker
+row, `--list-presets` and the legend, so the three surfaces cannot disagree by construction.
+
+**Everything that guessed or fell back is gone.** `PLAN_TEXT`, `plan_blurb()`,
+`plan_purpose()`, `_row_fallback()` and `preset_descr()` are deleted, along with the
+`descr`/`purpose` CLI subcommands and the dead `oc_preset_descr`/`oc_preset_purpose` shell
+plumbing (`oc_preset_run` accepted a `descr` argument it never used). A preset with no
+`description` simply shows no prose — no catalog, no flag-combo taxonomy, no "defaults"
+label. `--list-presets` prints the name alone; the picker row keeps its `[products]` column.
+
+**The shrink recipes get the same treatment, by symmetry.** `SHRINK_PRESET_PURPOSE` (a second
+catalog, in `shrinklib/flags.py`) is deleted: the built-in recipes carry their `description`
+in `DEFAULT_SHRINK_PRESETS`, a `shrink-presets.json` entry carries its own, and
+`shrinklib/plan.py` gains `description <name>` (replacing `purpose`) for the picker row,
+`--list-presets` tag, `shrink --help` and the menu's `Recipe:` line.
+
+**The key is a meta key, not a flag.** `flags.py` exposes `PRESET_DESCRIPTION_KEY` and adds it
+to `SINGLE_PRESET_KEYS`/`BUNDLE_PRESET_KEYS`; `shrinklib/flags.py` adds
+`RECIPE_DESCRIPTION_KEY` to `SHRINK_PRESET_KEYS`. Validation (`exportlib/presets.py`,
+`shrinklib/presets.py`) requires a non-empty string when present and otherwise ignores it
+(it configures nothing, so the flag-application loops never touch it). Because the value is
+free text that may contain a comma or a `key=value` substring, `plan.py::_flag_csv` skips it
+before it can reach `annotate_flags`. The generated schema gains the property on both preset
+shapes and on the shrink recipe, and both `generated/*-flags-table.md` grow a row — so this
+time `generated/` **is** regenerated (`scripts/generate_schema.py`, `--docs`).
+
+The user chose the single-field design (one text per preset for all three surfaces) over
+keeping a short `blurb` + a long `purpose`, and asked for the symmetric shrink change. The
+README snippet moved in lockstep (the anti-drift guard compares it to `presets.json`).
+`export_smoke.sh` and `menu_flow.sh` updated: the assertions now read the fixture/file
+`description` instead of the deleted `plan_purpose`/`oc_preset_purpose`, and the
+`transcript defaults` guard stays (there is nothing left to produce it).

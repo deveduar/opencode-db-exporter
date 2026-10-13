@@ -22,6 +22,7 @@ from exportlib.flags import (
     FLAGS,
     PRODUCTS,
     PRODUCT_ALIASES,
+    PRESET_DESCRIPTION_KEY,
     BUNDLE_PRODUCT_KEYS,
     SINGLE_PRESET_KEYS,
     BUNDLE_PRESET_KEYS,
@@ -79,6 +80,14 @@ def _validate_value(name: str, k: str, v) -> None:
             die(f"preset '{name}': 'cap' must be a non-negative integer (got {v!r})")
 
 
+def _validate_description(name: str, pdata: dict) -> None:
+    """The optional human one-liner must be a non-empty string (it configures
+    nothing; it is only the picker/--list-presets/legend text)."""
+    desc = pdata.get(PRESET_DESCRIPTION_KEY)
+    if desc is not None and (not isinstance(desc, str) or not desc):
+        die(f"preset '{name}': '{PRESET_DESCRIPTION_KEY}' must be a non-empty string")
+
+
 def _apply_selection(args, name: str, pdata: dict) -> None:
     """filter/sessions on the preset. One CLI selection flag clobbers the whole preset selection."""
     if pdata.get("filter") is not None and pdata.get("sessions") is not None:
@@ -104,6 +113,7 @@ def apply_preset(args, name: str, pdata: dict) -> None:
             die(
                 f"preset '{name}': unknown key '{k}' (allowed: {' | '.join(_PRESET_KEYS)})"
             )
+    _validate_description(name, pdata)
     _apply_selection(args, name, pdata)
     # config flags: preset sets the value unless the CLI already had it.
     for k, choices in _PRESET_KEYS_CHOICES.items():
@@ -135,6 +145,7 @@ def apply_bundle(args, name: str, pdata: dict) -> None:
             die(
                 f"preset '{name}': unknown key '{k}' (allowed: {' | '.join(_PRESET_KEYS_BUNDLE)})"
             )
+    _validate_description(name, pdata)
     _apply_selection(args, name, pdata)
     products = pdata["products"]
     if not isinstance(products, dict) or not products:

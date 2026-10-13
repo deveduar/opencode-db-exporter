@@ -1,19 +1,18 @@
 # Export plan API — the single Python place that answers "what will this export
 # produce?" for any profile (product keyword OR named preset), plus the
 # bash<->python JSON/text bridge used by menu.sh. This replaces the jq helpers
-# (oc_preset_rows, oc_preset_descr, oc_preset_legend, oc_export_plan, ...) that
-# used to live in menu.sh: product intros, shipped-plan purposes and the flag
-# annotation bits are all resolved here and served over one CLI.
+# (oc_preset_rows, oc_preset_legend, oc_export_plan, ...) that used to live in
+# menu.sh: product intros and the flag annotation bits are all resolved here and
+# served over one CLI. A preset's own prose (`description`) is read from the
+# presets file, never kept in code.
 #
 # CLI subcommands (each prints one artifact; exit 1 = nothing to produce):
 #   rows                 TSV preset rows for the fzf picker (key<TAB>display)
 #   names                preset names (sorted, one per line)
+#   legend               header lines for the presets that carry a description
 #   products             TSV product rows for the product picker (key<TAB>label)
 #   products --legend    the product picker header legend (use-it-when lines)
 #   products-list        the friendly `export --list-products` screen (no DB)
-#   descr <preset>       one-line selection summary
-#   purpose <name>       one-line purpose for the shipped plans (unknown -> 1)
-#   legend               header lines explaining each shipped plan in the file
 #   resolve <profile>    JSON plan for a product keyword or preset name
 #   plan <profile> [--width N]   the confirm's product block (flat, no label)
 #   notes <profile> [--width N]  the caveats of that plan ("" when there are none)
@@ -37,6 +36,7 @@ try:
     from exportlib.presets import load_presets
     from exportlib.util import selection_phrase
     from exportlib.flags import (
+        PRESET_DESCRIPTION_KEY,
         PRODUCT_ALIASES,
         PRODUCT_KEYWORDS,
         PRODUCT_INTRO,
@@ -47,63 +47,19 @@ except ImportError:
     from presets import load_presets
     from util import selection_phrase
     from flags import (
+        PRESET_DESCRIPTION_KEY,
         PRODUCT_ALIASES,
         PRODUCT_KEYWORDS,
         PRODUCT_INTRO,
         annotate_flags,
     )
 
-# The ONLY hand-written text of a shipped plan: blurb = one short line for the
-# picker row, purpose = the full intent for `--list-presets` / the legend. Both
-# live here so the two surfaces can never describe the same preset differently
-# (the old picker taxonomy special-cased a couple of flag combos and let every
-# other preset fall through to "transcript (defaults)" — which is how `prompts`
-# and the snapshot plan got mislabelled). A user preset (a name not in this map)
-# falls back to the factual `preset_descr`.
-PLAN_TEXT = {
-    "archive": {
-        "blurb": "lossless everything (full + JSON + files)",
-        "purpose": "lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)",
-    },
-    "quick": {
-        "blurb": "light review (truncated + JSON + files)",
-        "purpose": "light daily review: same backup, truncated tool outputs (fast, compact)",
-    },
-    "share": {
-        "blurb": "shareable (no reasoning + JSON)",
-        "purpose": "publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)",
-    },
-    "notes": {
-        "blurb": "plain transcript, default options",
-        "purpose": "plain conversation read: the transcript product with default options",
-    },
-    "prompts": {
-        "blurb": "only your prompts (role user)",
-        "purpose": "just your asks: only user prompts, no answers/reasoning/tools (task log)",
-    },
-    "rag": {
-        "blurb": "corpus for another AI (memory)",
-        "purpose": "corpus for another AI: the memory product with default options",
-    },
-    "digest": {
-        "blurb": "only the compaction summaries",
-        "purpose": "knowledge arc: only the compaction summaries",
-    },
-    "audit_archive": {
-        "blurb": "full transcript + fresh-backup guard",
-        "purpose": "audit-grade full transcript: complete tool outputs; offers to align the reference backup when it diverged (heavy)",
-    },
-}
-
-
-def plan_blurb(name: str) -> str:
-    """The picker-row blurb of a shipped plan ("" when it is a user preset)."""
-    return PLAN_TEXT.get(name, {}).get("blurb", "")
-
-
-def plan_purpose(name: str) -> str:
-    """The full purpose of a shipped plan ("" when it is a user preset)."""
-    return PLAN_TEXT.get(name, {}).get("purpose", "")
+# The one-line human description of a preset lives IN the presets file (key
+# `description`), so the prose travels with the recipe and can never drift from
+# it. A preset without one simply shows no prose: there is no text catalog to
+# fall back to and no flag-combo taxonomy to guess a label from (that derivation
+# is how `prompts` and the snapshot plan once got mislabelled "transcript
+# (defaults)").
 
 # Product picker rows/labels (TSV key<TAB>label) and the header legend passed to
 # the fzf picker. Served to menu.sh by the `products` subcommand. Rows stay SHORT;
@@ -167,8 +123,16 @@ def _jq_tostring(v) -> str:
 
 
 def _flag_csv(cfg: dict) -> str:
-    """dict -> "key=value,key=value" (insertion order, jq tostring values)."""
-    return ",".join(f"{k}={_jq_tostring(v)}" for k, v in cfg.items())
+    """dict -> "key=value,key=value" (insertion order, jq tostring values).
+
+    The `description` meta key is skipped: it is free text (may contain a comma
+    or even a "key=value" substring) and configures nothing, so it must never
+    reach annotate_flags' parse."""
+    return ",".join(
+        f"{k}={_jq_tostring(v)}"
+        for k, v in cfg.items()
+        if k != PRESET_DESCRIPTION_KEY
+    )
 
 
 def _preset_products(pdata: dict) -> list[str]:
@@ -211,8 +175,7 @@ def resolve(profile: str, presets: dict | None = None) -> dict:
             ],
             "has_json": False,
             "has_sanitize": False,
-            "descr": "",
-            "purpose": "",
+            "description": "",
         }
     raise ValueError(f"unknown profile '{profile}'")
 
@@ -255,8 +218,7 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
         "items": items,
         "has_json": has_json,
         "has_sanitize": has_sanitize,
-        "descr": preset_descr(name, pdata),
-        "purpose": plan_purpose(name),
+        "description": pdata.get(PRESET_DESCRIPTION_KEY, ""),
     }
 
 
@@ -340,28 +302,6 @@ def notes_text(
     return "\n".join(line for note in notes for line in _wrap(note, width))
 
 
-def preset_descr(name: str, pdata: dict | None = None) -> str:
-    """One-line selection summary ('<sel> · product(s) <p> · config <keys>').
-    Replicates oc_preset_descr (jq `keys` = sorted, empty config stays empty).
-    """
-    if pdata is None:
-        pdata = load_presets().get(name, {})
-    prods = _preset_products(pdata)
-    p = "+".join(prods) if prods else "?"
-    pw = "product" if "product" in pdata else "products"
-    if "filter" in pdata:
-        sel = "filter:" + _jq_tostring(pdata["filter"])
-    elif "sessions" in pdata:
-        sel = "sessions: " + ", ".join(pdata["sessions"])
-    else:
-        sel = "ALL sessions"
-    cfg_keys = sorted(
-        k for k in pdata if k not in ("product", "products", "filter", "sessions")
-    )
-    config = ",".join(cfg_keys)
-    return f"{sel} · {pw} {p} · config {config}"
-
-
 def preset_selection(name: str, pdata: dict | None = None) -> str:
     """The selection this preset PINS, as a human phrase for the menu's
     confirmation: 'filter "x"' | 'its N pinned session ids' | '' (empty = it
@@ -437,32 +377,13 @@ def preset_subagent_gaps(name: str, pdata: dict | None = None) -> str:
 
 
 def preset_rows(presets: dict | None = None) -> list[str]:
-    """TSV picker rows for every preset, replicating oc_preset_rows (jq logic:
-    purpose tag from product combo / transcript tool_output / sel + selection)."""
+    """TSV picker rows for every preset (name | [products] | description + sel)."""
     if presets is None:
         presets = load_presets()
     rows: list[str] = []
     for key, pdata in presets.items():
         rows.append(_preset_row(key, pdata))
     return rows
-
-
-def _row_fallback(pdata: dict) -> str:
-    """Factual one-line fallback for a USER preset (no PLAN_TEXT blurb). The
-    product is already the `[products]` column and a pinned selection is prefixed
-    separately, so this is only the config keys — sorted, comma-joined, no ' · '
-    (the picker-row symbology guard forbids it). "defaults" when it configures
-    nothing."""
-    bundle = _bundle_cfg(pdata)
-    if bundle:
-        keys = sorted(
-            k for cfg in bundle.values() if isinstance(cfg, dict) for k in cfg
-        )
-    else:
-        keys = sorted(
-            k for k in pdata if k not in ("product", "products", "filter", "sessions")
-        )
-    return "config " + ",".join(keys) if keys else "defaults"
 
 
 def _preset_row(key: str, pdata: dict) -> str:
@@ -472,12 +393,11 @@ def _preset_row(key: str, pdata: dict) -> str:
     else:
         products = [pdata.get("product", "")]
     # Three columns: name | [products] | description, exactly like the session
-    # rows. The description is the hand-written `PLAN_TEXT` blurb for a shipped
-    # plan and a factual config summary (`_row_fallback`) for a user preset —
-    # never derived from the flag combo (that taxonomy let `prompts` and the
-    # snapshot plan fall through to "transcript (defaults)"). A pinned selection
-    # is still prefixed when the (possibly user-edited) preset carries one, so
-    # the row can't hide it.
+    # rows. The description is the preset's OWN `description` key (empty when it
+    # has none) — never derived from the flag combo (that taxonomy let `prompts`
+    # and the snapshot plan fall through to "transcript (defaults)"). A pinned
+    # selection is still prefixed when the (possibly user-edited) preset carries
+    # one, so the row can't hide it.
     if "filter" in pdata:
         sel = "filter " + _jq_tostring(pdata["filter"])
     elif "sessions" in pdata:
@@ -485,7 +405,7 @@ def _preset_row(key: str, pdata: dict) -> str:
         sel = f"{n} session id{'s' if n != 1 else ''}"
     else:
         sel = ""
-    desc = plan_blurb(key) or _row_fallback(pdata)
+    desc = pdata.get(PRESET_DESCRIPTION_KEY, "")
     col3 = "  ".join(x for x in (sel, desc) if x)
     disp = "+".join(x for x in products if x)
     # Padding ONLY (name at 10, products at 22): a long name or product list
@@ -502,14 +422,14 @@ def preset_names(presets: dict | None = None) -> list[str]:
 
 
 def legend_text(presets: dict | None = None) -> str:
-    """Header lines ('   %-6s %s') for each shipped plan present in the file."""
+    """Header lines ('   %-6s %s') for each preset that carries a description."""
     if presets is None:
         presets = load_presets()
-    lines = []
-    names = [n for n in preset_names(presets) if plan_purpose(n)]
+    names = [n for n in preset_names(presets) if presets[n].get(PRESET_DESCRIPTION_KEY)]
     width = max((len(n) for n in names), default=0)
-    for name in names:
-        lines.append(f"   {name:<{width}} {plan_purpose(name)}")
+    lines = [
+        f"   {name:<{width}} {presets[name][PRESET_DESCRIPTION_KEY]}" for name in names
+    ]
     return "\n".join(lines)
 
 
@@ -546,22 +466,6 @@ def _cli() -> int:
             return 0
         if cmd == "legend":
             print(legend_text(presets))
-            return 0
-        if cmd == "descr":
-            if len(args) < 2:
-                return 1
-            presets = load_presets()
-            if args[1] not in presets:
-                return 1
-            print(preset_descr(args[1], presets[args[1]]))
-            return 0
-        if cmd == "purpose":
-            if len(args) < 2:
-                return 1
-            purpose = plan_purpose(args[1])
-            if not purpose:
-                return 1
-            print(purpose)
             return 0
         if cmd == "snapshot":
             if len(args) < 2:

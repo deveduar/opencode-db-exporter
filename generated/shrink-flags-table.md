@@ -16,5 +16,6 @@ Exactly ONE selection rule (`keep` \| `older_than` \| `since` \| `keep_all` \| `
 | Key | Allowed | Meaning |
 |---|---|---|
 | `strip_reasoning` | true/false | Drop the 'reasoning' parts on the copy (the bulk of the text) |
+| `description` | string | optional human one-liner (picker row / `--list-presets` tag / the `Recipe:` line of the plan); it travels with the recipe |
 
-A recipe is a named combination of operations; the session selection never lives in a recipe (a keep rule inside a preset is rejected, pointing at the flags above).
+A recipe is a named combination of operations (plus the optional `description`); the session selection never lives in a recipe (a keep rule inside a preset is rejected, pointing at the flags above).

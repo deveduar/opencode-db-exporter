@@ -68,6 +68,7 @@ in sync by construction.
 
 | `product` | string | `transcript` \| `memory` \| `digest` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
 | `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
+| `description` | string | — | optional human one-liner (picker row / `--list-presets` / legend); it travels with the recipe, a preset without one shows no prose |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
 | `json` | bool | — | transcript/digest (faithful archive) |
 | `snapshot` | string | `"fresh"` | **single preset only** (never per-product/bundle): coordinate the export + the reference backup — CLI warns, menu offers a fresh backup, when no backup exists or the last one diverged from the live DB |
@@ -377,7 +378,11 @@ A recipe is split in **two disjoint families** (see
   forwards `--keep-all` / `--discard-sessions`; headless users pass them directly.
   Exactly ONE applies (`keep` = 10 is the default).
 - **OPERATIONS** — today only `strip_reasoning`: what is done to the copy besides
-  the pruning. These are the **only valid recipe keys**.
+  the pruning. These are the **operation keys** of a recipe.
+- **`description`** — an optional human one-liner (string) for the picker row /
+  `--list-presets` tag / the `Recipe:` line of the plan. It travels **with the
+  recipe** (the built-ins carry it in code, a file recipe carries its own); a
+  recipe without one simply shows no prose. It configures nothing.
 
 The built-in recipes **always exist** — `lean` (strip reasoning) and `quiet`
 (prune + vacuum) — and the file *extends/overrides* them (a file recipe with the
@@ -386,9 +391,9 @@ same name shadows the built-in). A missing/empty file simply means "built-ins on
 ```jsonc
 {
   "presets": {
-    "lean":      { "strip_reasoning": true },   // shadows the built-in lean
-    "quiet":     {},                            // same as the built-in quiet
-    "text-only": { "strip_reasoning": false }   // keep the reasoning parts
+    "lean":      { "description": "…", "strip_reasoning": true },  // shadows the built-in lean
+    "quiet":     { "description": "…" },                          // same as the built-in quiet
+    "text-only": { "strip_reasoning": false }                     // keep the reasoning parts
   }
 }
 ```

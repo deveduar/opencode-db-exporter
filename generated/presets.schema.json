@@ -39,6 +39,11 @@
         "minLength": 1
       }
     },
+    "presetDescription": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional human one-liner for the picker / --list-presets / the picker legend. It travels with the recipe; a preset without one simply shows no prose."
+    },
     "flagFilter": {
       "type": "string",
       "description": "SQL LIKE pattern on session id/title (e.g., ses_f7%%)"
@@ -316,6 +321,9 @@
             },
             "sessions": {
               "$ref": "#/definitions/sessions"
+            },
+            "description": {
+              "$ref": "#/definitions/presetDescription"
             }
           },
           "not": {
@@ -397,6 +405,9 @@
             },
             "sessions": {
               "$ref": "#/definitions/sessions"
+            },
+            "description": {
+              "$ref": "#/definitions/presetDescription"
             }
           },
           "not": {

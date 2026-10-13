@@ -29,6 +29,11 @@
       "properties": {
         "strip_reasoning": {
           "$ref": "#/definitions/flagStrip_reasoning"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional human one-liner (the picker row / --list-presets tag / the Recipe: line of the plan). It travels with the recipe."
         }
       }
     }

@@ -15,10 +15,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from exportlib.flags import (
     CLI_ONLY_KEYS,
     FLAGS,
+    PRESET_DESCRIPTION_KEY,
     PRODUCT_KEYWORDS,
     get_flags_for_product,
 )
-from shrinklib.flags import SHRINK_FLAGS, OPERATION_KEYS
+from shrinklib.flags import RECIPE_DESCRIPTION_KEY, SHRINK_FLAGS, OPERATION_KEYS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATED = os.path.join(ROOT, "generated")
@@ -97,6 +98,11 @@ def generate_schema() -> dict:
                 "description": "Exact session ids (session selection; exclusive with a preset 'filter').",
                 "items": {"type": "string", "minLength": 1}
             },
+            "presetDescription": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional human one-liner for the picker / --list-presets / the picker legend. It travels with the recipe; a preset without one simply shows no prose."
+            },
             **flag_defs,
             "flagProps": {
                 "description": "Config flags accepted (single: at the preset's top level; bundle: per product). Product-flags that do not affect a product (e.g. cap/files on transcript, json on memory) are ignored.",
@@ -122,7 +128,8 @@ def generate_schema() -> dict:
                             "product": {"type": "string", "enum": list(PRODUCT_KEYWORDS), "description": "full is a CLI alias, not a preset product."},
                             **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS if f.name not in _PRESET_EXCLUDED},
                             "filter": {"$ref": "#/definitions/filter"},
-                            "sessions": {"$ref": "#/definitions/sessions"}
+                            "sessions": {"$ref": "#/definitions/sessions"},
+                            PRESET_DESCRIPTION_KEY: {"$ref": "#/definitions/presetDescription"}
                         },
                         "not": {"required": ["filter", "sessions"]}
                     },
@@ -148,7 +155,8 @@ def generate_schema() -> dict:
                                 }
                             },
                             "filter": {"$ref": "#/definitions/filter"},
-                            "sessions": {"$ref": "#/definitions/sessions"}
+                            "sessions": {"$ref": "#/definitions/sessions"},
+                            PRESET_DESCRIPTION_KEY: {"$ref": "#/definitions/presetDescription"}
                         },
                         "not": {"required": ["filter", "sessions"]}
                     }
@@ -188,6 +196,8 @@ def flags_table() -> str:
         "single only (`full` is a CLI alias, **not** a preset product) |",
         "| `products` | object | keys restricted to the 3 products | "
         "bundle only (exclusive with `product`) |",
+        f"| `{PRESET_DESCRIPTION_KEY}` | string | — | optional human one-liner "
+        "(picker row / `--list-presets` / legend); it travels with the recipe |",
         "| Product flags (top level for single, per product for bundle): | | | |",
     ]
     for f in FLAGS:
@@ -234,6 +244,11 @@ def generate_shrink_schema() -> dict:
             defs[f"flag{f.name.capitalize()}"] = {"type": "string", "minLength": 1, "description": f.description}
 
     op_props = {k: {"$ref": f"#/definitions/flag{k.capitalize()}"} for k in OPERATION_KEYS}
+    op_props[RECIPE_DESCRIPTION_KEY] = {
+        "type": "string",
+        "minLength": 1,
+        "description": "Optional human one-liner (the picker row / --list-presets tag / the Recipe: line of the plan). It travels with the recipe.",
+    }
     return {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "$id": "https://opencode-db-exporter.local/schemas/shrink.schema.json",
@@ -299,8 +314,9 @@ def shrink_flags_table() -> str:
         if f.name in OPERATION_KEYS:
             rows.append(f"| `{f.name}` | {_shrink_flag_cell(f.name)} | {f.description} |")
     rows += [
+        f"| `{RECIPE_DESCRIPTION_KEY}` | string | optional human one-liner (picker row / `--list-presets` tag / the `Recipe:` line of the plan); it travels with the recipe |",
         "",
-        "A recipe is a named combination of operations; the session selection never lives in a recipe (a keep rule inside a preset is rejected, pointing at the flags above).",
+        "A recipe is a named combination of operations (plus the optional `description`); the session selection never lives in a recipe (a keep rule inside a preset is rejected, pointing at the flags above).",
     ]
     return "\n".join(rows)
 

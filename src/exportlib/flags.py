@@ -437,14 +437,19 @@ BUNDLE_PRODUCT_KEYS = {k: v for k, v in PRODUCT_FLAG_KEYS.items() if k != "full"
 # Selection keys (shared across all products in a bundle)
 SELECTION_KEYS = ["filter", "sessions"]
 
-# Single preset keys (product + all flags + selection).
+# The optional human one-liner a preset may carry (picker row / --list-presets /
+# legend). It travels WITH the preset — no separate text catalog — so the prose
+# can never drift from the recipe it describes. Not a flag: it configures nothing.
+PRESET_DESCRIPTION_KEY = "description"
+
+# Single preset keys (product + all flags + selection + the description meta key).
 SINGLE_PRESET_KEYS = sorted(set(
     ["product"] + [f.name for f in FLAGS if f.name not in CLI_ONLY_KEYS]
-    + ["filter", "sessions", "products"]
+    + ["filter", "sessions", "products", PRESET_DESCRIPTION_KEY]
 ))
 
 # Bundle preset keys. `out` is CLI-only for a bundle too.
-BUNDLE_PRESET_KEYS = ["products", "filter", "sessions"]
+BUNDLE_PRESET_KEYS = ["products", "filter", "sessions", PRESET_DESCRIPTION_KEY]
 
 
 # ---- Human-readable annotation hints (menu.confirm/annotate) ----

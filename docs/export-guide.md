@@ -107,6 +107,7 @@ their purpose:
 | `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
 | `share` | transcript (`json` + `no_reasoning`) | **publish transcript**: faithful JSON, no reasoning. It does **not** redact — add `--sanitize` (best effort) yourself, and read the output before you publish | medium |
 | `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
+| `conversation` | transcript (`tool_output omit` + `patch omit` + `no_reasoning`) | **the dialogue only**: just the user and assistant text, no tool calls, patches or reasoning — the cleanest read | light |
 | `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
@@ -241,6 +242,7 @@ Three behaviours worth knowing:
 | review what I did today, fast | `export quick` | light, readable transcript + corpus |
 | send a session to a colleague / paste in an issue / publish | `export share` | no reasoning + faithful JSON; it does **not** redact — add `--sanitize` if you must (best effort) and **read the output before sharing** |
 | read a conversation plain | `export notes` | plain transcript defaults, nothing extra |
+| read only the dialogue (no tools, patches or reasoning) | `export conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |

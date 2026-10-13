@@ -234,9 +234,9 @@ def _backup_aligned(db_path: Path) -> str:
 
 def _print_presets() -> int:
     """`export --list-presets`: the named recipes of the presets file, one per
-    line (name + its purpose, or the technical selection/config summary when a
-    user preset carries no purpose). No DB, no profile."""
-    from exportlib.plan import load_presets, plan_purpose, preset_descr, preset_names
+    line (name + its own `description`; a preset without one prints the name
+    alone). No DB, no profile."""
+    from exportlib.plan import PRESET_DESCRIPTION_KEY, load_presets, preset_names
     presets = load_presets()
     names = preset_names(presets)
     if not names:
@@ -247,8 +247,8 @@ def _print_presets() -> int:
         )
         return 1
     for n in names:
-        line = plan_purpose(n) or preset_descr(n, presets[n])
-        print(f"{n:<16} {line}")
+        line = presets[n].get(PRESET_DESCRIPTION_KEY, "")
+        print(f"{n:<16} {line}".rstrip())
     print()
     print(f"Details for one plan: opencode-db export <name> --show  (file: {default_presets()})")
     return 0
