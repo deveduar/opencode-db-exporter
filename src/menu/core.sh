@@ -556,9 +556,15 @@ oc_session_picker() {
     local show_compactions=1
 
     local -a ids=() top=()
-    local -A marks=() local_disp=() sub_n=() is_sub=()
+    local -A marks=() local_disp=() sub_n=() is_sub=() sub_parent=() root_of=()
     local id line mark sel key n csv all_ids label order_dir
-    local hide_subs=0 subs_note=""
+    # Subagents start HIDDEN in every picker that offers the switch: the common
+    # case is marking conversations (roots) and letting their subagents follow.
+    local hide_subs=0
+    [ -n "$get_sub_ids" ] && hide_subs=1
+    # default_mark seeds ids first seen AFTER a bulk mark-all/unmark-all, so an
+    # id revealed later inherits the bulk intent instead of a hardcoded "marked".
+    local default_mark=1 subs_note=""
 
     # Pre-load subagent counts once (static; badges don't change mid-flow).
     if [ -n "$get_sub_count" ]; then
@@ -587,6 +593,9 @@ oc_session_picker() {
             # fields in a row would eat the path: split on \x1f instead (a
             # non-whitespace IFS keeps every empty field, verbatim).
             IFS=$'\x1f' read -r rid rtitle rcreated rupdated ragent rpid rptitle rdir <<<"${line//$'\t'/$'\x1f'}"
+            # Remember the parent link (even for rows we are about to hide): the
+            # mark model needs the top ancestor of every id.
+            [ -n "$get_sub_ids" ] && sub_parent["$rid"]="$rpid"
             # A hidden subagent is not rendered, so it can never be marked and
             # never reaches the CSV: the selection cascades to it by construction.
             if [ "$hide_subs" = "1" ] && [ -n "${is_sub[$rid]+set}" ]; then
@@ -616,13 +625,40 @@ oc_session_picker() {
             local_disp["$rid"]="$disp"
         done < <(session_rows "${row_args[@]}")
 
+        # root_of[id] = the TOP ancestor (an id with no existing parent, i.e. a
+        # root or an orphan). The hidden-mode model is "a root's mark governs its
+        # whole subtree", so seeding a revealed subagent reads its root's mark
+        # and a hidden root toggle propagates through this map.
+        if [ -n "$get_sub_ids" ]; then
+            local _cid _cur _pid
+            for _cid in "${!sub_parent[@]}"; do
+                _cur="$_cid"
+                while [ -n "${is_sub[$_cur]+set}" ]; do
+                    _pid="${sub_parent[$_cur]:-}"
+                    [ -n "$_pid" ] || break
+                    _cur="$_pid"
+                done
+                root_of["$_cid"]="$_cur"
+            done
+        fi
+
         if [ "${#ids[@]}" -eq 0 ]; then
             echo "   (no sessions to select)"
             return 1
         fi
 
-        # First-seen IDs default to marked=1; explicit unmarks (0) persist.
-        for id in "${ids[@]}"; do [ -n "${marks[$id]+set}" ] || marks[$id]=1; done
+        # First-seen ids inherit the bulk state (mark-all/unmark-all); a revealed
+        # SUBAGENT inherits its root's mark, so un-marking a root while hidden
+        # keeps its subtree out when the switch is flipped back to shown. This is
+        # why "unmark all" then "show" can no longer re-mark the subagents.
+        for id in "${ids[@]}"; do
+            [ -n "${marks[$id]+set}" ] && continue
+            if [ -n "$get_sub_ids" ] && [ -n "${is_sub[$id]+set}" ]; then
+                marks[$id]="${marks[${root_of[$id]:-}]:-$default_mark}"
+            else
+                marks[$id]="$default_mark"
+            fi
+        done
 
         local toggle_other
         [ "$ord_mode" = "newest first" ] && toggle_other="old first" || toggle_other="newest first"
@@ -643,7 +679,7 @@ oc_session_picker() {
             subs_note="$marked_n/${#ids[@]} marked · $ord_mode"
             [ -n "$header" ] && subs_note="$header · $subs_note"
             if [ -n "$get_sub_ids" ] && [ "$hide_subs" = "1" ]; then
-                subs_note+=" · subagents hidden, never exported"
+                subs_note+=" · subagents hidden (they follow their session)"
             fi
             subs_note+=" · ESC: back"
         fi
@@ -781,11 +817,32 @@ oc_session_picker() {
             __SUBS__)
                 if [ "$hide_subs" = "0" ]; then hide_subs=1; else hide_subs=0; fi
                 ;;
-            __ALL__)   for id in "${ids[@]}"; do marks[$id]=1; done ;;
-            __NONE__)  for id in "${ids[@]}"; do marks[$id]=0; done ;;
+            __ALL__)
+                default_mark=1
+                for id in "${ids[@]}"; do marks[$id]=1; done
+                # Hidden pickers never render the subagents: carry the bulk state
+                # to them so a later "show" does not re-mark an empty selection.
+                if [ "$hide_subs" = 1 ]; then
+                    for id in "${!is_sub[@]}"; do marks[$id]=1; done
+                fi
+                ;;
+            __NONE__)
+                default_mark=0
+                for id in "${ids[@]}"; do marks[$id]=0; done
+                if [ "$hide_subs" = 1 ]; then
+                    for id in "${!is_sub[@]}"; do marks[$id]=0; done
+                fi
+                ;;
             *)
                 if [ -n "$key" ] && [ "$key" != "__NONE__" ]; then
                     [ "${marks[$key]:-0}" = 1 ] && marks[$key]=0 || marks[$key]=1
+                    # A root toggled while hidden governs its whole subtree, so
+                    # flipping the switch to shown reflects the same intent.
+                    if [ "$hide_subs" = 1 ] && [ -z "${is_sub[$key]+set}" ]; then
+                        for id in "${!is_sub[@]}"; do
+                            [ "${root_of[$id]:-}" = "$key" ] && marks[$id]="${marks[$key]}"
+                        done
+                    fi
                 fi
                 ;;
         esac

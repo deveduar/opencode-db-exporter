@@ -19,11 +19,18 @@ def make_outdir_final(base, profile: str, stamp: str | None = None):
     return target
 
 
-def write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp):
+def write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
+                total_digest=0, n_backfilled=0):
     with index_path.open("w", encoding="utf-8") as f:
         f.write("# opencode session export\n\n")
         f.write("| Field | Value |\n|---|---|\n")
         f.write(f"| Product | `{args.profile}` |\n")
+        # The name of the plan that produced this run, when one was used. This is
+        # the human entry point of the run, so the provenance the machine reads in
+        # metadata.json (`.preset`) belongs here too. A plain product keyword has
+        # no preset row.
+        if getattr(args, "preset", None):
+            f.write(f"| Preset | `{args.preset}` |\n")
         f.write(f"| Date | {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} |\n")
         f.write(f"| Source DB | `{db_path}` |\n")
         # One row for the effective selection, whatever rule produced it
@@ -37,12 +44,31 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
             f.write("| Subagents | `excluded (--no-subagents)` |\n")
         elif getattr(args, "no_orphan_subagents", False):
             f.write("| Subagents | `only those whose parent is exported (--no-orphan-subagents)` |\n")
+        # The `sub` MODE only when it changes the output: separate is the default.
+        if getattr(args, "sub", "separate") != "separate":
+            f.write(f"| Subagent layout | `{args.sub}` |\n")
         f.write(f"| Messages | {total_msgs} |\n")
+        # Markers vs digest texts: two different counters (see docs/schemas.md §2).
         f.write(f"| Compactions | {total_comp} |\n")
+        f.write(f"| Compaction digests | {total_digest} |\n")
         f.write(f"| Tool output | `{args.tool_output}` |\n")
         f.write(f"| Reasoning | `{'on' if not args.no_reasoning else 'off'}` |\n")
+        # The role filter is a content-shaping flag: `all` is the default, so it
+        # only gets a row when a role actually narrowed the transcript (e.g. the
+        # `prompts` preset). A human reading the index must see it.
+        if getattr(args, "role", "all") != "all":
+            f.write(f"| Role | `{args.role}` |\n")
+        # These two change the content but default to off: surface them only when
+        # they were turned on, like the subagent-exclusion row above.
+        if getattr(args, "summary_diffs", False):
+            f.write("| Summary diffs | `on` |\n")
+        if getattr(args, "mark_compactions", False):
+            f.write("| Mark compactions | `on` |\n")
         f.write(f"| JSON archive | `{'on' if args.json else 'off'}` |\n")
         f.write(f"| Sanitize | `{'on' if args.sanitize else 'off'}` |\n")
+        # Token/cost backfill only when it happened.
+        if n_backfilled:
+            f.write(f"| Tokens backfilled | {n_backfilled} session(s) from step-finish |\n")
         f.write("| Extraction | Python `exportlib` (read `mode=ro`) from `~/.local/share/opencode/opencode.db` |\n")
         f.write(f"| Full metadata | [`metadata.json`](metadata.json) |\n\n")
         f.write("## Sessions\n\n")

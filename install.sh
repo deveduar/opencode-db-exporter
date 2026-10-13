@@ -68,8 +68,14 @@ else
     echo "   Config created from the shipped opencode-db.conf: $CONF_DEST (permissions 600)"
 fi
 
+# Presets are refreshed from the shipped files on every install: the tool's new
+# plans (e.g. a preset added in a release) only reach the menu if the installed
+# copy is brought up to date. Unlike the conf file, these are not path config,
+# so overwriting is safe. Edit them after installing if you want to customize.
 if [ -f "$PRESETS_DEST" ]; then
-    echo "   Existing presets: $PRESETS_DEST (not modified)"
+    cp "$SOURCE_ROOT/presets.json" "$PRESETS_DEST"
+    chmod 600 "$PRESETS_DEST"
+    echo "   Presets refreshed from the shipped presets.json: $PRESETS_DEST (permissions 600)"
 else
     cp "$SOURCE_ROOT/presets.json" "$PRESETS_DEST"
     chmod 600 "$PRESETS_DEST"
@@ -77,7 +83,9 @@ else
 fi
 
 if [ -f "$SHRINK_PRESETS_DEST" ]; then
-    echo "   Existing shrink presets: $SHRINK_PRESETS_DEST (not modified)"
+    cp "$SOURCE_ROOT/shrink-presets.json" "$SHRINK_PRESETS_DEST"
+    chmod 600 "$SHRINK_PRESETS_DEST"
+    echo "   Shrink presets refreshed from the shipped shrink-presets.json: $SHRINK_PRESETS_DEST (permissions 600)"
 else
     cp "$SOURCE_ROOT/shrink-presets.json" "$SHRINK_PRESETS_DEST"
     chmod 600 "$SHRINK_PRESETS_DEST"

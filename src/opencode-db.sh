@@ -106,6 +106,11 @@ Named presets (presets file, source of truth for the menu and the CLI):
                      none = ALL). Explicit CLI flags (--filter/--sessions/--cap...)
                      override the preset. 'export transcript'/'memory'/'digest'
                      always mean the product (its aliases and flags are unchanged).
+  export --list-presets   list the named presets (no DB access)
+  export --list-products  list the three products (document kinds) (no DB access)
+  export <name> --show    print the resolved plan, static, without reading the DB
+  export <name> --dry-run print the plan + the sessions that would be matched,
+                     writing nothing (reads the DB read-only)
 
 Configuration (env > conf file > per-file default; running from a repo checkout,
 the repo-shipped conf/presets are used unless ~/.config/opencode-db has its own):
@@ -144,6 +149,7 @@ fi
 case "${1:-help}" in
     deps|help|-h|menu|backups|shrinks) ;;
     shrink) [ "${2:-}" = "--list-presets" ] || o_resolve_db ;;
+    export) case "${2:-}" in --list-presets|--list-products) ;; *) o_resolve_db ;; esac ;;
     *) o_resolve_db ;;
 esac
 trap 'o_cleanup_tmp' EXIT

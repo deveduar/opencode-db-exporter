@@ -81,6 +81,9 @@ opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (
                                        # --yes skips the question AND the plan (the caller owns the gate)
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]  # products: transcript | memory | digest
+opencode-db export --list-presets     # list the named presets in the presets file
+opencode-db export <name> --show       # the resolved plan only (static, no DB read)
+opencode-db export <name> --dry-run    # plan + sessions the selection would match (writes nothing)
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
                     |--keep-sessions ID[,ID]|--discard-sessions ID[,ID]]
@@ -154,20 +157,22 @@ Every row carries one marker that says what it does:
   by title), and declining goes back to the recipes. A profile that would drop those
   subagents (`no_subagents`, `no_orphan_subagents` or `sub: omit`) is called out on
   screen first — the export would otherwise succeed and quietly lose them.
-- **export** picker (preset-only) — **(1) sessions** first: one row per session, all
-  marked by default (`[ ]` unmark, `mark all`/`unmark all`), sorted **newest used
-  first** with a row to flip to oldest (re-sorting keeps your marks) and a `(N sub)`
-  badge per root. The header is one line of live state (`3/6 marked · newest first`),
-  plus a caveat line when a switch has a consequence the rows cannot show. A second switch row, `subagents: shown ⇄ hidden`,
-  toggles subagent visibility: while **hidden** the run exports
-  the full cascade of subagents for every marked root (no `--no-subagents` flag);
-  while **shown**, each subagent is its own row with its own mark — un-marking it drops
-  it, and the confirmation reports how many were explicitly unmarked. Un-marking its
-  session does **not** drop the subagent: it still exports, standalone, and the
-  confirmation says how many will before you start. **(2) the preset**
-  — one row per named plan in the presets file (bundle plans render
-  `[transcript+memory]`) — and then the confirmation. Marking every session runs the
-  preset as configured; a partial selection runs it with `--sessions <ids>`.
+- **export** picker (preset-only) — **(1) sessions** first: one row per **root**
+  session, all marked by default (`[ ]` unmark, `mark all`/`unmark all`), sorted
+  **newest used first** with a row to flip to oldest (re-sorting keeps your marks) and a
+  `(N sub)` badge per root. Subagents start **hidden** (they follow their session), so
+  the picker opens roots-only: the header line is `3/3 marked · newest first · subagents
+  hidden (they follow their session)`. A second switch row, `subagents: hidden ⇄ shown`,
+  toggles visibility: while **hidden** the run exports the full cascade of subagents for
+  every marked root (no `--no-subagents` flag); while **shown**, each subagent is its own
+  row with its own mark — un-marking it drops it, and the confirmation reports how many
+  were explicitly unmarked (un-marking its session does **not** drop the subagent: it
+  still exports, standalone, and the confirmation says how many will before you start).
+  **(2) the preset** — one row per named plan in the presets file (bundle plans render
+  `[transcript+memory]`) — and then the confirmation. An **untouched** selection (every
+  rendered row still marked — all roots while hidden, all sessions while shown) runs the
+  preset as configured; a **narrowed** one runs it with `--sessions <ids>` (and a
+  narrowed hidden run cascades the marked roots to their subagents).
   The confirmation states the **effective** selection in one `Sessions:` line, so a
   preset that pins its own `filter`/`sessions` can never look like your marks won:
   with everything marked you get `filter "%…%" (from the preset) — your 6 marks are not
@@ -264,13 +269,11 @@ and the `exports list` line).
     "prompts": { "product": "transcript", "role": "user" },
     "rag":   { "product": "memory" },
     "digest": { "product": "digest" },
-    "backup_then_full": {
+    "audit_archive": {
       "product": "transcript",
       "snapshot": "fresh",
       "tool_output": "full"
-    },
-    "this_week": { "product": "transcript", "filter": "%2026-09%" },
-    "one_session": { "product": "memory", "sessions": ["ses_ONLY_THIS_ID"] }
+    }
   }
 }
 ```
@@ -279,6 +282,13 @@ That is the shipped `presets.json`, verbatim. Note that `share` does **not**
 bake in `--sanitize`: redaction is best-effort (high-confidence prefixes only), so it
 stays an explicit per-run flag you ask for on purpose — a plan that silently redacted
 part of the content would promise a safety it cannot keep.
+
+**Product vs preset** — a *product* is **what the document is** (`transcript`,
+`memory`, `digest`: three artifact shapes); a *preset* is **a recipe for
+producing one** (a product or a bundle, plus flags and an optional selection).
+The menu is preset-only; the product keywords are the raw CLI surface. List
+them without touching a database: `export --list-products` (products + aliases)
+and `export --list-presets` (the named recipes).
 
 ```bash
 opencode-db export share                 # run the named preset (product + config + its own selection)
@@ -333,9 +343,14 @@ The **menu** has no product-only flow: each preset is a first-class action (read
   the three products with defaults); without a presets file the export picker prints setup
   guidance (`cp presets.json …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.
-- `digest` is a valid product (CLI or a plan) but is **not** part of the shipped
-  presets: its digests are already inline in `transcript` and in the memory corpus
-  (`compaction_digests`), so shipping it in a bundle would triple the same text.
+- `digest` is a valid product and ships as its own single-product preset. It is
+  **not** part of any **bundle** preset: its digests are already inline in
+  `transcript` and in the memory corpus (`compaction_digests`), so bundling it
+  would triple the same text.
+- `export --list-presets` prints every named plan (and `--show <name>` its resolved
+  plan, `--dry-run <name>` the plan plus the sessions the selection would match,
+  reading the DB read-only and writing nothing). Use them to inspect a plan or a
+  hand-edited presets file before running it.
 - `--sanitize` redacts high-confidence secret prefixes (sk-, ghp_, Bearer, JWT, PEM…) —
   **best-effort; review the output before sharing**.
 

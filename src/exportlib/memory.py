@@ -138,6 +138,10 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "| Date | {0} |".format(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
         f"| Source DB | `{db_path}` |",
     ]
+    # The plan that produced this corpus, when a preset was named (the machine
+    # copy is metadata.json `.preset`); a plain product keyword has no preset.
+    if getattr(args, "preset", None):
+        idx_rows.insert(5, f"| Preset | `{args.preset}` |")
     if args.sessions:
         idx_rows.append(f"| Sessions | `{', '.join(args.sessions)}` |")
     elif args.filter:

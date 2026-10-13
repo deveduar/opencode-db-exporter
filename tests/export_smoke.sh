@@ -550,6 +550,32 @@ IDX="$(dirname "$(last_meta transcript)")/index.md"
 grep -q "excluded (" "$IDX" \
     && bad "index row leaked into a default run" || ok "index.md unchanged for a default run"
 
+echo "== index.md surfaces the effective config (role / digests / extra toggles) =="
+# Compaction digests is always there, right after the marker count (two counters).
+grep -qE '^\| Compaction digests \| [0-9]+ \|$' "$IDX" \
+    && ok "index.md reports compaction digests (besides markers)" || bad "index digests row"
+# Role / summary-diffs / mark-compactions / sub are content flags: only a run
+# that set them shows the row (a default run must not, same rule as --no-subagents).
+grep -q '^| Role ' "$IDX" && bad "Role row leaked into a default run" || ok "index.md hides Role by default"
+grep -q '^| Summary diffs ' "$IDX" && bad "Summary diffs row leaked" || ok "index.md hides Summary diffs by default"
+grep -q '^| Mark compactions ' "$IDX" && bad "Mark compactions row leaked" || ok "index.md hides Mark compactions by default"
+grep -q '^| Subagent layout ' "$IDX" && bad "Subagent layout row leaked" || ok "index.md hides subagent layout by default"
+run export transcript --mark-compactions --summary-diffs >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+{ grep -q '^| Mark compactions | `on` |$' "$IDX" && grep -q '^| Summary diffs | `on` |$' "$IDX"; } \
+    && ok "index.md records --mark-compactions + --summary-diffs" || bad "index toggle rows: $(grep -E 'Mark compactions|Summary diffs' "$IDX")"
+run export transcript --role user >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+grep -q '^| Role | `user` |$' "$IDX" && ok "index.md records --role" || bad "index role row: $(grep '^| Role' "$IDX")"
+run export transcript --sub omit >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+grep -q '^| Subagent layout | `omit` |$' "$IDX" && ok "index.md records a non-default --sub" || bad "index sub row: $(grep '^| Subagent layout' "$IDX")"
+# The backfill count is per-run and only surfaced when it happened.
+run export transcript --filter ses_A0001 >/dev/null
+IDX="$(dirname "$(last_meta transcript)")/index.md"
+grep -qE '^\| Tokens backfilled \| 1 session' "$IDX" \
+    && ok "index.md records the token backfill" || bad "index backfill row: $(grep '^| Tokens backfilled' "$IDX")"
+
 echo "== subagent inclusion: --no-orphan-subagents (closed set) =="
 run export transcript --sessions ses_A0001,ses_B0002 --no-orphan-subagents >/dev/null
 CLOSED=$(last_meta transcript)
@@ -1229,6 +1255,8 @@ EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
     && ok "shipped 'archive' runs transcript+memory under one stamp" || bad "shipped archive dirs"
 jq -e '.preset == "archive" and .tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
     && ok "shipped archive transcript flags applied" || bad "shipped archive meta"
+grep -q '^| Preset | `archive` |$' "$EJSTAMP/transcript/index.md" \
+    && ok "index.md records the preset that produced the run" || bad "index preset row"
 run export quick >/dev/null
 DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}"
 [ -d "$DBUGSTAMP/transcript" ] && [ -d "$DBUGSTAMP/memory" ] && [ ! -d "$DBUGSTAMP/digest" ] \
@@ -1242,6 +1270,59 @@ run export prompts >/dev/null
 jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
 export OCED_PRESETS="$PRESETS"
+
+echo "== CLI plan discovery: --list-presets / --show / --dry-run =="
+# Runs against the SHIPPED presets file ($EXAMPLE), not the subagent test file.
+LP=$(OCED_PRESETS="$EXAMPLE" run export --list-presets)
+printf '%s' "$LP" | grep -q "archive" && printf '%s' "$LP" | grep -q "audit_archive" \
+    && ok "export --list-presets lists the shipped presets" || bad "list-presets: [$LP]"
+printf '%s' "$LP" | grep -qE "this_week|one_session" \
+    && bad "list-presets still shows a removed template preset" || ok "removed templates are gone from --list-presets"
+SH=$(OCED_PRESETS="$EXAMPLE" run export prompts --show)
+printf '%s' "$SH" | grep -q "== Export plan: prompts ==" && printf '%s' "$SH" | grep -q "transcript" \
+    && ok "export <name> --show prints the plan" || bad "--show: $SH"
+# --show is static: it must work even with no database.
+SHNDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export prompts --show); shrc=$?
+{ [ "$shrc" -eq 0 ] && printf '%s' "$SHNDB" | grep -q "== Export plan: prompts =="; } \
+    && ok "export <name> --show needs no database" || bad "--show without DB rc=$shrc"
+DR=$(OCED_PRESETS="$EXAMPLE" run export archive --dry-run)
+printf '%s' "$DR" | grep -q "Matched: 6 session(s) = 3 root(s) + 3 subagent(s)" \
+    && ok "export --dry-run counts the sessions the selection matches" || bad "--dry-run: $(printf '%s' "$DR" | grep Matched)"
+before=$(find "$OUT" -maxdepth 2 -name metadata.json | wc -l)
+OCED_PRESETS="$EXAMPLE" run export archive --dry-run >/dev/null
+after=$(find "$OUT" -maxdepth 2 -name metadata.json | wc -l)
+[ "$before" = "$after" ] && ok "export --dry-run writes nothing" || bad "--dry-run wrote files ($before -> $after)"
+# --list-presets needs no database either.
+NDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-presets); ndrc=$?
+{ [ "$ndrc" -eq 0 ] && printf '%s' "$NDB" | grep -q "archive"; } \
+    && ok "export --list-presets needs no database" || bad "list-presets without DB rc=$ndrc"
+# The purpose text is hand-written once (PLAN_TEXT): prompts is not a plain
+# transcript, and the renamed snapshot plan says what it does.
+printf '%s' "$LP" | grep -q "just your asks" \
+    && ok "--list-presets carries the real purpose of prompts" || bad "prompts purpose: $(printf '%s' "$LP" | grep prompts)"
+printf '%s' "$LP" | grep -q "audit-grade full transcript" \
+    && ok "--list-presets carries the renamed audit_archive purpose" || bad "audit_archive purpose missing"
+# The picker rows use the same hand-written blurb (never a flag-derived guess):
+# the old taxonomy labelled prompts AND the snapshot plan "read (transcript defaults)".
+PROWS=$(OCED_PRESETS="$EXAMPLE" python3 "$MOD/exportlib/plan.py" rows)
+printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only your prompts' \
+    && ok "picker row of prompts shows its real blurb" || bad "prompts blurb: $(printf '%s' "$PROWS" | grep prompts)"
+printf '%s' "$PROWS" | grep -q '^__PRESET_audit_archive.*fresh-backup guard' \
+    && ok "picker row of audit_archive shows its blurb" || bad "audit_archive blurb missing"
+printf '%s' "$PROWS" | grep -q "transcript defaults" \
+    && bad "picker row still claims 'transcript defaults'" || ok "no picker row falls back to 'transcript defaults'"
+# --list-products names the document kinds and their aliases; no DB needed.
+PROD=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-products); prc=$?
+{ [ "$prc" -eq 0 ] && printf '%s' "$PROD" | grep -q "transcript" && printf '%s' "$PROD" | grep -q "memory" \
+    && printf '%s' "$PROD" | grep -q "digest" && printf '%s' "$PROD" | grep -q "full = transcript" \
+    && printf '%s' "$PROD" | grep -q "compactions = digest"; } \
+    && ok "export --list-products lists the products + aliases (no DB)" || bad "--list-products rc=$prc: $PROD"
+# The snapshot guard is invisible unless annotated: the plan must SAY it.
+ASHOW=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export audit_archive --show)
+printf '%s' "$ASHOW" | grep -q "fresh-backup guard" \
+    && ok "audit_archive plan states its fresh-backup guard" || bad "audit_archive plan hides the guard"
+export OCED_PRESETS="$PRESETS"
+
 
 echo "== shrink --swap (guarded replacement of the live fake DB) =="
 # The pgrep guard must not trip in the test box even if a real opencode runs there,

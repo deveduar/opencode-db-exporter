@@ -117,6 +117,30 @@ The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
 old `metadatos.json` name are ignored by every reader (`exports list`/`view`,
 menu, the shrink discard-link).
 
+### `index.md` (human view of a run)
+
+`index.md` mirrors the most useful `metadata.json` cells in a Markdown table, for
+a person reading the export without a JSON parser. The always-present rows are
+`Product · Date · Source DB · Selection · Sessions (roots/subagents/total) ·
+Messages · Compactions · Compaction digests · Tool output · Reasoning · JSON
+archive · Sanitize · Extraction · Full metadata`. The rows that only appear when
+the run actually set them (same rule as `--no-subagents`) are:
+
+| row | shown when |
+|---|---|
+| `Preset` | a preset/plan produced the run (`args.preset`), else no row |
+| `Subagents` | `--no-subagents` / `--no-orphan-subagents` narrowed the set |
+| `Subagent layout` | `--sub` is not the default `separate` |
+| `Role` | `--role` is not the default `all` |
+| `Summary diffs` / `Mark compactions` | the matching flag was on |
+| `Tokens backfilled` | that many sessions had their tokens/cost summed from `step-finish` |
+
+`Compactions` and `Compaction digests` are the two distinct counters (markers vs
+summary texts, see below). The `memory` product writes its own `index.md` with a
+memory-shaped row set (root/subagent counts, `Tuning` for `--cap`/`--files`,
+`Compaction markers`/`Compaction digests`, `Tokens backfilled`, `Role filter`) and
+the same conditional `Preset` row.
+
 ### transcript / digest `metadata.json`
 
 ```jsonc

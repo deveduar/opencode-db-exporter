@@ -1715,7 +1715,7 @@ cap guard (`TITLE_COL_W-1` + `…`), and adds an alignment guard: `oc_row_label`
 `menu_flow.sh` 341 -> 342 (the cap+alignment guards replace the old single overflow guard);
 `export_smoke.sh` stays 396.
 
-## §48 Truncation documented, a "prompts only" preset, and a light spinner (current)
+## §48 Truncation documented, a "prompts only" preset, and a light spinner
 
 Three small, orthogonal answers to a Q&A round. None changes the read-only model.
 
@@ -1748,3 +1748,137 @@ first" are covered wherever they are launched from.
 
 `export_smoke.sh` 396 -> 397 (the shipped `prompts` preset); `menu_flow.sh` 342 -> 346 (the
 spinner guards).
+
+## §49 Presets reach the menu on install; subagents start hidden (current)
+
+Two menu defects, one cause each: the installed config is not the repo, and the default
+selection was too wide.
+
+**`install.sh` never refreshed the user's presets.** The menu reads `OCED_PRESETS`, which
+`o_cfg_default` resolves to the HOME file when it exists (a portable repo checkout is only
+the fallback), and the old `install.sh` only created it *if missing*. So a release that adds
+a preset (e.g. `prompts`, `backup_then_full`, `this_week`) — or renames a product — never
+reaches an existing install: the user kept a stale `presets.json` whose `digest` still used
+the deprecated `product: compactions`, and `prompts` simply was not there. A preset is not
+path config, so the fix is to **refresh `presets.json` + `shrink-presets.json` from the
+shipped files on every install** (overwritten, 600), while `opencode-db.conf` is still only
+created when missing (it *is* path config, and must never be clobbered). Customizations made
+to the presets survive until the next install, which the message says; customize after.
+
+**Subagents were shown by default, and the shown mode was the trap.** The picker opened with
+every session listed, so a normal run had to *un-mark* subagents to keep a selection to the
+roots — the opposite of the common intent. `get_sub_ids` now makes the picker open **hidden**
+(`hide_subs` defaults to 1), so both the sessions browse and the export picker start
+roots-only; the toggle reveals them when you really want one on its own. Hiding a row is
+structural: a hidden subagent is never rendered, so it cannot be marked nor reach the CSV,
+and the marked roots are expanded to their full recursive cascade at run time.
+
+Hiding exposed a mark-model bug the shown mode had hidden: "un-mark all, then show" re-marked
+every subagent, and un-marking a hidden root did not keep its subtree out when shown. The
+picker now tracks `default_mark` (the state `mark all`/`unmark all` sets) and a `root_of`
+top-ancestor map; a newly revealed subagent inherits its root's mark (else `default_mark`), and
+a hidden root toggle propagates through the map to its whole subtree.
+
+**One rule decides who wins when both the menu and the preset have an opinion.** "Untouched"
+means every *rendered* row is still marked (all roots while hidden, all sessions while shown),
+and it runs the preset as configured — no `--sessions`, so a preset-pinned `filter`/`sessions`
+wins and `Menu adds:` says `nothing`. A *narrowed* selection runs `export <name> --sessions
+<csv>` (the menu wins) and the confirm says so (`the menu overrides the preset: …`). The
+denominator follows the visibility mode, so merely opening the picker (roots-only) and
+running it is NOT a narrowing. A narrowed hidden run expands the marked roots to their full
+cascade and names it in `Menu adds: subagents cascaded from selected roots`.
+
+`install.sh` now refreshes `presets.json` + `shrink-presets.json` (conf still created only if
+missing). `menu_flow.sh` 346 -> 352: the `__SUBS__` section is rewritten for the hidden
+default, the mark model and the unified rule (untouched = preset wins with `Menu adds:
+nothing`; narrowed = the cascade wins with the override warning), the browse/report-all
+sections capture the SHOWN render explicitly, and the CSV assertions expect the cascade.
+
+## §50 Template presets out, the index tells the truth, and the CLI can preview (current)
+
+Three small gaps around the same theme: a plan must be discoverable, inspectable and
+honest about what it did.
+
+**Two shipped presets were templates that could only fail.** `one_session` pinned
+`sessions: ["ses_ONLY_THIS_ID"]` — a placeholder, so running it always ended in *No
+sessions to export*. `this_week` pinned `filter: "%2026-09%"`, a `LIKE` over `s.id`/`s.title`
+(`db.py`), not over a date: it matched chat *titles* containing that string and went stale
+the moment the month changed. Both are gone from `presets.json` (and from the README
+snippet, the `export-guide` table and the AGENTS install example). The lesson is the one
+§8 already states: **recency is a run-time rule**, not a preset — `--last N`/`--since DATE`
+exist for exactly this, and a pinned id list rots the instant the session is renamed.
+
+**The human `index.md` hid the config a human needs.** `metadata.json` already recorded
+`role`, `preset`, `digests`, `summary_diffs`, `mark_compactions`, `sub` and
+`tokens_backfilled`, but the run's own `index.md` — the file you actually open — did not.
+`writers.write_index()` now adds them with the same conditional rule the `Subagents` row
+already used: `Role` only when `role != all`, `Preset` only when a plan produced the run,
+`Summary diffs`/`Mark compactions` only when on, `Subagent layout` only when `sub !=
+separate`, `Tokens backfilled` only when > 0 — and `Compaction digests` always, next to
+`Compactions`, because they are two different counters (markers vs summary texts). The
+`memory` index builder gained the `Preset` row for parity. A default run is unchanged
+(nothing leaks into it).
+
+**The CLI had no way to discover or preview a plan.** `shrink --list-presets`/`--dry-run`
+existed; `export` had neither, and `--show` not at all. `cli.py` now takes three CLI-only
+controls (never `FLAGS`/preset keys, like `--stamp`): `--list-presets` prints the named
+recipes of `$OCED_PRESETS` with their purpose (no DB), `--show` prints the `plan.py` plan
+for a profile (static, no DB), and `--dry-run` prints the plan plus the sessions the
+selection would match (read-only, writes nothing). `--show` and `--dry-run` are
+deliberately different: one inspects the plan, the other verifies a selection, so each
+answers a question the other cannot. `export.sh` skips `o_db_exists` for all three and the
+dispatcher skips `o_resolve_db` for `--list-presets`.
+
+**The digest prose lied.** The README claimed `digest` was "not part of the shipped
+presets" while `presets.json` shipped it. Corrected: `digest` is a product and its own
+single-product preset; it is simply never *bundled* (its digests are already inline in
+`transcript` and in the memory corpus, so bundling would triple the same text) — the same
+distinction §30 draws between a marker and a digest text.
+
+`export_smoke.sh` 397 -> 414: the index rows (present when set, absent on a default run),
+the `Preset` row of a shipped bundle, and the three discovery commands (including that
+`--show`/`--list-presets` need no DB and that `--dry-run` writes nothing). `menu_flow.sh`
+stays 352 (the CLI-only controls never enter `FLAGS`, so the help-sync guard is untouched).
+
+## §51 One hand-written text per preset, a renamed recipe, and product != preset (current)
+
+Three questions about the shipped plans, one root cause: **the menu described a preset by
+guessing its flag combination**, so the description could not be more accurate than the
+guess.
+
+**The picker lied about two plans.** The row's third column was derived from the product +
+the config keys, which produced `read (transcript defaults)` for *both* `prompts` (a
+`role: user` transcript) and `backup_then_full` (a `snapshot: fresh` + `tool_output: full`
+transcript) — the same string as the do-nothing `notes`, so the one thing a picker must do
+("what does this do?") was wrong for exactly the plans where it mattered. That taxonomy is
+gone. The text now lives **hand-written ONCE** in `PLAN_TEXT = {name: {blurb, purpose}}` in
+`plan.py`: `plan_blurb()` is the picker row's third column and `plan_purpose()` is what
+`--list-presets` and the legend print, so the row and the list can never disagree. A *user*
+preset (a name not in the map) falls back to `_row_fallback()` — the sorted config keys,
+no ` · ` (the picker-row symbology guard forbids it) — a factual summary, never a guess.
+
+**`backup_then_full` described a workflow it does not run.** The name promised a backup;
+`snapshot: fresh` only *checks* that the last backup is aligned with the live DB and, when
+it is not, the CLI warns and the menu *offers* to make one (it never silently writes a
+backup). Renamed to **`audit_archive`** — the honest name for "an archive-grade full
+transcript, with the backup kept current first" — keeping `snapshot: fresh` (still the only
+user of that SINGLE_ONLY key). The rename touches `presets.json`, the README snippet (the
+anti-drift guard compares them), the `export-guide` table/matrix and the AGENTS install
+example; the historical mentions in this file stay as they were written.
+
+**Product vs preset, now said out loud.** A *product* is what the document **is**
+(`transcript`/`memory`/`digest`, three artifact shapes); a *preset* is a recipe for
+producing one (a product or a bundle + flags + an optional selection). The menu is
+preset-only; the product keywords are the raw CLI surface. To make the surface
+discoverable without a DB, `cli.py` gains a fourth CLI-only control, `export
+--list-products` (the three products + `full = transcript` / `compactions = digest`),
+alongside `--list-presets`/`--show`/`--dry-run`. The dispatcher and `export.sh` skip
+`o_resolve_db`/`o_db_exists` for it exactly like `--list-presets`. `flags.py`'s
+`ANNOTATE_HINTS` also gains a `snapshot=fresh` entry, so `audit_archive --show` states its
+fresh-backup guard instead of hiding a workflow flag behind a silent key.
+
+No `FLAGS` change (the key set is identical), so nothing in `generated/` is regenerated.
+`export_smoke.sh` 414 -> 421 (the real purpose of `prompts`/`audit_archive`, the picker
+blurb, the absence of any `transcript defaults` fallback, `--list-products` with no DB, and
+the guard in `--show`); `menu_flow.sh` 352 -> 354 (a shipped row carries its blurb, and no
+row claims `transcript defaults`).

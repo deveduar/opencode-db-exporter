@@ -110,13 +110,23 @@ their purpose:
 | `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
-| `backup_then_full` | transcript (`snapshot: fresh` + `tool_output full`) | **archive-grade but safe to run any time**: offers a fresh backup first when the last one diverged from the live DB | heavy |
-| `this_week` | transcript (pinned `filter "%2026-09%"`) | **sessions whose text matches that pattern**: edit the month before using it. The plan's own selection wins over your marks, and the confirmation says so | light |
-| `one_session` | memory (pinned `sessions`) | **corpus of one session**: template — replace `ses_ONLY_THIS_ID` with a real id | light |
+| `audit_archive` | transcript (`snapshot: fresh` + `tool_output full`) | **archive-grade but safe to run any time**: offers a fresh backup first when the last one diverged from the live DB | heavy |
+
+`sessions` and recency selection are **not** presets: a pinned id list goes stale the
+moment the session is renamed, and always-matching patterns (`%2026-09%`, `%this_week%`)
+are a data-dependent guess. Use the CLI-only rules instead — `--filter`, `--sessions`,
+`--last N`, `--since DATE` (`export audit_archive --last 5`), or the menu's session
+picker, which narrows any preset at run time.
 
 `--sanitize` is a **per-run** flag, deliberately not baked into `share`: it redacts
 high-confidence prefixes only, and a plan that silently redacted part of the content
 would promise a safety it cannot keep. See §5.
+
+Run `opencode-db export --list-presets` to see every named plan (`--list-products`
+lists the three products + their aliases), `export <name> --show`
+for its resolved plan (static, no DB), and `export <name> --dry-run` to see both the plan
+and the sessions the selection would match (read-only, writes nothing) — useful before
+running a hand-edited presets file.
 
 Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same sessions, and
 `quick` ~4× the plain CLI transcript. Delete runs you no longer need with
@@ -129,14 +139,15 @@ opencode-db menu  →  Export
 ```
 
 1. **Session picker** — if the presets file exists, you see the session picker first.
-   Sessions are listed with `[x]` marks (default: all marked). The header is one line of
-   live state — `3/6 marked · newest first · ESC: back` (`· subagents hidden, never
-   exported` is appended while the switch is hidden) — plus a caveat line when a
-   switch has a consequence the rows cannot show. You can:
+   Sessions are listed with `[x]` marks (default: all marked). Subagents start **hidden**,
+   so only the roots get a row. The header is one line of live state — `3/6 marked ·
+   newest first · ESC: back` (`· subagents hidden (they follow their session)` is appended
+   while the switch is hidden; a caveat line warns `subagents keep their own mark: un-marking
+   a session does not remove them` while they are shown). You can:
    - Toggle individual sessions with Enter
    - Use the two bulk rows: `mark all`, `unmark all`
    - Flip the sort with the `[*] newest first  →  old first` row (re-sorting keeps your marks)
-   - Flip `subagents: shown → hidden` (hidden rows are not rendered, so they can never be marked nor exported)
+   - Flip `subagents: hidden → shown` (hidden rows are not rendered, so they can never be marked by hand; they follow their root and are exported with it)
    - Press `[>] choose the preset` to continue
 
    There are **no recency rows** (`last N`, `oldest N`, `last N days`): marking rows is
@@ -207,7 +218,7 @@ Three behaviours worth knowing:
   first, then a single `Create this backup now?` gate, then `backup --yes` — so no
   command ever stops to ask you something from inside the menu, and the plan block
   appears exactly once (the `--yes` call does not repeat it). The `snapshot: fresh`
-  plan (`backup_then_full`) offers the same when the last backup has diverged.
+  plan (`audit_archive`) offers the same when the last backup has diverged.
 - **When the shrink discards sessions, the plan names them and offers the export
   first.** You see every session that will be dropped by **id + title + how many
   subagents come with it** (an id alone does not tell you which conversation it is),
@@ -233,7 +244,7 @@ Three behaviours worth knowing:
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
-| archive-grade export, but make sure the backup is current first | `export backup_then_full` | offers a fresh backup when the last one diverged, then a full transcript |
+| archive-grade export, but make sure the backup is current first | `export audit_archive` | offers a fresh backup when the last one diverged, then a full transcript |
 | read one conversation in full | `export transcript` (CLI) | add `--json` if you also want the faithful archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |

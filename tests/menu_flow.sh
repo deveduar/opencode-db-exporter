@@ -287,12 +287,16 @@ browse_recorder() {
     }
 }
 TAB="$(printf '\t')"
-# Render 1 pops the queued session (a detail row), render 2 hits ESC.
-qset "ses_A0001"
+# Subagents are HIDDEN by default: render 1 pops the __SUBS__ toggle (now shown),
+# render 2 is the shown screen we assert on, render 3 hits ESC.
+qset "__SUBS__" "ses_A0001"
 browse_recorder
 oc_sessions_picker >/dev/null
 . "$FZF_PRISTINE"
-BR="$BROWSE_ROWS.1"; BH="$BROWSE_HDR.1"
+# Snapshot the SHOWN render (render 2) into a stable file: later browse_recorder
+# runs reuse the same $BROWSE_ROWS.$n paths and would clobber a live reference.
+BR="$TMP/browse_shown.tsv"; cp "$BROWSE_ROWS.2" "$BR"
+BH="$TMP/browse_shown_hdr.txt"; cp "$BROWSE_HDR.2" "$BH"
 grep -q "__MAKE__$TAB" "$BR" && bad "browse screen offers a continue row" || ok "browse screen has no continue row"
 printf '%s' "$BR" | grep -qE "^__(ALL|NONE)__$TAB" && bad "browse screen offers mark all/unmark all" || ok "browse screen has no bulk marks"
 # NO symbol at all on a browse row: it is not a flow (nothing to open) and not a
@@ -316,14 +320,16 @@ oc_sessions_picker >/dev/null
 . "$FZF_PRISTINE"
 grep -q "old first" "$BROWSE_HDR.2" && ok "the order toggle flips to old first in browse mode" \
     || bad "order toggle is a no-op: $(cat "$BROWSE_HDR.2" 2>/dev/null)"
-# Hiding subagents really removes their rows (a hidden session cannot be read).
+# Subagents start HIDDEN (render 1 = only the roots); the toggle reveals their
+# rows (render 2 = every session).
 qset "__SUBS__"
 browse_recorder
 oc_sessions_picker >/dev/null
 . "$FZF_PRISTINE"
-# The toggle is selected on render 1, so its EFFECT is render 2.
+NB1=$(grep -cE "^ses_" "$BROWSE_ROWS.1")
+[ "$NB1" -eq 3 ] && ok "subagents start hidden: only the 3 roots get a row ($NB1)" || bad "hidden default: $NB1 rows"
 NB=$(grep -cE "^ses_" "$BROWSE_ROWS.2")
-[ "$NB" -eq 3 ] && ok "hiding subagents drops their rows ($NB left)" || bad "hidden subagents: $NB rows"
+[ "$NB" -eq 6 ] && ok "showing subagents reveals their rows ($NB)" || bad "shown subagents: $NB rows"
 # A browse screen selects nothing, so its header must not talk about marks.
 grep -qE "session\(s\)" "$BH" && ! grep -q "marked" "$BH" \
     && ok "browse header reports sessions, not a selection" || bad "browse header: $(cat "$BH")"
@@ -448,9 +454,10 @@ oc_sessions_picker >/dev/null
 grep -qx "info ses_A0001" "$CALLS" && ! grep -q -- "--no-digest" "$CALLS" \
     && ok "compactions shown keeps the digest block" || bad "compactions on: $(cat "$CALLS")"
 # 'show all sessions' is an EXPLICIT action (not a toggle that affects a click).
+# Subagents start hidden, so SHOW them first to dump every session.
 : > "$CALLS"
 DUMP="$TMP/dump.txt"; : > "$DUMP"
-qset "__REPORT_ALL__"
+qset "__SUBS__" "__REPORT_ALL__"
 oc_sessions_picker > "$DUMP"
 NVIS=$(session_rows | wc -l)
 NDUMP=$(grep -c "^info ses_" "$CALLS")
@@ -466,12 +473,12 @@ NH=$(grep -c "^== Details of all sessions ==" "$DUMP")
 # real menu, where the suites cannot catch it because they DO define TMP.
 ( unset TMP; oc_sessions_view_one ses_A0001 >/dev/null 2>&1; oc_sessions_view_all ses_A0001 >/dev/null 2>&1 ) \
     && ok "the report callbacks need no harness variable" || bad "report callback depends on the harness"
-# Hiding subagents narrows the dump too (the filters apply to the dump).
+# Subagents start hidden, so the default dump has only the roots.
 : > "$CALLS"; DUMP="$TMP/dump2.txt"; : > "$DUMP"
-qset "__SUBS__" "__REPORT_ALL__"
+qset "__REPORT_ALL__"
 oc_sessions_picker > "$DUMP"
 [ "$(grep -c "^info ses_" "$CALLS")" -eq 3 ] \
-    && ok "reports all honours hidden subagents" || bad "reports all with hidden subs: $(grep -c '^info ses_' "$CALLS")"
+    && ok "reports all honours the hidden subagents" || bad "reports all with hidden subs: $(grep -c '^info ses_' "$CALLS")"
 # The explicit all action does NOT change the behaviour of clicking a single row.
 : > "$CALLS"
 qset "ses_A0001"
@@ -517,6 +524,10 @@ printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_everything.*\[transcript+
     && ok "presets mode lists a bundle preset as [transcript+memory]" || bad "bundle preset row: $(printf '%s\n' "$(oc_export_rows)")"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*\[transcript\]' \
     && ok "presets mode lists default plan notes [transcript]" || bad "notes row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*plain transcript' \
+    && ok "presets mode row of notes uses the hand-written PLAN_TEXT blurb" || bad "notes blurb: $(printf '%s\n' "$(oc_export_rows)" | grep notes)"
+printf '%s\n' "$(oc_export_rows)" | grep -q "transcript defaults" \
+    && bad "a preset row still claims 'transcript defaults'" || ok "no preset row falls back to 'transcript defaults'"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_rag.*\[memory\]' \
     && ok "presets mode lists default plan rag [memory]" || bad "rag row missing"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_digest.*\[compactions\]' \
@@ -536,12 +547,12 @@ printf '%s\n' "$PROWS" | grep -qE ' · |—' \
     && bad "export preset rows reintroduced symbology: [$(printf '%s\n' "$PROWS" | grep -nE ' · |—' | head -1)]" \
     || ok "export preset rows have no ' · ' marker and no em dash"
 ACT_ARCH=$(printf '%s\n' "$PROWS" | grep '^__PRESET_archive' | cut -f2)
-EXPECT_ARCH="archive    [transcript+memory]    lossless (full outputs + JSON)"
+EXPECT_ARCH="archive    [transcript+memory]    lossless everything (full + JSON + files)"
 [ "$ACT_ARCH" = "$EXPECT_ARCH" ] \
     && ok "export preset row is three columns (name | [products] | description)" \
     || bad "archive preset row shape: [$ACT_ARCH]"
 ACT_CLEAN=$(printf '%s\n' "$PROWS" | grep '^__PRESET_clean' | cut -f2)
-EXPECT_CLEAN="clean      [transcript]           filter Project Beta  share (sanitized, no reasoning)"
+EXPECT_CLEAN="clean      [transcript]           filter Project Beta  config json,no_reasoning,sanitize"
 [ "$ACT_CLEAN" = "$EXPECT_CLEAN" ] \
     && ok "a pinned selection rides in the description column" \
     || bad "clean preset row: [$ACT_CLEAN]"
@@ -667,7 +678,8 @@ export OCED_PRESETS="$TMP/presets.json"
 confirm_action() { :; return 0; }
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
-grep -qx "export notes --sessions ses_A0001" "$CALLS" && ok "preset run overrides the selection with the session filter" || bad "preset session: $(cat "$CALLS")"
+# Hidden by default: a narrowed root cascades to its subagents.
+grep -qx "export notes --sessions ses_A0001,ses_A0002,ses_A0003" "$CALLS" && ok "a narrowed hidden run cascades the marked root" || bad "preset session: $(cat "$CALLS")"
 
 : > "$CALLS"
 qset "__ALL__" "__MAKE__" "__PRESET_notes"
@@ -746,67 +758,68 @@ xstub() {
 call_log; confirm_action() { return 0; }
 rows_n() { grep '^ses_' "$XROWS.$1" | cut -f1 | sort | paste -sd, -; }
 
-# Render 1 (nothing selected yet): the row exists, everything is shown.
+# Render 1 (nothing selected yet): subagents start HIDDEN, so only the roots get
+# a row and the switch offers to SHOW them.
 qset "__SUBS__"
 xstub
 oc_export_sessions_pick >/dev/null 2>&1
-grep -q 'subagents: shown' "$XROWS.1" && ok "the visibility row starts in the shown state" || bad "row state: $(grep '__SUBS__' "$XROWS.1")"
-[ "$(grep -c '^ses_' "$XROWS.1")" = "6" ] && ok "shown: all 6 sessions get a row" || bad "rows shown: $(grep -c '^ses_' "$XROWS.1")"
-[ "$(rows_n 1)" = "ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01" ] \
-    && ok "shown lists every session" || bad "shown ids: $(rows_n 1)"
-# Render 2 is the one after the __SUBS__ selection: subagents hidden.
-grep -q 'subagents: hidden' "$XROWS.2" && ok "selecting the row flips it to hidden" || bad "row not flipped: $(grep '__SUBS__' "$XROWS.2")"
-[ "$(grep -c '^ses_' "$XROWS.2")" = "3" ] && ok "hidden: only the 3 root sessions keep a row" || bad "rows hidden: $(grep -c '^ses_' "$XROWS.2")"
-[ "$(rows_n 2)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
-    && ok "hidden rows are exactly the roots (the orphan stays a root)" || bad "hidden rows: $(rows_n 2)"
-grep -q 'subagents hidden, never exported' "$XHEAD.2" && ok "the status line states the subagents are not exported" || bad "header: $(cat "$XHEAD.2")"
-# The shown header must NOT promise the hidden mode's cascade: a shown subagent
-# has its own mark, so unmarking its session does not drop it.
-grep -q 'does not remove them' "$XHEAD.1" && ok "the shown status line warns unmarking a session keeps its subagents" \
-    || bad "shown header: $(cat "$XHEAD.1")"
-# Flip back: the rows (and their marks) are restored.
+grep -q 'subagents: hidden' "$XROWS.1" && ok "the visibility row starts in the hidden state" || bad "row state: $(grep '__SUBS__' "$XROWS.1")"
+[ "$(grep -c '^ses_' "$XROWS.1")" = "3" ] && ok "hidden: only the 3 roots get a row" || bad "rows hidden: $(grep -c '^ses_' "$XROWS.1")"
+[ "$(rows_n 1)" = "ses_A0001,ses_B0001,ses_ORPHAN01" ] \
+    && ok "hidden lists exactly the roots (the orphan stays a root)" || bad "hidden ids: $(rows_n 1)"
+grep -q 'subagents hidden (they follow their session)' "$XHEAD.1" \
+    && ok "the hidden status line says the subagents follow their session" || bad "header: $(cat "$XHEAD.1")"
+# Render 2 is the one after the __SUBS__ selection: subagents hidden -> shown.
+grep -q 'subagents: shown' "$XROWS.2" && ok "selecting the row flips it to shown" || bad "row not flipped: $(grep '__SUBS__' "$XROWS.2")"
+[ "$(grep -c '^ses_' "$XROWS.2")" = "6" ] && ok "shown: all 6 sessions get a row" || bad "rows shown: $(grep -c '^ses_' "$XROWS.2")"
+[ "$(rows_n 2)" = "ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01" ] \
+    && ok "shown lists every session" || bad "shown ids: $(rows_n 2)"
+# The SHOWN header warns that a shown subagent has its OWN mark: unmarking its
+# session does not drop it (the hidden header promised the cascade instead).
+grep -q 'does not remove them' "$XHEAD.2" && ok "the shown status line warns unmarking a session keeps its subagents" \
+    || bad "shown header: $(cat "$XHEAD.2")"
+# Flip back to hidden: the roots (and their marks) are restored.
 reset; call_log; confirm_action() { return 0; }
 qset "__SUBS__" "__SUBS__"
 xstub
 oc_export_sessions_pick >/dev/null 2>&1
-grep -q 'subagents: shown' "$XROWS.3" && ok "the row flips back to shown" || bad "row not restored: $(grep '__SUBS__' "$XROWS.3")"
-[ "$(grep -c '^ses_' "$XROWS.3")" = "6" ] && ok "re-showing restores the 3 subagent rows" || bad "rows restored: $(grep -c '^ses_' "$XROWS.3")"
+grep -q 'subagents: hidden' "$XROWS.3" && ok "the row flips back to hidden" || bad "row not restored: $(grep '__SUBS__' "$XROWS.3")"
+[ "$(grep -c '^ses_' "$XROWS.3")" = "3" ] && ok "hiding again drops the 3 subagent rows" || bad "rows restored: $(grep -c '^ses_' "$XROWS.3")"
 
-# A hidden run: CSV expanded to include ALL subagents of marked roots (cascade).
+# UNTOUCHED hidden selection: every root is still marked, so this counts as "the
+# whole set" and the preset runs AS CONFIGURED — no --sessions, no --no-subagents.
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
-qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+qset "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 grep -q -- "--no-subagents" "$CALLS" && bad "a hidden run should NOT pin --no-subagents" || ok "a hidden run does NOT pin --no-subagents"
-# CSV should include roots + their subagents (A1,A2,A3,B1,B2,orphan)
-grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, - \
-    | grep -qx "ses_A0001,ses_A0002,ses_A0003,ses_B0001,ses_B0002,ses_ORPHAN01" \
-    && ok "the CSV holds roots + their subagents (full cascade)" || bad "hidden csv: $(cat "$CALLS")"
-# The cascade: un-marking a root while hidden leaves its subagents out entirely.
+grep -q -- "--sessions" "$CALLS" && bad "an untouched hidden run pinned --sessions (it overrode the preset)" \
+    || ok "an untouched hidden run runs the preset as configured (no --sessions)"
+grep -qx "export notes" "$CALLS" && ok "an untouched hidden run exports as configured" || bad "untouched hidden run: $(cat "$CALLS")"
+# NARROWED hidden selection: the menu wins. Only A0001 marked -> its full cascade,
+# and the subagents of the unmarked roots never reach the CSV.
 : > "$CALLS"
-qset "__SUBS__" "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
-# Subagents of UNMARKED roots (B1, B2) should NOT appear.
 grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_B0002" \
     && bad "a subagent of an unmarked root reached the CSV" || ok "unmarked root: its subagents never reach the CSV"
-# With hide=1, the marked root's subagents ARE expanded into the CSV.
 [ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, -)" = "ses_A0001,ses_A0002,ses_A0003" ] \
     && ok "the cascade expands the marked root with its subagents" || bad "cascade csv: $(cat "$CALLS")"
 # A SHOWN run is explicit: un-marking ONE root keeps its subagents selected, and
 # the engine then exports them standalone — the case --no-orphan-subagents fixes.
 : > "$CALLS"
-qset "ses_A0001" "__MAKE__" "__PRESET_notes"
+qset "__SUBS__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 grep -oE -- "--sessions [^ ]+" "$CALLS" | cut -d' ' -f2 | grep -q "ses_A0002" \
     && ok "shown + unmarked root: its subagents stay selected (orphan export)" || bad "shown csv: $(cat "$CALLS")"
 grep -q -- "--no-subagents" "$CALLS" && bad "a shown run pinned --no-subagents" || ok "a shown run does NOT pin --no-subagents"
 
 # The confirm must NAME the standalone outcome before the gate, not just print a
-# CSV that looks like a bug. ses_A0001's two subagents stay marked, its parent does
-# not -> 2 standalone subagents.
+# CSV that looks like a bug. In SHOWN mode ses_A0001's two subagents stay marked
+# while its own row is unmarked -> 2 standalone subagents.
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
-qset "ses_A0001" "__MAKE__" "__PRESET_notes"
+qset "__SUBS__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
 grep -q "2 subagent(s) will be exported standalone" "$TMP/conf.txt" \
     && ok "the confirm names the 2 subagents that export standalone" \
@@ -821,10 +834,11 @@ qset "__NONE__" "ses_ORPHAN01" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
 grep -q "standalone" "$TMP/conf.txt" && bad "the orphan was reported as a standalone subagent" \
     || ok "the orphan (parent row gone) is a root, not a standalone subagent"
-# Hidden mode: no subagent can reach the CSV, so there is nothing to warn about.
+# Hidden mode: no subagent can reach the CSV (they cascade, never standalone), so
+# there is nothing to warn about.
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
-qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+qset "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$TMP/conf.txt" 2>&1
 grep -q "standalone" "$TMP/conf.txt" && bad "a hidden run warned about standalone subagents" \
     || ok "a hidden run never warns about standalone subagents"
@@ -845,30 +859,48 @@ grep -q "standalone" "$TMP/conf.txt" && bad "an all-marked run warned about stan
 [ "$(oc_export_standalone_subs '')" = "0" ] && ok "helper: an empty CSV is 0" \
     || bad "helper empty: $(oc_export_standalone_subs '')"
 
-# A real hidden run (no tool logger): 3 roots + 3 subagents on disk.
+# A real UNTOUCHED hidden run (no tool logger): every root marked -> the preset
+# runs as configured -> the whole DB (3 roots + 3 subagents) on disk.
 reset; confirm_action() { return 0; }
 before=$(count_meta transcript)
-qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+qset "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "hidden run created exactly one export" || bad "hidden run count"
 MH=$(newest_meta transcript)
-# Hidden mode now expands CSV to include all subagents of selected roots.
-# The flag --no-subagents is NOT used; all 6 sessions are exported.
+# Untouched hidden: the preset runs as configured (whole DB), no --sessions and
+# no --no-subagents; all 6 sessions are on disk.
 jq -e '.no_subagents == false and .sessions.total == 6
        and .sessions.subagents == 3' "$MH" >/dev/null \
-    && ok "real hidden run exports 3 roots + 3 subagents (cascade)" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
+    && ok "real untouched hidden run exports the whole DB (3 roots + 3 subagents)" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
 MH="${MH%/metadata.json}"
-# Subagents folder IS expected now (we export subagents in hidden mode).
-[ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run (cascade exported)" || bad "subagents folder missing"
-# The confirmation tells the user subagents are cascaded.
+[ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run" || bad "subagents folder missing"
+# A NARROWED hidden run: the cascade is named in the confirm.
 reset; confirm_action() { return 0; }
 XOUT="$TMP/xconfirm.txt"
-qset "__SUBS__" "__MAKE__" "__PRESET_notes"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick > "$XOUT" 2>&1
 grep -q 'Menu adds: subagents cascaded from selected roots' "$XOUT" \
     && ok "the plan says subagents are cascaded" || bad "plan menu-adds row: $(grep 'Menu adds' "$XOUT")"
-grep -qE '^Sessions: +the 3 sessions you marked' "$XOUT" \
+grep -qE '^Sessions: +the 1 sessions you marked' "$XOUT" \
     && ok "the plan says which sessions are selected" || bad "plan sessions row: $(grep 'Sessions:' "$XOUT")"
+# UNIFIED RULE: a preset that PINS a selection wins while the selection was NOT
+# narrowed — merely opening a hidden picker and running it does not override it.
+reset; confirm_action() { return 0; }
+CU="$TMP/clean.txt"
+qset "__MAKE__" "__PRESET_clean"
+oc_export_sessions_pick > "$CU" 2>&1
+grep -q 'from the preset' "$CU" && grep -q 'Project Beta' "$CU" \
+    && ok "untouched selection: the preset's pinned filter wins" || bad "preset filter not kept: $(grep 'Sessions:' "$CU")"
+grep -q 'Menu adds: nothing' "$CU" && ok "untouched hidden run adds nothing on top of the preset" || bad "menu adds: $(grep 'Menu adds' "$CU")"
+# NARROWING overrides the preset's filter and the confirm SAYS so.
+reset; call_log; confirm_action() { return 0; }
+: > "$CALLS"
+qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_clean"
+oc_export_sessions_pick > "$CU" 2>&1
+grep -q 'the menu overrides the preset' "$CU" \
+    && ok "narrowing overrides the preset's pinned filter (with a warning)" || bad "no override warning: $(grep 'Sessions:' "$CU")"
+[ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, -)" = "ses_A0001,ses_A0002,ses_A0003" ] \
+    && ok "narrowed run pins the menu's cascade (not the preset filter)" || bad "narrowed override csv: $(cat "$CALLS")"
 # The plan block is FLAT: product name at the left margin, its description
 # BELOW it. No "Will produce:" label, no bullets, no leading indentation.
 grep -q 'Will produce' "$XOUT" && bad "the old 'Will produce:' label is still there" \
@@ -1478,8 +1510,8 @@ export OCED_PRESETS="$TMP/presets.json"
 confirm_action() { return 0; }   # accept the run: we only care about the CSV
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
-grep -qx "export notes --sessions ses_A0001" "$CALLS" \
-    && ok "the CSV still carries the FULL id, not the label" || bad "short id leaked into the CSV: $(cat "$CALLS")"
+grep -qx "export notes --sessions ses_A0001,ses_A0002,ses_A0003" "$CALLS" \
+    && ok "the CSV still carries the FULL ids, not the labels" || bad "short id leaked into the CSV: $(cat "$CALLS")"
 export OCED_PRESETS="$TMP/no-presets.json"
 
 #-----------------------------------------------------------------------

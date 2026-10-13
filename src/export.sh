@@ -15,7 +15,17 @@ oced_export_one() {
 # product: transcript | memory | digest (see exportlib/cli.py).
 oced_export() {
     o_check_deps
-    o_db_exists
+    # Preview/discovery commands decide for themselves whether the DB is needed:
+    # --list-presets/--list-products/--show never read it, and --dry-run reports
+    # a missing DB gracefully instead of dying in bash first. Everything else
+    # still needs it.
+    local need_db=1 a
+    for a in "$@"; do
+        case "$a" in
+            --list-presets|--list-products|--show|--dry-run) need_db=0 ;;
+        esac
+    done
+    [ "$need_db" -eq 1 ] && o_db_exists
     oced_export_one "$@"
 }
 

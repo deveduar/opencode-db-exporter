@@ -466,6 +466,7 @@ ANNOTATE_HINTS: Dict[str, str] = {
     "role=user": "role 'user'",
     "role=assistant": "role 'assistant'",
     "patch=omit": "patches omitted",
+    "snapshot=fresh": "fresh-backup guard (offers to align the backup first)",
 }
 
 

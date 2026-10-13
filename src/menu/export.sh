@@ -54,9 +54,11 @@ oc_export_presets_picker() {
 }
 
 # oc_preset_run <preset> <descr> <csv> [hide_subs] -> confirm and run.
-# hide_subs=1 means the picker had subagents hidden, so the CSV holds roots only:
-# the run pins --no-subagents so the guarantee does not depend on the selection
-# being passed at all (e.g. a preset that would run the whole DB).
+# If the user did NOT narrow the selection (every row the picker rendered is
+# still marked), the preset runs AS CONFIGURED — its own filter/sessions apply
+# and no --sessions is passed. Once the user unmarks anything the menu wins:
+# with hide_subs=1 the marked roots expand to their full subagent cascade (no
+# --no-subagents, since a hidden subagent follows its root).
 oc_preset_run() {
     local name="$1" descr="$2" csv="$3" hide="${4:-0}" purpose
     purpose=$(oc_preset_purpose "$name" 2>/dev/null) || purpose="see the presets file for its products/config"
@@ -76,13 +78,19 @@ oc_preset_run() {
         fi
     fi
 
-    local total_sess marked_count
+    local total_sess root_sess marked_count
     total_sess=$(o_q "SELECT count(*) FROM session;" 2>/dev/null) || total_sess=0
+    root_sess=$(o_q "SELECT count(*) FROM session s WHERE s.parent_id IS NULL OR s.parent_id = '' OR NOT EXISTS (SELECT 1 FROM session p WHERE p.id = s.parent_id);" 2>/dev/null) || root_sess=0
     local -a _arr
     IFS=',' read -r -a _arr <<< "$csv"
     marked_count="${#_arr[@]}"
-    local all_marked=0
-    [ "$marked_count" -eq "$total_sess" ] && all_marked=1
+    # "Untouched" is compared against the rows the picker actually rendered: all
+    # roots when subagents are hidden, every session when shown. Merely opening a
+    # hidden picker and running a preset must NOT override it, so the denominator
+    # follows the visibility mode.
+    local all_marked=0 _denom="$total_sess"
+    [ "$hide" = "1" ] && _denom="$root_sess"
+    [ "$marked_count" -eq "$_denom" ] && all_marked=1
 
     # What the PRESET pins, straight from plan.py (python is the SSoT for preset
     # text). Empty = it pins no selection, which is the case where "everything
@@ -109,12 +117,17 @@ oc_preset_run() {
     # preset's own config.
     local menu_adds="nothing"
     local -a extra=()
-    local run_csv="$csv"
-    if [ "$hide" = "1" ]; then
-        # Hidden mode: picker only showed roots. Expand to full cascade so all
-        # subagents of selected roots are exported. No --no-subagents flag.
-        run_csv=$(oc_export_expand_subs "$csv")
-        menu_adds="subagents cascaded from selected roots"
+    local run_csv=""
+    if [ "$all_marked" != 1 ]; then
+        # The menu narrowed the selection: it wins, and the Sessions line names
+        # the preset selection it overrides (if the preset pinned one).
+        run_csv="$csv"
+        if [ "$hide" = "1" ]; then
+            # Hidden: the CSV holds roots only. Expand to the full cascade so
+            # every subagent of a marked root is exported. No --no-subagents.
+            run_csv=$(oc_export_expand_subs "$csv")
+            menu_adds="subagents cascaded from selected roots"
+        fi
     fi
 
     # Consequences the two lines above do not show. In "shown" mode a subagent is
@@ -287,7 +300,7 @@ oc_export_standalone_subs() {
 # the CLI/tests (product-keyword exports work on the CLI without presets).
 
 # oc_preset_purpose <name> -> one-line purpose for the shipped plans (unknown -> 1).
-# The purpose map lives in exportlib/plan.py (PLAN_PURPOSE) — the single source.
+# The purpose map lives in exportlib/plan.py (PLAN_TEXT) — the single source.
 oc_preset_purpose() {
     oc_plan_py purpose "$1"
 }

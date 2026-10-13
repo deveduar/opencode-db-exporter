@@ -144,12 +144,13 @@ can never be exported. If the flags leave nothing to export, the run dies with a
 explanatory message instead of writing an empty artifact.
 
 In the menu this is the sessions picker's `subagents: shown ⇄ hidden` row
-(`get_sub_ids` in the generic picker): a hidden subagent is not rendered, so it cannot
-be marked and never reaches the CSV — the CSV is expanded **after** the picker to include
-the full recursive cascade of subagents for every marked root. No `--no-subagents` flag
-is used; the expansion is structural, so the guarantee does not depend on a CLI flag.
-In shown mode, each subagent is its own row with its own mark, and the confirm reports
-how many were explicitly unmarked.
+(`get_sub_ids` in the generic picker), which **starts hidden** so browse and export both
+open roots-only: a hidden subagent is not rendered, so it cannot be marked and never
+reaches the CSV — the CSV is expanded **after** the picker to include the full recursive
+cascade of subagents for every marked root. No `--no-subagents` flag is used; the
+expansion is structural, so the guarantee does not depend on a CLI flag. In shown mode,
+each subagent is its own row with its own mark, and the confirm reports how many were
+explicitly unmarked.
 
 ### Faithful JSON (`--json`)
 
@@ -235,7 +236,7 @@ screens cannot drift apart:
 | `make_label` / `make_action` | select screens | the `[>]` flow row's text and what it runs with the marked-ids CSV |
 | `empty_guard_msg` | select screens | what to say when `[>]` is pressed with nothing marked |
 | `get_sub_count` | select screens | the `(N sub)` badge per root (recursive) |
-| `get_sub_ids` | sessions + export | adds the `subagents: shown ⇄ hidden` row; its presence is also what makes `make_action` receive the third argument `hide_subs`, which keeps the shrink callback at arity 2 without a special case in the shared code |
+| `get_sub_ids` | sessions + export | adds the `subagents: shown ⇄ hidden` row **and starts the picker hidden** (`hide_subs` defaults to 1); its presence is also what makes `make_action` receive the third argument `hide_subs`, which keeps the shrink callback at arity 2 without a special case in the shared code |
 | `mode: view` | sessions | browse instead of select: no marks, no `__MAKE__`, no mark-all rows, and a session row is a **report** rather than a selection (so it wears no `[x]`/`[ ]`, which would promise a selection that is never built) |
 | `view_action` / `view_action_all` / `view_all_header` | sessions | the per-row report, the iterator for `[>] details of all sessions`, and the one group header printed **before** the loop by the picker itself (a callback cannot tell the first call from the last) |
 
@@ -305,32 +306,36 @@ frames never reach stdout, so a pipe or the streamed log cannot see them (see
 export-analysis §48).
 
 **The export flow is sessions → preset → confirm.** The sessions picker comes first
-(all sessions marked, `(N sub)` badges, `subagents: shown ⇄ hidden`, recency-ordered with
-a flip row, marks in a 1/0 array so a re-sort or a bulk row cannot resurrect an
-unmarked session). Then the **preset-only** picker lists each named preset as a direct
-action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle presets render as
-`[transcript+memory]`); **without the file it prints setup guidance**
+(`(N sub)` badges, `subagents: shown ⇄ hidden` **starting hidden** so roots-only is the
+default, recency-ordered with a flip row, marks in a 1/0 array so a re-sort or a bulk row
+cannot resurrect an unmarked session). Then the **preset-only** picker lists each named
+preset as a direct action (rows/purposes/plans resolved by `exportlib/plan.py`; bundle
+presets render as `[transcript+memory]`); **without the file it prints setup guidance**
 (`cp presets.json …`) plus the raw CLI — **there is no manual session→product
 fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone).
 Asking for the selection *after* the plan was the old order and it was wrong twice
 over: it forced a second, identical list of sessions after the plan was already
 chosen, and it made "all sessions" indistinguishable from "all sessions plus the
 filter the preset happened to carry". The selection is **run-time state**, not part of
-the plan identity, so it is asked first and simply applied: every session marked runs
-the preset as configured (no `--sessions`), a partial one runs
-`export <name> --sessions <csv>` (CLI-wins, and identical for a bundle, whose selection
-is shared). A hidden-subagent run additionally pins `--no-subagents` (see §3).
+the plan identity, so it is asked first and simply applied with **one rule**: an
+*untouched* selection (every RENDERED row still marked — all roots while hidden, all
+sessions while shown) runs the preset as configured (no `--sessions`, so a preset-pinned
+filter wins), a *narrowed* one runs `export <name> --sessions <csv>` (CLI-wins, and
+identical for a bundle, whose selection is shared). A narrowed hidden run expands the
+marked roots to their full recursive cascade with `oc_export_expand_subs`; no
+`--no-subagents` flag is used (see §3).
 
 **The confirmation states the effective selection, not the intent.** "All marked" and
 "the preset pins a filter" are two different outcomes, and only one of them is what the
 user just did on screen. `oc_preset_run` therefore asks `plan.py selection <name>` and
 `plan.py subagents <name>` (python stays the SSoT for preset text) and prints three
-lines that cannot lie: `Sessions:` (all marked + no pinned selection → `all N sessions
-in the DB`; all marked + a pinned one → `filter "%…%" (from the preset) — your N marks
-are not used`; partial → `the N sessions you marked (the menu overrides the preset: …)`),
-`Menu adds:` (only what the menu itself contributes — currently just
-`--no-subagents`), and an optional `Note:` (subagents that will be exported standalone,
-or a preset that already drops subagents, which the switch cannot widen). The old
+lines that cannot lie: `Sessions:` (untouched + no pinned selection → `all N sessions
+in the DB`; untouched + a pinned one → `filter "%…%" (from the preset) — your N marks
+are not used`; narrowed → `the N sessions you marked (the menu overrides the preset: …)`),
+`Menu adds:` (only what the menu itself contributes — `nothing`, or
+`subagents cascaded from selected roots` when the menu narrowed a hidden run), and an
+optional `Note:` (subagents that will be exported standalone, or a preset that already
+drops subagents, which the switch cannot widen). The old
 `Filter: (preset as configured)` / duplicated `Spec:` CSV is gone: the per-product
 block already carries the descriptions. The recency rules that used to
 be mark-only rows are now CLI flags (`--last N` counts roots and closes over their

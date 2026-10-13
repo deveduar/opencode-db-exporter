@@ -23,7 +23,7 @@ if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)
 
 from exportlib import TOOL_VERSION
-from exportlib.config import default_bkp_dir, default_db, default_out
+from exportlib.config import default_bkp_dir, default_db, default_out, default_presets
 from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions, since_ms
 from exportlib.faithful import write_session_json
 from exportlib.memory import memory_export
@@ -172,6 +172,17 @@ def build_argparser() -> argparse.ArgumentParser:
     # Hidden/internal args
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
+
+    # CLI-only workflow controls (never preset keys, like --stamp). They do not
+    # enter FLAGS: they act on the run itself, not on its content.
+    ap.add_argument("--list-presets", action="store_true",
+                    help="list the named presets in the presets file and exit (no DB)")
+    ap.add_argument("--list-products", action="store_true",
+                    help="list the three products (document kinds) and exit (no DB)")
+    ap.add_argument("--show", action="store_true",
+                    help="print the resolved plan for <profile> and exit (static, no DB)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the plan + the sessions the selection would match; write nothing")
     return ap
 
 
@@ -221,13 +232,139 @@ def _backup_aligned(db_path: Path) -> str:
     return "out of sync"
 
 
+def _print_presets() -> int:
+    """`export --list-presets`: the named recipes of the presets file, one per
+    line (name + its purpose, or the technical selection/config summary when a
+    user preset carries no purpose). No DB, no profile."""
+    from exportlib.plan import load_presets, plan_purpose, preset_descr, preset_names
+    presets = load_presets()
+    names = preset_names(presets)
+    if not names:
+        print(
+            f"No presets found at {default_presets()}.\n"
+            "Create one (see the shipped presets.json for the contract) or set OCED_PRESETS.",
+            file=sys.stderr,
+        )
+        return 1
+    for n in names:
+        line = plan_purpose(n) or preset_descr(n, presets[n])
+        print(f"{n:<16} {line}")
+    print()
+    print(f"Details for one plan: opencode-db export <name> --show  (file: {default_presets()})")
+    return 0
+
+
+def _print_products() -> int:
+    """`export --list-products`: the three document kinds (the raw CLI nouns),
+    their aliases and a pointer at the named plans. No DB, no profile."""
+    from exportlib.plan import product_listing
+    print("== Products (the document kinds; raw CLI) ==")
+    print()
+    print(product_listing())
+    return 0
+
+
+def _plan_block(profile: str) -> tuple[str, str]:
+    """(plan text, notes text) for a profile, dying cleanly on an unknown name."""
+    from exportlib.plan import notes_text, plan_text
+    try:
+        return plan_text(profile), notes_text(profile)
+    except ValueError as e:
+        die(str(e))
+
+
+def _show_plan(profile: str) -> int:
+    """`export <name> --show`: the resolved plan only, static (no DB read)."""
+    text, notes = _plan_block(profile)
+    print(f"== Export plan: {profile} ==")
+    print()
+    print(text)
+    if notes:
+        print()
+        print("-> Notes")
+        print(notes)
+    print()
+    print("(plan only: the database was not read and nothing was written)")
+    return 0
+
+
+def _dry_run(args, profile: str) -> int:
+    """`export <name> --dry-run`: the plan plus the sessions the current
+    selection would match (read-only), and nothing is written."""
+    text, notes = _plan_block(profile)
+    print(f"== Export plan: {profile} ==")
+    print()
+    print(text)
+    if notes:
+        print()
+        print("-> Notes")
+        print(notes)
+    print()
+    print(f"Selection: {selection_label(args)}")
+
+    db_path = Path(default_db())
+    if not db_path.exists():
+        print(f"(database not found at {db_path}; nothing was read or written)")
+        return 0
+
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        sessions = load_sessions(con, args.filter, args.sessions,
+                                 getattr(args, "last", None), getattr(args, "since", None))
+        db_ids = all_session_ids(con)
+    finally:
+        con.close()
+    if not sessions:
+        print(f"Matched: 0 sessions — nothing would be exported ({selection_label(args)}).")
+        return 0
+
+    def _is_subagent(v: dict) -> bool:
+        p = v.get("parent_id") or ""
+        return bool(p) and p in db_ids
+
+    if args.no_subagents:
+        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
+    elif args.no_orphan_subagents:
+        while True:
+            drop = {k for k, v in sessions.items()
+                    if _is_subagent(v) and v["parent_id"] not in sessions}
+            if not drop:
+                break
+            for k in drop:
+                del sessions[k]
+    if not sessions:
+        print("Matched: 0 sessions after subagent filtering — nothing would be exported.")
+        return 0
+    ids = set(sessions)
+    roots = [k for k, v in sessions.items() if v["parent_id"] not in ids]
+    subs = len(sessions) - len(roots)
+    print(f"Matched: {len(sessions)} session(s) = {len(roots)} root(s) + {subs} subagent(s)")
+    print("(dry run: nothing was written)")
+    return 0
+
+
 def main() -> None:
     ap = build_argparser()
     args = ap.parse_args()
+
+    # Discovery short-circuits before any profile resolution or DB access.
+    if args.list_presets:
+        sys.exit(_print_presets())
+    if args.list_products:
+        sys.exit(_print_products())
+
+    profile_arg = args.profile
     resolve_profile(args, ap)
 
     if args.profile == "full":
         args.profile = "transcript"  # alias
+
+    # Preview short-circuits before the write pipeline (`--show` never reads the DB).
+    if args.show:
+        sys.exit(_show_plan(profile_arg))
+    if args.dry_run:
+        sys.exit(_dry_run(args, profile_arg))
 
     if args.sessions:
         flat = []
@@ -389,7 +526,8 @@ def main() -> None:
 
     # ------- index -------
     index_path = out_dir / "index.md"
-    write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp)
+    write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
+                total_digest, n_backfilled)
 
     # ------- metadata -------
     meta_sha = sha256_file(db_path)
