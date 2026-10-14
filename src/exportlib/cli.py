@@ -266,25 +266,20 @@ def _print_products() -> int:
     return 0
 
 
-def _plan_block(profile: str) -> tuple[str, str]:
-    """(plan text, notes text) for a profile, dying cleanly on an unknown name."""
-    from exportlib.plan import notes_text, plan_text
+def _plan_block(profile: str) -> str:
+    """The plan text for a profile, dying cleanly on an unknown name."""
+    from exportlib.plan import plan_text
     try:
-        return plan_text(profile), notes_text(profile)
+        return plan_text(profile)
     except ValueError as e:
         die(str(e))
 
 
 def _show_plan(profile: str) -> int:
     """`export <name> --show`: the resolved plan only, static (no DB read)."""
-    text, notes = _plan_block(profile)
     print(f"== Export plan: {profile} ==")
     print()
-    print(text)
-    if notes:
-        print()
-        print("-> Notes")
-        print(notes)
+    print(_plan_block(profile))
     print()
     print("(plan only: the database was not read and nothing was written)")
     return 0
@@ -326,14 +321,10 @@ def _counts(sessions: dict) -> str:
 def _dry_run(args, profile: str) -> int:
     """`export <name> --dry-run`: the plan plus the sessions the current
     selection would match (read-only), and nothing is written."""
-    text, notes = _plan_block(profile)
+    text = _plan_block(profile)
     print(f"== Export plan: {profile} ==")
     print()
     print(text)
-    if notes:
-        print()
-        print("-> Notes")
-        print(notes)
     print()
     print(f"Selection: {selection_label(args)}")
 

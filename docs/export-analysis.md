@@ -1951,7 +1951,7 @@ static catalog.
 `[products]` column right. Widened to 15 (with the products column at 22), so long names
 align without touching the gap rule.
 
-## §54 The explain output is a static catalog, not a second DB reader (current)
+## §54 The explain output is a static catalog, not a second DB reader
 
 `export --explain` first shipped (§53) as a DB reader: for every preset it printed a block
 with the live match count (`roots + subagents`, from the selection resolver `--dry-run` uses),
@@ -1979,3 +1979,41 @@ re-parsing the flag CSV) and a top-level `bundle` flag.
 a `corpus.jsonl` leaf), that it carries no `matched:` line, and that its output is byte-identical
 with and without a DB; `menu_flow.sh` checks the `[?] what each preset produces` row. Counters:
 `menu_flow` 355, `export_smoke` 426.
+
+## §55 The plan block is the ficha `--explain` prints (current)
+
+§54 gave `--explain` a ficha per preset: `name (products)`, the file-borne `description`,
+a `flags:` line and an example tree. Reading it next to the confirm screen showed *two*
+formats for one fact — `--explain` had the ficha, while `plan_text()` (the confirm,
+`--show`, `--dry-run`) still emitted the older flat, flush-left block: one line per
+product at the margin, its intro and effective flags below, each flag on its own line, and
+a hand-written `-> Notes` block for the caveats. The caveats were the worst of it: they
+were a *second* description of the same flags (`faithful JSON keeps everything`,
+`sanitize is per-run`), derived from `has_json`/`has_sanitize` — text that had to be kept
+in sync with the `flags:` line that already said the same thing.
+
+**One builder, one format.** `plan_text()` is now: the intros of only the profile's
+products (a compact legend at the left margin), a blank line, then `ficha_lines()`. The
+same `ficha_lines()` feeds `explain_text()`, so the catalog and the runtime plan are one
+piece of code (a smoke guard extracts archive's ficha from `--show` and from `--explain`
+and asserts they are byte-identical). A bare product keyword has no preset: `plan_text()`
+prints its intro and the `Default options, no flags set` caption, then the same
+`example_tree()`. The `-> Notes` block is gone, and with it `notes_text()`,
+`SANITIZE_WARN`-style constants and `NOTES_JSON`; the confirm, `--show` and `--dry-run`
+lost their `-> Notes` section and `menu/export.sh` lost `oc_export_notes` (a menu helper
+with no consumer). The header rows (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Note:`)
+are untouched — only the block below them changed.
+
+**The flags line wraps.** The ficha's `flags:` line is ` · `-joined; for `quick` it is 83
+columns and for `archive` 78, so `ficha_lines()` runs it through `_wrap()` at `PLAN_WIDTH
+- 2` like the description and the tree. The whole block now stays inside the same 72-column
+budget as before. This changed `--explain`'s archive/quick output from one long line to a
+wrapped pair — an improvement, not a regression.
+
+**Tests.** `menu_flow.sh`'s old guards asserted the flat layout (flush-left, no
+indentation, no `·`, no `+`) and the `-> Notes` block; they are replaced with guards for
+the new shape (the ficha header, an indented `flags:` line, an indented tree, no `Notes`
+anywhere, every line ≤72 characters counted as *characters* — the ficha carries a
+multibyte `·`, so an `awk length` byte count overcounts by two). `export_smoke.sh` adds the
+`--show`-vs-`--explain` byte-identity check and a scan that no plan surface prints
+`-> Notes`. Counters: `menu_flow` 350, `export_smoke` 428.

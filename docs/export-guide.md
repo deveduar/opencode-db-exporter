@@ -164,12 +164,14 @@ opencode-db menu  →  Export
 
 2. **Preset picker** — shows your named plans (each with its purpose tag). Pick one.
 
-3. **Plan confirmation** — a flat, flush-left `-> Export plan` block. The header rows
+3. **Plan confirmation** — a `-> Export plan` block. The header rows
    (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`, plus `Note:` when the menu has
-   one) come first; then each product gets its own line at the left margin with its
-   description and effective flags on the lines below, a blank line between products, and
-   an optional `-> Notes` block for the caveats. Nothing is bulleted, indented or nested,
-   and every line wraps at 72 columns. The point of the `Sessions:` line is that
+   one) come first; then the plan: the intros of the preset's products, followed by the
+   **ficha** — the `name (products)` line, its description, the `flags:` line with the
+   effective flag phrases and an example file tree, all indented two spaces. It is the
+   SAME block `export <name> --show` / `--dry-run` and `export --explain` print, so the
+   catalog and the runtime plan can never disagree. Every line wraps at 72 columns. The
+   point of the `Sessions:` line is that
    it can never lie about what will be selected:
    - all marked + a preset that pins no selection → `all 6 sessions in the DB`
    - all marked + a preset that pins one (`filter`/`sessions`) → `filter "%…%" (from the

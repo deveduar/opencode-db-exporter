@@ -569,36 +569,26 @@ full tool outputs" ] \
 reasoning omitted" ] \
     && ok "oc_annotate_flags sanitize+no_reasoning" || bad "annotate: [$(oc_annotate_flags "sanitize=true,no_reasoning=true")]"
 [ "$(oc_annotate_flags "cap=500")" = "cap 500 chars" ] && ok "oc_annotate_flags cap" || bad "annotate cap: [$(oc_annotate_flags "cap=500")]"
-# oc_export_plan produces lines for a preset (check archive)
-printf '%s\n' "$(oc_export_plan archive)" | grep -q '^faithful JSON, raw and unfiltered$' && ok "oc_export_plan archive notes raw JSON" || bad "plan archive: $(oc_export_plan archive)"
-printf '%s\n' "$(oc_export_plan archive)" | grep -q '^full tool outputs$' && ok "oc_export_plan archive notes full outputs" || bad "plan archive: $(oc_export_plan archive)"
-# No operator symbology anywhere in the block: no '+' marker, no ' · ' joiner,
-# no em dash. Each thing is its own line of prose.
-PLAN_SYM=$(oc_export_plan archive)
-grep -qE '^[+*-] | · |—| +$' <<<"$PLAN_SYM" \
-    && bad "the plan reintroduced operator symbology: [$(grep -nE '^[+*-] | · |—| +$' <<<"$PLAN_SYM" | head -2)]" \
-    || ok "no '+' marker, no ' · ' joiner, no em dash in the plan"
-# Every added flag is on its OWN line, so each one is assertable on its own.
-for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched files"; do
-    grep -qxF "$bit" <<<"$PLAN_SYM" \
-        && ok "its own line: $bit" || bad "not on its own line: $bit"
-done
+# oc_export_plan produces the ficha (the SAME builder --explain prints): the
+# preset + products, the intros of ONLY its products, the flags it sets and an
+# example file tree.
+PLAN=$(oc_export_plan archive)
+grep -qx 'archive (transcript + memory)' <<<"$PLAN" \
+    && ok "the plan leads with the preset and its products" || bad "plan header: $(head -1 <<<"$PLAN")"
+grep -qx 'transcript' <<<"$PLAN" && grep -qx 'memory' <<<"$PLAN" \
+    && ok "the plan shows an intro for each of the preset's products" || bad "plan intros: $(grep -E '^(transcript|memory)$' <<<"$PLAN" | paste -sd, -)"
+grep -q '^  flags: faithful JSON, raw and unfiltered · full tool outputs · touched$' <<<"$PLAN" \
+    && ok "the plan lists the effective flags on the flags: line, wrapped to 72" || bad "plan flags: $(grep 'flags:' <<<"$PLAN")"
+grep -qx '  <stamp>/' <<<"$PLAN" && grep -q '└── memory/' <<<"$PLAN" \
+    && ok "the plan shows an example file tree" || bad "plan tree: $(grep -c '──' <<<"$PLAN")"
 # review plan has no sanitize (a preset that redacted silently would promise a safety it cannot keep)
-! printf '%s\n' "$(oc_export_plan review)" | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
-# transcript default plan
+! oc_export_plan review | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
+# transcript default plan: no preset -> intro + the caption + the tree
 printf '%s\n' "$(oc_export_plan transcript)" | grep -qx 'Default options, no flags set' \
     && ok "oc_export_plan transcript default (a caption, not a parenthetical)" || bad "plan transcript: $(oc_export_plan transcript)"
-# Notes are an ANNOTATION of the plan, not another thing it produces: they come
-# from the preset's own flags, so they live in their own '-> Notes' block.
-N_ARCH=$(oc_export_notes archive); N_NOTES=$(oc_export_notes notes)
-grep -q 'faithful JSON keeps everything' <<<"$N_ARCH" \
-    && ok "oc_export_notes archive reports the raw-JSON caveat" || bad "notes archive: $N_ARCH"
-[ -n "$N_NOTES" ] && bad "a preset with no json/sanitize must have no notes: $N_NOTES" \
-    || ok "a plan with nothing to warn about prints no notes"
-# The notes must never leak into the product block (that was the old 'Notes:'
-# line inside the tree, which read like a third product).
+# The old '-> Notes' block is gone: the flags: line already carries those facts.
 oc_export_plan archive | grep -q 'Notes' \
-    && bad "the notes leaked back into the product block" || ok "the product block carries no notes"
+    && bad "the plan still prints a Notes block" || ok "the plan has no Notes block"
 export OCED_PRESETS="$TMP/no-presets.json"
 
 echo "== exports picker (view / toggle to remove / bulk) ==
@@ -909,49 +899,38 @@ grep -q 'the menu overrides the preset' "$CU" \
     && ok "narrowing overrides the preset's pinned filter (with a warning)" || bad "no override warning: $(grep 'Sessions:' "$CU")"
 [ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, -)" = "ses_A0001,ses_A0002,ses_A0003" ] \
     && ok "narrowed run pins the menu's cascade (not the preset filter)" || bad "narrowed override csv: $(cat "$CALLS")"
-# The plan block is FLAT: product name at the left margin, its description
-# BELOW it. No "Will produce:" label, no bullets, no leading indentation.
+# The plan block is the shared ficha: an indented description/flags/tree under
+# the preset line. No "Will produce:" label, no bullets.
 grep -q 'Will produce' "$XOUT" && bad "the old 'Will produce:' label is still there" \
     || ok "the plan dropped the 'Will produce:' label"
 grep -qE '^transcript$' "$XOUT" \
-    && ok "the product name sits at the left margin" || bad "plan product margin: $(grep -nE 'transcript' "$XOUT" | head -3)"
+    && ok "the product intros sit at the left margin" || bad "plan product margin: $(grep -nE 'transcript' "$XOUT" | head -3)"
 grep -qE '^[-*] ' "$XOUT" && bad "the plan grew a bullet again" || ok "the plan has no bullets"
-# The 'notes' preset sets no json/sanitize, so the confirm must show NO
-# '-> Notes' block at all (a note is an annotation, not a product). $XOUT above
-# is exactly that preset, so it is already the negative case.
-grep -q '^-> Notes' "$XOUT" \
-    && bad "a note-less plan still printed '-> Notes'" \
-    || ok "no '-> Notes' block when the plan has nothing to warn about"
-# A preset that DOES set json gets the block, once, after the products.
-# NOTE: grep PATTERN "$VAR" would treat the variable as a FILENAME; these
-# guards pipe / use a here-string so the content is really the input.
-CARC=$(oc_export_confirm archive "all 6 sessions in the DB" "nothing" "")
-grep -q '^-> Notes' <<<"$CARC" \
-    && ok "'-> Notes' marks the caveats as an annotation of the plan" || bad "missing '-> Notes' in: $(tr '\n' '|' <<<"$CARC")"
-[ "$(grep -c '^-> Notes' <<<"$CARC")" = "1" ] \
-    && ok "'-> Notes' appears exactly once" || bad "'-> Notes' repeated"
-# The standalone-subagent note stays in the header rows.
+# The standalone-subagent note stays in the header rows (not the ficha).
 CSUB=$(oc_export_confirm notes "the 2 sessions you marked" "nothing" "the preset drops every subagent")
 grep -qE '^Note: +the preset drops every subagent' <<<"$CSUB" \
     && ok "the standalone-subagent note stays in the header rows" || bad "note row: [$(grep '^Note:' <<<"$CSUB")]"
-# Scoped to the plan helper itself: $XOUT also holds the picker rows, which DO
-# carry a leading space, so a blanket '^ +' over it proves nothing.
+# The ficha is indented (description, flags:, tree) under the preset line.
 PLANOUT=$(oc_export_plan archive)
-grep -qE '^ +' <<<"$PLANOUT" \
-    && bad "the plan is not flush left: [$(grep -nE '^ +' <<<"$PLANOUT" | head -1)]" \
-    || ok "the plan is flush left"
-grep -qE '^[-*] |^ +' <<<"$PLANOUT" \
-    && bad "the plan reintroduced a level or a bullet" || ok "the plan has no levels and no bullets"
+grep -qE '^archive \(transcript \+ memory\)$' <<<"$PLANOUT" \
+    && ok "the plan prints the ficha header (preset + products)" || bad "ficha header: $(head -1 <<<"$PLANOUT")"
+grep -qE '^  flags: ' <<<"$PLANOUT" \
+    && ok "the ficha carries an indented flags: line" || bad "ficha flags line missing"
+grep -qE '^  <stamp>/$' <<<"$PLANOUT" \
+    && ok "the ficha carries an indented example tree" || bad "ficha tree missing"
+# No '-> Notes' block anywhere: the flags: line already carries those facts.
+grep -q 'Notes' <<<"$PLANOUT" && bad "the plan still prints a Notes block" || ok "the plan has no Notes block"
 # Nothing is hidden: the wrap may split a line but never a word, and no line
 # runs past the fixed width.
 # The contract is the LITERAL 72, not "$OCED_PLAN_WIDTH": comparing against the
 # same knob would still pass if both the width and the expectation moved.
-WIDEST=$(printf '%s\n' "$PLANOUT" | awk '{ n=length($0); if (n>m) m=n } END { print m+0 }')
+# Count CHARACTERS (the ficha carries a multibyte '·'), not bytes.
+WIDEST=$(printf '%s\n' "$PLANOUT" | python3 -c "import sys; print(max((len(l.rstrip(chr(10))) for l in sys.stdin), default=0))")
 [ "$WIDEST" -le 72 ] \
     && ok "every plan line fits the fixed width ($WIDEST <= 72)" || bad "plan line too long: $WIDEST"
 [ "$OCED_PLAN_WIDTH" = "72" ] \
     && ok "the menu pins the plan width to 72" || bad "OCED_PLAN_WIDTH is $OCED_PLAN_WIDTH, not 72"
-[ "$(python3 "$MOD/exportlib/plan.py" rows >/dev/null 2>&1; python3 -c "
+[ "$(python3 -c "
 import sys; sys.path.insert(0, '$MOD')
 import importlib.util as u
 spec = u.spec_from_file_location('pl', '$MOD/exportlib/plan.py'); m = u.module_from_spec(spec); spec.loader.exec_module(m)
@@ -959,9 +938,11 @@ print(m.PLAN_WIDTH)")" = "72" ] \
     && ok "plan.py PLAN_WIDTH default is 72" || bad "plan.py PLAN_WIDTH drifted"
 printf '%s\n' "$PLANOUT" | grep -q 'RAG corpus in corpus.jsonl' \
     && ok "the plan keeps the full product intros (nothing hidden)" || bad "plan intro missing"
-# The bits are emitted verbatim: every one of them is present, in order.
+# The bits are emitted verbatim: every one of them is present (the wrap may
+# split the flags: line, so flatten it before matching).
+PLANFLAT=$(tr '\n' ' ' <<<"$PLANOUT" | tr -s ' ')
 for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched files"; do
-    printf '%s\n' "$PLANOUT" | grep -qF "$bit" \
+    grep -qF "$bit" <<<"$PLANFLAT" \
         && ok "the plan keeps the effective flag: $bit" || bad "plan flag missing: $bit"
 done
 # Every line of the description must be under its product, never beside it.

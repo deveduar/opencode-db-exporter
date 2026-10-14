@@ -336,22 +336,15 @@ oc_export_plan() {
     oc_plan_py plan "$1" --width "$OCED_PLAN_WIDTH"
 }
 
-# oc_export_notes <profile> -> the caveats of that plan, "" when it has none.
-# A note is an annotation OF the recipe, never a recipe itself: `has_json` /
-# `has_sanitize` come from the preset's own flags.
-oc_export_notes() {
-    oc_plan_py notes "$1" --width "$OCED_PLAN_WIDTH"
-}
-
 # oc_export_confirm <preset> <sessions-line> [menu-adds] [note]
 # One honest block: what will be selected, what the menu adds on top of the
 # preset, and the consequences the rows cannot show.
 #
-# Layout is FLAT and flush left: no indentation, no bullets, no levels. The
-# `%-10s` key column is what aligns the values ("Menu adds:" is exactly 10
+# The `%-10s` key column is what aligns the values ("Menu adds:" is exactly 10
 # chars, so `%-9s` used to push its value one column right of every other).
-# Below the rows come the products (name, then its description and effective
-# flags BELOW it) and, when the plan has any, an annotated "-> Notes" block.
+# Below the header rows comes the plan: the intros of the preset's products,
+# then the ficha (name/products, description, flags and the example file tree) —
+# the SAME block `--show`/`--dry-run` print, built by plan.py.
 oc_export_confirm() {
     local name="$1" sess="$2" menu_adds="${3:-nothing}" note="${4:-}"
     local db_est=0
@@ -368,13 +361,6 @@ oc_export_confirm() {
     printf '%-10s %s\n' "Output:" "$OCED_OUT/<timestamp>"
     echo ""
     oc_export_plan "$name"
-    local notes
-    notes=$(oc_export_notes "$name")
-    if [ -n "$notes" ]; then
-        echo ""
-        echo "-> Notes"
-        printf '%s\n' "$notes"
-    fi
     echo ""
     if [ "$db_est" -ge 1073741824 ]; then
         confirm_action "Start this export? The DB is ~$(o_human_size "$db_est") — may take a while." || { echo "   cancelled."; return 1; }

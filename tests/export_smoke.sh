@@ -1294,6 +1294,19 @@ SHNDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export prompts --
 DR=$(OCED_PRESETS="$EXAMPLE" run export archive --dry-run)
 printf '%s' "$DR" | grep -q "Matched: 6 session(s) = 3 root(s) + 3 subagent(s)" \
     && ok "export --dry-run counts the sessions the selection matches" || bad "--dry-run: $(printf '%s' "$DR" | grep Matched)"
+# The plan block and `--explain` share ONE ficha builder: archive's ficha must
+# be byte-identical in both (the catalog and the runtime plan cannot drift).
+EXF=$(OCED_PRESETS="$EXAMPLE" run export --explain | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
+ASHOW=$(OCED_PRESETS="$EXAMPLE" run export archive --show | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
+[ -n "$EXF" ] && [ "$EXF" = "$ASHOW" ] \
+    && ok "the plan ficha is identical to --explain's" \
+    || bad "ficha drift: [$(printf '%s' "$EXF" | head -1)] != [$(printf '%s' "$ASHOW" | head -1)]"
+# The old '-> Notes' block is gone from every plan surface.
+if printf '%s%s' "$SH" "$DR" | grep -q '^-> Notes'; then
+    bad "'-> Notes' still printed by a plan surface"
+else
+    ok "no plan surface prints the retired '-> Notes' block"
+fi
 before=$(find "$OUT" -maxdepth 2 -name metadata.json | wc -l)
 OCED_PRESETS="$EXAMPLE" run export archive --dry-run >/dev/null
 after=$(find "$OUT" -maxdepth 2 -name metadata.json | wc -l)

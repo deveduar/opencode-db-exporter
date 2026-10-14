@@ -14,8 +14,9 @@
 #   products --legend    the product picker header legend (use-it-when lines)
 #   products-list        the friendly `export --list-products` screen (no DB)
 #   resolve <profile>    JSON plan for a product keyword or preset name
-#   plan <profile> [--width N]   the confirm's product block (flat, no label)
-#   notes <profile> [--width N]  the caveats of that plan ("" when there are none)
+#   plan <profile> [--width N]   the plan block shared by the confirm, --show and
+#                        --dry-run: the preset's product intros + the ficha
+#                        (name (products), description, flags, example tree)
 #   snapshot <name>      "fresh" when the preset pins snapshot: fresh, else ""
 #   selection <name>     the selection the preset PINS, as a human phrase, or ""
 #   subagents <name>     "no_subagents" | "no_orphan_subagents" | "both" | ""
@@ -98,13 +99,6 @@ def product_listing() -> str:
     lines.append("")
     lines.append("Named plans (presets) build on these: opencode-db export --list-presets")
     return "\n".join(lines)
-
-NOTES_JSON = [
-    "faithful JSON keeps everything: all messages, reasoning and full tool outputs",
-    "the markdown display filters do not apply to it: tool_output, role, no_reasoning, tool_input_limit",
-]
-
-SANITIZE_WARN = "sanitize redacts high-confidence secrets only (sk-, ghp_, AKIA, JWT, PEM), so review the output anyway"
 
 
 def _jq_tostring(v) -> str:
@@ -228,12 +222,14 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
 
 # --- text artifacts served to the menu ------------------------------------
 
-# The confirm screen is deliberately FLAT: no bullets, no nesting, no labels.
-# A product name sits at the left margin and every line of its description goes
-# BELOW it, wrapped. Nothing is truncated and nothing is summarised away — the
-# intros are the product's real documentation, so they are wrapped, not cut.
-# Fixed width (not `tput cols`): it keeps the layout deterministic across
-# terminals and assertable in the smoke suite.
+# The plan block is deliberately compact and cannot drift from `--explain`: the
+# ficha (name/products, description, flags and the file tree) is built ONCE, by
+# `ficha_lines()`, and used both by the per-preset catalog and by `plan_text()`.
+# Above the ficha come the intros of ONLY the products that preset exports (a
+# compact legend, so the reader knows what "transcript"/"memory" mean without
+# the whole catalog); a bare product keyword has no recipe, so it shows its intro,
+# the `Default options, no flags set` caption and the same tree. Fixed width (not
+# `tput cols`): it keeps the layout deterministic and assertable in the suite.
 PLAN_WIDTH = 72
 
 
@@ -252,68 +248,36 @@ def _wrap(text: str, width: int) -> list[str]:
     return out
 
 
-def _product_block(item: dict, intro: str, width: int) -> list[str]:
-    lines = [item["product"]]
-    lines += _wrap(intro, width)
-    # `bits` is a LIST of standalone phrases, emitted one per line. There is no
-    # separator and no bullet: the old `" · ".join(...)` plus a '+' marker read
-    # like an expression (`+faithful JSON… · full tool outputs`) rather than a
-    # list of things, and the '+' only survived because it happened to be first.
-    for bit in item["bits"]:
-        lines += _wrap(bit, width)
-    return lines
-
-
 def plan_text(
     profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
 ) -> str:
-    """The product block of the confirm (NO label, NO leading indentation: the
-    caller owns the surrounding layout). One line per product name, its
-    description and its effective flags BELOW it, wrapped at `width`."""
+    """The plan block shared by the confirm, `--show` and `--dry-run`.
+
+    For a preset: the intros of ONLY the products it exports (a compact legend),
+    then the ficha from `ficha_lines()` (name/products, description, the flags it
+    sets and an example file tree). A bare product keyword has no recipe: its
+    intro, the `Default options, no flags set` caption and the same tree."""
     plan = resolve(profile, presets)
-    blocks: list[list[str]] = []
+    blocks: list[str] = []
     if plan["kind"] == "preset":
         for item in plan["items"]:
-            blocks.append(_product_block(item, item["intro"], width))
+            blocks.append("\n".join([item["product"]] + _wrap(item["intro"], width)))
+        blocks.append("\n".join(ficha_lines(profile, presets, width)))
     else:
         item = plan["items"][0]
-        block = _product_block(item, item["intro"], width)
-        # A bare product keyword has no preset behind it. That used to ride on
-        # the description as "(default options)", but the 72-column wrap pushed
-        # the parenthetical onto its own line, where it read as a stray fragment.
-        # It is a caption in its own right, like every other line here.
-        block.append("Default options, no flags set")
-        blocks.append(block)
-    return "\n\n".join("\n".join(b) for b in blocks)
+        lines = [item["product"]] + _wrap(item["intro"], width)
+        # A bare product keyword has no preset behind it. That used to ride on the
+        # description as "(default options)"; it is a caption in its own right.
+        lines.append("Default options, no flags set")
+        lines += example_tree(profile, presets)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
-def notes_text(
-    profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
-) -> str:
-    """The caveats of a plan, wrapped and label-free; "" when there are none.
-
-    A note is NEVER a recipe of its own — `has_json`/`has_sanitize` are read off
-    the preset's own flags (per product for a bundle), so these lines can only
-    ever describe THAT recipe, which is why the caller marks them as an
-    annotation of the plan instead of another thing it will produce.
-    """
-    plan = resolve(profile, presets)
-    notes: list[str] = []
-    if plan["has_json"]:
-        notes += list(NOTES_JSON)
-    if plan["has_sanitize"]:
-        notes.append(SANITIZE_WARN)
-    return "\n".join(line for note in notes for line in _wrap(note, width))
-
-
-# --- example file tree (the `export --explain` catalog) -------------------
-# `export --explain` is a STATIC catalog: it never reads the DB (the plan shown
-# before a preset runs already accounts for any selection). Instead of repeating
-# `plan_text` per preset (which reprinted the same PRODUCT_INTRO for every
-# transcript preset), each preset is shown once as a ficha: its description, the
-# flags it sets, and an example of the files it would write — derived from the
-# SAME `resolve()` the export pipeline uses, so the tree cannot drift from the
-# real layout (`make_outdir_final` always nests a product dir under the stamp).
+# --- example file tree + the shared ficha (the plan and `--explain`) -------
+# `--explain` is a STATIC catalog: it never reads the DB. The ficha below is the
+# ONE place a preset's output is described (description + flags + tree), reused
+# by `plan_text()` so the runtime plan and the catalog cannot drift.
 
 def _session_tree(product: str, cfg: dict) -> dict:
     """The nested tree of ONE product's output dir (dict = dir, None = file)."""
@@ -352,6 +316,30 @@ def example_tree(profile: str, presets: dict | None = None) -> list[str]:
     return ["<stamp>/"] + _tree_lines(root)
 
 
+def ficha_lines(
+    profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
+) -> list[str]:
+    """The ficha of ONE preset: `name (products)`, its description, the flags it
+    sets (one `flags:` line, only when it sets some) and an example file tree
+    indented under it. This is the ONE place a preset's output is described —
+    `explain_text()` prints it for every preset and `plan_text()` for the chosen
+    one, so the catalog and the runtime plan cannot drift apart."""
+    plan = resolve(profile, presets)
+    prod = " + ".join(plan["products"])
+    lines = [f"{profile} ({prod})"]
+    desc = plan["description"]
+    if desc:
+        for ln in _wrap(desc, width - 2):
+            lines.append("  " + ln)
+    bits = [b for item in plan["items"] for b in item["bits"]]
+    if bits:
+        for ln in _wrap("flags: " + " · ".join(bits), width - 2):
+            lines.append("  " + ln)
+    for ln in example_tree(profile, presets):
+        lines.append("  " + ln)
+    return lines
+
+
 def explain_text(presets: dict | None = None) -> str:
     """The `export --explain` catalog: products once, then one ficha per preset
     (description + set flags + an example file tree). Static, no DB."""
@@ -365,18 +353,7 @@ def explain_text(presets: dict | None = None) -> str:
         lines.append(f"  {p:<{w}}  {intro}")
     lines.append("")
     for n in names:
-        plan = resolve(n, presets)
-        prod = " + ".join(plan["products"])
-        lines.append(f"{n} ({prod})")
-        desc = presets[n].get(PRESET_DESCRIPTION_KEY, "")
-        if desc:
-            for ln in _wrap(desc, PLAN_WIDTH - 2):
-                lines.append("  " + ln)
-        bits = [b for item in plan["items"] for b in item["bits"]]
-        if bits:
-            lines.append("  flags: " + " · ".join(bits))
-        for ln in example_tree(n, presets):
-            lines.append("  " + ln)
+        lines += ficha_lines(n, presets)
         lines.append("")
     return "\n".join(lines)
 
@@ -605,20 +582,14 @@ def _cli() -> int:
             plan = resolve(args[1])
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
-        if cmd in ("plan", "notes"):
+        if cmd == "plan":
             if len(args) < 2:
                 return 1
-            # `plan <profile> [--width N]` / `notes <profile> [--width N]`
+            # `plan <profile> [--width N]`
             width = PLAN_WIDTH
             if len(args) > 3 and args[2] == "--width" and args[3].isdigit():
                 width = int(args[3])
-            text = (
-                plan_text(args[1], width=width)
-                if cmd == "plan"
-                else notes_text(args[1], width=width)
-            )
-            # No trailing newline when empty: an empty `$(...)` is how the
-            # caller tells "this plan has no notes" from "it printed nothing".
+            text = plan_text(args[1], width=width)
             if text:
                 print(text)
             return 0
