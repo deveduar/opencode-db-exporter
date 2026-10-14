@@ -18,8 +18,14 @@ oc_preset_rows() {
     oc_plan_py rows
 }
 
+# oc_export_rows -> the preset rows plus the one inspection row. `[?]` = what
+# each preset produces (its description, flags and an example file tree), a
+# static catalog: the CLI `export --explain` does the work (no DB), nothing is
+# formatted here.
 oc_export_rows() {
-    oc_preset_rows
+    [ -f "${OCED_PRESETS:-}" ] || return 1
+    printf '__EXPLAIN__\t[?] what each preset produces\n'
+    oc_plan_py rows
 }
 
 oc_export_presets_picker() {
@@ -33,6 +39,11 @@ oc_export_presets_picker() {
         key=$(oc_sel_key "$sel")
         case "$key" in
             __NONE__)   continue ;;
+            __EXPLAIN__)
+                run_oced_tool export --explain
+                menu_pause "Export Presets" || return 0
+                continue
+                ;;
             __PRESET_*)
                 name="${key#__PRESET_}"
                 if oc_preset_run "$name" "$csv" "$hide"; then

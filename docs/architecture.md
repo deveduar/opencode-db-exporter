@@ -348,7 +348,7 @@ rows still come straight from `exportlib/plan.py products` but only as the CLI/t
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 each preset carries its own `description` **in the presets file**, so the shipped
-plans (`archive`/`quick`/`share`/`notes`/`conversation`/`prompts`/`rag`/`digest`/`audit_archive`) annotate themselves
+plans (`archive`/`quick`/`review`/`notes`/`conversation`/`prompts`/`rag`/`digest`) annotate themselves
 from the same source that defines them (a preset with no `description` shows the bare
 row). The confirm step prints the plan as a **flat, flush-left** block. The
 rationale is legibility at a glance: an indented tree forced the reader to decode a

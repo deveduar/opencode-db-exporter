@@ -105,29 +105,32 @@ their purpose:
 |---|---|---|---|
 | `archive` | transcript (`tool_output full` + `json`) + memory (`files`) | **lossless backup**: everything, complete tool outputs + faithful JSON + file lists | heavy |
 | `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
-| `share` | transcript (`json` + `no_reasoning`) | **publish transcript**: faithful JSON, no reasoning. It does **not** redact — add `--sanitize` (best effort) yourself, and read the output before you publish | medium |
+| `review` | transcript (`json` + `no_reasoning`) | **review transcript**: faithful JSON, no reasoning. It does **not** redact — read the output before you pass it on | medium |
 | `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
 | `conversation` | transcript (`tool_output omit` + `patch omit` + `no_reasoning`) | **the dialogue only**: just the user and assistant text, no tool calls, patches or reasoning — the cleanest read | light |
 | `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
 | `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
-| `audit_archive` | transcript (`snapshot: fresh` + `tool_output full`) | **archive-grade but safe to run any time**: offers a fresh backup first when the last one diverged from the live DB | heavy |
 
 `sessions` and recency selection are **not** presets: a pinned id list goes stale the
 moment the session is renamed, and always-matching patterns (`%2026-09%`, `%this_week%`)
 are a data-dependent guess. Use the CLI-only rules instead — `--filter`, `--sessions`,
-`--last N`, `--since DATE` (`export audit_archive --last 5`), or the menu's session
+`--last N`, `--since DATE` (`export transcript --last 5`), or the menu's session
 picker, which narrows any preset at run time.
 
-`--sanitize` is a **per-run** flag, deliberately not baked into `share`: it redacts
+`--sanitize` is a **per-run** flag, deliberately baked into no preset: it redacts
 high-confidence prefixes only, and a plan that silently redacted part of the content
-would promise a safety it cannot keep. See §5.
+would promise a safety it cannot keep. See §5. Likewise `--snapshot fresh` (a
+backup-alignment guard) ships in no preset; pass it per run, e.g.
+`export transcript --snapshot fresh`.
 
 Run `opencode-db export --list-presets` to see every named plan (`--list-products`
-lists the three products + their aliases), `export <name> --show`
-for its resolved plan (static, no DB), and `export <name> --dry-run` to see both the plan
-and the sessions the selection would match (read-only, writes nothing) — useful before
-running a hand-edited presets file.
+lists the three products + their aliases), `export --explain` for a catalog of every
+preset (its description, the flags it sets and an example file tree — static, no DB),
+`export <name> --show` for one resolved plan (static, no DB), and `export <name> --dry-run`
+to see both the plan and the sessions the selection would match (read-only, writes
+nothing) — useful before running a hand-edited presets file. The menu's preset picker
+reaches the same catalog with its `[?] what each preset produces` row.
 
 Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same sessions, and
 `quick` ~4× the plain CLI transcript. Delete runs you no longer need with
@@ -218,8 +221,9 @@ Three behaviours worth knowing:
 - **`[>] create backup` shows the plan before asking.** It runs `backup --dry-run`
   first, then a single `Create this backup now?` gate, then `backup --yes` — so no
   command ever stops to ask you something from inside the menu, and the plan block
-  appears exactly once (the `--yes` call does not repeat it). The `snapshot: fresh`
-  plan (`audit_archive`) offers the same when the last backup has diverged.
+   appears exactly once (the `--yes` call does not repeat it). A plan that sets
+   `snapshot: fresh` (no shipped preset does; pass it per run) offers the same when the
+   last backup has diverged.
 - **When the shrink discards sessions, the plan names them and offers the export
   first.** You see every session that will be dropped by **id + title + how many
   subagents come with it** (an id alone does not tell you which conversation it is),
@@ -240,13 +244,13 @@ Three behaviours worth knowing:
 |---|---|---|
 | keep a lossless backup of everything | `export archive` | complete tool outputs + faithful JSON + corpus |
 | review what I did today, fast | `export quick` | light, readable transcript + corpus |
-| send a session to a colleague / paste in an issue / publish | `export share` | no reasoning + faithful JSON; it does **not** redact — add `--sanitize` if you must (best effort) and **read the output before sharing** |
+| review or hand a session to someone | `export review` | no reasoning + faithful JSON; it does **not** redact — **read the output before passing it on** |
 | read a conversation plain | `export notes` | plain transcript defaults, nothing extra |
 | read only the dialogue (no tools, patches or reasoning) | `export conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
-| archive-grade export, but make sure the backup is current first | `export audit_archive` | offers a fresh backup when the last one diverged, then a full transcript |
+| archive-grade export, but make sure the backup is current first | `export transcript --snapshot fresh` | offers a fresh backup when the last one diverged, then a full transcript |
 | read one conversation in full | `export transcript` (CLI) | add `--json` if you also want the faithful archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |

@@ -262,8 +262,8 @@ and the `exports list` line).
         "memory": {"files": true}
       }
     },
-    "share": {
-      "description": "publish transcript: no reasoning, faithful JSON (add --sanitize for safe redaction)",
+    "review": {
+      "description": "review copy: transcript without reasoning, plus the faithful JSON archive",
       "product": "transcript",
       "json": true,
       "no_reasoning": true
@@ -291,21 +291,17 @@ and the `exports list` line).
     "digest": {
       "description": "knowledge arc: only the compaction summaries",
       "product": "digest"
-    },
-    "audit_archive": {
-      "description": "audit-grade: full transcript + complete tool outputs + fresh-backup check (heavy)",
-      "product": "transcript",
-      "snapshot": "fresh",
-      "tool_output": "full"
     }
   }
 }
 ```
 
-That is the shipped `presets.json`, verbatim. Note that `share` does **not**
-bake in `--sanitize`: redaction is best-effort (high-confidence prefixes only), so it
-stays an explicit per-run flag you ask for on purpose — a plan that silently redacted
-part of the content would promise a safety it cannot keep.
+That is the shipped `presets.json`, verbatim. No preset bakes in `--sanitize`:
+redaction is best-effort (high-confidence prefixes only), so it stays an explicit
+per-run flag you ask for on purpose — a plan that silently redacted part of the
+content would promise a safety it cannot keep. The same goes for `--snapshot fresh`
+(a backup-alignment guard, `export transcript --snapshot fresh`): the export always
+reads the live database, so the flag only coordinates a reference backup.
 
 **Product vs preset** — a *product* is **what the document is** (`transcript`,
 `memory`, `digest`: three artifact shapes); a *preset* is **a recipe for
@@ -315,9 +311,9 @@ them without touching a database: `export --list-products` (products + aliases)
 and `export --list-presets` (the named recipes).
 
 ```bash
-opencode-db export share                 # run the named preset (product + config + its own selection)
-opencode-db export share --sanitize      # opt into best-effort redaction for one run
-opencode-db export share --filter '%'    # a concrete CLI flag overrides the preset
+opencode-db export review                # run the named preset (product + config + its own selection)
+opencode-db export review --sanitize     # opt into best-effort redaction for one run
+opencode-db export review --filter '%'   # a concrete CLI flag overrides the preset
 opencode-db export rag --cap 3000        # same, per-run
 opencode-db export transcript --json     # product keywords always mean the product (raw flags unchanged)
 opencode-db export archive               # bundle: transcript + memory under ONE stamp
@@ -363,7 +359,7 @@ The **menu** has no product-only flow: each preset is a first-class action (read
   state, so it is asked before the plan and simply applied (a plan runs **ad-hoc** just like raw
   flags do). Marking **every** session runs the preset as configured (keeping its embedded
   selection); a partial selection becomes a `--sessions` override shared by every product of a
-  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`share` cover
+  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`review` cover
   the three products with defaults); without a presets file the export picker prints setup
   guidance (`cp presets.json …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.

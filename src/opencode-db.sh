@@ -111,6 +111,7 @@ Named presets (presets file, source of truth for the menu and the CLI):
   export <name> --show    print the resolved plan, static, without reading the DB
   export <name> --dry-run print the plan + the sessions that would be matched,
                      writing nothing (reads the DB read-only)
+  export --explain   catalog every preset: what it produces + an example file tree (no DB)
 
 Configuration (env > conf file > per-file default; running from a repo checkout,
 the repo-shipped conf/presets are used unless ~/.config/opencode-db has its own):

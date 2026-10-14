@@ -510,7 +510,7 @@ cat > "$OCED_PRESETS" <<'EOF'
    "rag": {"description": "memory corpus", "product": "memory"},
    "digest": {"description": "compaction digests", "product": "compactions"},
    "snappy": {"description": "fresh-backup transcript", "product": "transcript", "snapshot": "fresh"},
-   "share": {"description": "sanitized share", "product": "transcript", "json": true, "sanitize": true, "no_reasoning": true},
+   "review": {"description": "review copy", "product": "transcript", "json": true, "no_reasoning": true},
    "nosub": {"description": "transcript without subagents", "product": "transcript", "no_subagents": true},
    "narrow": {"description": "narrow transcript", "product": "transcript", "sub": "omit"}
 }}
@@ -520,6 +520,9 @@ reset
 confirm_action() { return 0; }
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_clean' && ok "presets mode lists the named preset" || bad "preset rows missing"
 printf '%s\n' "$(oc_export_rows)" | grep -qv '__MANUAL__' && ok "presets mode does NOT list Manual… (plans cover it)" || bad "preset manual should be gone"
+# The one inspection row: [?] = what each preset produces, static catalog.
+printf '%s\n' "$(oc_export_rows)" | grep -q "^__EXPLAIN__${TAB}\[?\] what each preset produces" \
+    && ok "preset picker offers [?] explain (static catalog)" || bad "explain row missing: $(printf '%s\n' "$(oc_export_rows)" | head -1)"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_everything.*\[transcript+memory\]' \
     && ok "presets mode lists a bundle preset as [transcript+memory]" || bad "bundle preset row: $(printf '%s\n' "$(oc_export_rows)")"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*\[transcript\]' \
@@ -545,12 +548,12 @@ printf '%s\n' "$PROWS" | grep -qE ' · |—' \
     && bad "export preset rows reintroduced symbology: [$(printf '%s\n' "$PROWS" | grep -nE ' · |—' | head -1)]" \
     || ok "export preset rows have no ' · ' marker and no em dash"
 ACT_ARCH=$(printf '%s\n' "$PROWS" | grep '^__PRESET_archive' | cut -f2)
-EXPECT_ARCH="archive    [transcript+memory]    lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)"
+EXPECT_ARCH="archive         [transcript+memory]    lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)"
 [ "$ACT_ARCH" = "$EXPECT_ARCH" ] \
     && ok "export preset row is three columns (name | [products] | description)" \
     || bad "archive preset row shape: [$ACT_ARCH]"
 ACT_CLEAN=$(printf '%s\n' "$PROWS" | grep '^__PRESET_clean' | cut -f2)
-EXPECT_CLEAN="clean      [transcript]           filter Project Beta  sanitized redacted transcript"
+EXPECT_CLEAN="clean           [transcript]           filter Project Beta  sanitized redacted transcript"
 [ "$ACT_CLEAN" = "$EXPECT_CLEAN" ] \
     && ok "a pinned selection rides in the description column" \
     || bad "clean preset row: [$ACT_CLEAN]"
@@ -580,8 +583,8 @@ for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched file
     grep -qxF "$bit" <<<"$PLAN_SYM" \
         && ok "its own line: $bit" || bad "not on its own line: $bit"
 done
-# share plan NO LONGER has sanitize (removed from preset)
-printf '%s\n' "$(oc_export_plan share)" | grep -qv 'sanitize' && ok "oc_export_plan share has no sanitize" || bad "plan share should not have sanitize: $(oc_export_plan share)"
+# review plan has no sanitize (a preset that redacted silently would promise a safety it cannot keep)
+! printf '%s\n' "$(oc_export_plan review)" | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
 # transcript default plan
 printf '%s\n' "$(oc_export_plan transcript)" | grep -qx 'Default options, no flags set' \
     && ok "oc_export_plan transcript default (a caption, not a parenthetical)" || bad "plan transcript: $(oc_export_plan transcript)"
@@ -683,6 +686,13 @@ grep -qx "export notes --sessions ses_A0001,ses_A0002,ses_A0003" "$CALLS" && ok 
 qset "__ALL__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 grep -qx "export notes" "$CALLS" && ok "preset ALL runs as configured (no override)" || bad "preset ALL: $(cat "$CALLS")"
+
+# The [?] explain row dispatches to the CLI reader (nothing formatted in bash).
+: > "$CALLS"
+qset "__ALL__" "__MAKE__" "__EXPLAIN__"
+oc_export_sessions_pick >/dev/null 2>&1
+grep -qx "export --explain" "$CALLS" \
+    && ok "the [?] explain row runs 'export --explain'" || bad "explain dispatch: $(cat "$CALLS")"
 
 echo "== export flow: ESC cancels without creating a run =="
 reset
@@ -1229,6 +1239,7 @@ reset
   # the row producers are called directly, so their stdout IS the capture.
   { oc_backups_rows view; oc_backups_rows remove;
     oc_exports_rows view; oc_exports_rows remove;
+    oc_export_rows;   # the preset picker's own rows (its [?] explain row)
     oc_shrinks_rows view; oc_shrinks_rows remove; } >> "$TMP/symbols.txt" 2>/dev/null
   # The sessions BROWSE is in the sample on purpose: its __REPORT_ALL__ row is
   # the same vocabulary as the exports/shrinks ones, and until now nothing
@@ -1248,8 +1259,8 @@ BADTOKEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | grep 
     || bad "unknown bracket tokens: $BADTOKEN"
 BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__|__REPORT_ALL__')
 [ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report)" || bad "[>] leaked onto: $BADFLOW"
-BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__')
-[ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify)" || bad "[?] leaked onto: $BADINSPECT"
+BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__|__EXPLAIN__')
+[ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify/explain)" || bad "[?] leaked onto: $BADINSPECT"
 NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__|^__TOGGLE_ORDER__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
 [ "$NOTOGGLE" = "0" ] && ok "every toggle row carries [*]" || bad "toggle rows without [*]: $NOTOGGLE"
 

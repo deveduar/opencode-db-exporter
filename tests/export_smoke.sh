@@ -1232,10 +1232,10 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 sys.exit(0 if open('$TESTS_DIR/../generated/flags-table.md').read() == m.flags_table() + '\n' else 1)
 " >/dev/null 2>&1 && ok "generated/flags-table.md matches scripts/generate_schema.py --docs (no drift)" || bad "flags-table drift vs generate_schema.py --docs"
 # Anti-drift #3: the presets snippet the README prints must EQUAL the shipped
-# presets.json. The README claimed `share` was sanitized for months after the file
-# dropped `sanitize` (docs/export-analysis.md §33): a user could have published
-# secrets believing they were redacted. A doc cannot be allowed to lie about a
-# flag, so the two files are compared instead of trusted.
+# presets.json. The README claimed a preset was sanitized for months after the
+# file dropped `sanitize` (docs/export-analysis.md §33): a user could have
+# published secrets believing they were redacted. A doc cannot be allowed to lie
+# about a flag, so the two files are compared instead of trusted.
 python3 -c "
 import json, re, sys
 md = open('$TESTS_DIR/../README.md').read()
@@ -1247,7 +1247,7 @@ cat > "$TMP/schema-bad.json" <<'EOF'
 EOF
 python3 "$TESTS_DIR/validate_schema.py" "$SCHEMA" "$TMP/schema-bad.json" >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] && ok "schema rejects a product+products mix" || bad "schema negative"
-echo "== shipped presets.json end-to-end (archive/quick/share) =="
+echo "== shipped presets.json end-to-end (archive/quick/review) =="
 export OCED_PRESETS="$EXAMPLE"
 run export archive >/dev/null
 EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
@@ -1263,9 +1263,9 @@ DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}
     && ok "shipped 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "shipped quick dirs"
 jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcript/metadata.json" >/dev/null \
     && ok "shipped quick uses truncated tool output (light variant)" || bad "shipped quick meta"
-run export share >/dev/null
-jq -e '.preset == "share" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
-    && ok "shipped 'share' applies its single-product flags (no sanitize)" || bad "shipped share meta"
+run export review >/dev/null
+jq -e '.preset == "review" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
+    && ok "shipped 'review' applies its single-product flags (no sanitize)" || bad "shipped review meta"
 run export prompts >/dev/null
 jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
@@ -1280,7 +1280,7 @@ export OCED_PRESETS="$PRESETS"
 echo "== CLI plan discovery: --list-presets / --show / --dry-run =="
 # Runs against the SHIPPED presets file ($EXAMPLE), not the subagent test file.
 LP=$(OCED_PRESETS="$EXAMPLE" run export --list-presets)
-printf '%s' "$LP" | grep -q "archive" && printf '%s' "$LP" | grep -q "audit_archive" \
+printf '%s' "$LP" | grep -q "archive" && printf '%s' "$LP" | grep -q "review" \
     && ok "export --list-presets lists the shipped presets" || bad "list-presets: [$LP]"
 printf '%s' "$LP" | grep -qE "this_week|one_session" \
     && bad "list-presets still shows a removed template preset" || ok "removed templates are gone from --list-presets"
@@ -1303,18 +1303,18 @@ NDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-prese
 { [ "$ndrc" -eq 0 ] && printf '%s' "$NDB" | grep -q "archive"; } \
     && ok "export --list-presets needs no database" || bad "list-presets without DB rc=$ndrc"
 # The description travels with the recipe (the presets file): prompts is not a
-# plain transcript, and the renamed snapshot plan says what it does.
+# plain transcript, and the renamed review plan says what it does.
 printf '%s' "$LP" | grep -q "just your asks" \
     && ok "--list-presets carries the description of prompts from the file" || bad "prompts description: $(printf '%s' "$LP" | grep prompts)"
-printf '%s' "$LP" | grep -q "audit-grade: full transcript" \
-    && ok "--list-presets carries the renamed audit_archive description" || bad "audit_archive description missing"
+printf '%s' "$LP" | grep -q "review copy: transcript without reasoning" \
+    && ok "--list-presets carries the review description from the file" || bad "review description missing"
 # The picker rows use the same file description (never a flag-derived guess):
 # the old taxonomy labelled prompts AND the snapshot plan "read (transcript defaults)".
 PROWS=$(OCED_PRESETS="$EXAMPLE" python3 "$MOD/exportlib/plan.py" rows)
 printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only user prompts' \
     && ok "picker row of prompts shows its file description" || bad "prompts description: $(printf '%s' "$PROWS" | grep prompts)"
-printf '%s' "$PROWS" | grep -q '^__PRESET_audit_archive.*complete tool outputs' \
-    && ok "picker row of audit_archive shows its file description" || bad "audit_archive description missing"
+printf '%s' "$PROWS" | grep -q '^__PRESET_review.*plus the faithful JSON archive' \
+    && ok "picker row of review shows its file description" || bad "review description missing"
 printf '%s' "$PROWS" | grep -q "transcript defaults" \
     && bad "picker row still claims 'transcript defaults'" || ok "no picker row falls back to 'transcript defaults'"
 # --list-products names the document kinds and their aliases; no DB needed.
@@ -1323,10 +1323,26 @@ PROD=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-prod
     && printf '%s' "$PROD" | grep -q "digest" && printf '%s' "$PROD" | grep -q "full = transcript" \
     && printf '%s' "$PROD" | grep -q "compactions = digest"; } \
     && ok "export --list-products lists the products + aliases (no DB)" || bad "--list-products rc=$prc: $PROD"
-# The snapshot guard is invisible unless annotated: the plan must SAY it.
-ASHOW=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export audit_archive --show)
+# The snapshot guard is invisible unless annotated: a plan that sets it must SAY
+# it. No shipped preset sets `snapshot: fresh` (§53), so this uses the temp one.
+ASHOW=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$SNAP_PRESETS" run export snap --show)
 printf '%s' "$ASHOW" | grep -q "fresh-backup guard" \
-    && ok "audit_archive plan states its fresh-backup guard" || bad "audit_archive plan hides the guard"
+    && ok "a snapshot: fresh plan states its fresh-backup guard" || bad "snapshot plan hides the guard"
+# --explain: a STATIC catalog — description + set flags + an example file tree.
+# It never reads the DB (the plan shown before a preset already accounts for the
+# selection), so the same output comes with or without a live DB.
+EXP=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --explain); expr_rc=$?
+{ [ "$expr_rc" -eq 0 ] \
+    && printf '%s' "$EXP" | grep -q "== What each preset produces ==" \
+    && printf '%s' "$EXP" | grep -q "^archive (transcript + memory)$" \
+    && printf '%s' "$EXP" | grep -q "flags: faithful JSON" \
+    && printf '%s' "$EXP" | grep -q "corpus.jsonl"; } \
+    && ok "export --explain is a static catalog with a file tree (no DB)" || bad "--explain rc=$expr_rc: $(printf '%s' "$EXP" | head -8)"
+printf '%s' "$EXP" | grep -q "matched:" \
+    && bad "--explain still reads the DB (a 'matched:' line)" || ok "export --explain never reads the DB"
+EXPDB=$(OCED_PRESETS="$EXAMPLE" run export --explain)
+[ "$EXP" = "$EXPDB" ] && ok "export --explain is identical with and without a DB" \
+    || bad "--explain differs when a DB is present"
 export OCED_PRESETS="$PRESETS"
 
 

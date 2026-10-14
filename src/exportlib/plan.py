@@ -171,11 +171,13 @@ def resolve(profile: str, presets: dict | None = None) -> dict:
                     "intro": PRODUCT_INTRO[profile],
                     "flags": "",
                     "bits": [],
+                    "config": {},
                 }
             ],
             "has_json": False,
             "has_sanitize": False,
             "description": "",
+            "bundle": False,
         }
     raise ValueError(f"unknown profile '{profile}'")
 
@@ -199,6 +201,7 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
                 "intro": PRODUCT_INTRO.get(p, p),
                 "flags": flags,
                 "bits": annotate_flags(flags),
+                "config": cfg,
             }
         )
     if has_bundle:
@@ -219,6 +222,7 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
         "has_json": has_json,
         "has_sanitize": has_sanitize,
         "description": pdata.get(PRESET_DESCRIPTION_KEY, ""),
+        "bundle": has_bundle,
     }
 
 
@@ -300,6 +304,81 @@ def notes_text(
     if plan["has_sanitize"]:
         notes.append(SANITIZE_WARN)
     return "\n".join(line for note in notes for line in _wrap(note, width))
+
+
+# --- example file tree (the `export --explain` catalog) -------------------
+# `export --explain` is a STATIC catalog: it never reads the DB (the plan shown
+# before a preset runs already accounts for any selection). Instead of repeating
+# `plan_text` per preset (which reprinted the same PRODUCT_INTRO for every
+# transcript preset), each preset is shown once as a ficha: its description, the
+# flags it sets, and an example of the files it would write — derived from the
+# SAME `resolve()` the export pipeline uses, so the tree cannot drift from the
+# real layout (`make_outdir_final` always nests a product dir under the stamp).
+
+def _session_tree(product: str, cfg: dict) -> dict:
+    """The nested tree of ONE product's output dir (dict = dir, None = file)."""
+    if product == "memory":
+        return {"corpus.jsonl": None, "index.md": None, "metadata.json": None}
+    # transcript and digest share the writer (and therefore the layout).
+    session: dict = {"<title>.md": None}
+    if cfg.get("json") is True:
+        session["<title>.json"] = None
+    if cfg.get("sub", "separate") == "separate":
+        session["subagents"] = {"<sub>_<id>.md": None}
+    return {"01-<title>_<id>": session, "index.md": None, "metadata.json": None}
+
+
+def _tree_lines(children: dict, prefix: str = "") -> list[str]:
+    """Render a nested dict as an indented tree (classic box-drawing)."""
+    out: list[str] = []
+    items = list(children.items())
+    for i, (name, sub) in enumerate(items):
+        last = i == len(items) - 1
+        out.append(prefix + ("└── " if last else "├── ") + name + ("/" if sub is not None else ""))
+        if sub is not None:
+            out += _tree_lines(sub, prefix + ("    " if last else "│   "))
+    return out
+
+
+def example_tree(profile: str, presets: dict | None = None) -> list[str]:
+    """An example of the files a profile writes, as tree lines (no indentation:
+    the caller decides where it sits). Derived from the resolved plan."""
+    plan = resolve(profile, presets)
+    root: dict = {}
+    if plan["bundle"]:
+        root["index.md"] = None
+    for item in plan["items"]:
+        root[item["product"]] = _session_tree(item["product"], item.get("config", {}))
+    return ["<stamp>/"] + _tree_lines(root)
+
+
+def explain_text(presets: dict | None = None) -> str:
+    """The `export --explain` catalog: products once, then one ficha per preset
+    (description + set flags + an example file tree). Static, no DB."""
+    if presets is None:
+        presets = load_presets()
+    names = preset_names(presets)
+    lines = ["== What each preset produces ==", ""]
+    lines.append("Products (what a document is):")
+    w = max(len(p) for p in PRODUCT_INTRO)
+    for p, intro in PRODUCT_INTRO.items():
+        lines.append(f"  {p:<{w}}  {intro}")
+    lines.append("")
+    for n in names:
+        plan = resolve(n, presets)
+        prod = " + ".join(plan["products"])
+        lines.append(f"{n} ({prod})")
+        desc = presets[n].get(PRESET_DESCRIPTION_KEY, "")
+        if desc:
+            for ln in _wrap(desc, PLAN_WIDTH - 2):
+                lines.append("  " + ln)
+        bits = [b for item in plan["items"] for b in item["bits"]]
+        if bits:
+            lines.append("  flags: " + " · ".join(bits))
+        for ln in example_tree(n, presets):
+            lines.append("  " + ln)
+        lines.append("")
+    return "\n".join(lines)
 
 
 def preset_selection(name: str, pdata: dict | None = None) -> str:
@@ -408,9 +487,9 @@ def _preset_row(key: str, pdata: dict) -> str:
     desc = pdata.get(PRESET_DESCRIPTION_KEY, "")
     col3 = "  ".join(x for x in (sel, desc) if x)
     disp = "+".join(x for x in products if x)
-    # Padding ONLY (name at 10, products at 22): a long name or product list
+    # Padding ONLY (name at 15, products at 22): a long name or product list
     # pushes the description right; fzf truncates the row's end, never the name.
-    name = f"{key:<10}"
+    name = f"{key:<15}"
     row = f"{name} [{disp}]" if not col3 else f"{name} {f'[{disp}]':<22} {col3}"
     return f"__PRESET_{key}\t{row}"
 

@@ -1923,3 +1923,59 @@ README snippet moved in lockstep (the anti-drift guard compares it to `presets.j
 `export_smoke.sh` and `menu_flow.sh` updated: the assertions now read the fixture/file
 `description` instead of the deleted `plan_purpose`/`oc_preset_purpose`, and the
 `transcript defaults` guard stays (there is nothing left to produce it).
+
+## §53 A preset out, a preset renamed, and a way to read them all
+
+**`audit_archive` is gone; `share` becomes `review`.** Two catalog problems the §52 work
+exposed. `audit_archive` was `transcript + snapshot: fresh + tool_output full` — but
+`snapshot: fresh` does **not** change what is exported (the export always reads the live
+DB); it only coordinates a reference backup (CLI: a stderr warning when none exists or the
+last one diverged; menu: an offer to make one first). So the preset read as a distinct
+*recipe* when all it added was a guard, and its name overstated it. The flag stays a
+first-class CLI knob (`export transcript --snapshot fresh`), documented as such; no shipped
+preset uses it. `share` was a worse case: the name promised publishing, and its description
+told you to add `--sanitize` even though a plan that silently redacted part of the content
+would promise a safety it cannot keep — so the mention was misleading, not helpful. What the
+preset actually *is* is `transcript + json + no_reasoning` (a review copy with the faithful
+archive), so it is renamed **`review`** and its description drops the sanitize parenthetical.
+The per-run `--sanitize` note survives, reworded to say *no preset* bakes it in.
+
+**The picker gains an inspection row.** `export --explain` (CLI-only, no profile) is the
+picker's `[?]` row (`__EXPLAIN__`, the one `[?]` besides `shrinks verify`) that runs the same
+command — one header, one `menu_pause`, nothing re-formatted in bash. It short-circuits before
+`resolve_profile`, like `--list-presets`/`--list-products`. §54 redesigns its output into a
+static catalog.
+
+**The picker's first column was fixed at 10, too narrow.** `_preset_row` padded the name to
+10 columns; `audit_archive` (13) and `conversation` (12) overran it and pushed the
+`[products]` column right. Widened to 15 (with the products column at 22), so long names
+align without touching the gap rule.
+
+## §54 The explain output is a static catalog, not a second DB reader (current)
+
+`export --explain` first shipped (§53) as a DB reader: for every preset it printed a block
+with the live match count (`roots + subagents`, from the selection resolver `--dry-run` uses),
+then the files, then the resolved plan and its notes. Reading it back showed the redundancy:
+the plan for a transcript preset is the same `PRODUCT_INTRO` repeated per preset, the `matched:`
+count is exactly what the plan shown before a preset runs already gives you, and the menu's
+session picker already accounts for a narrowed selection. Worse, the match count made the
+catalog depend on the machine.
+
+**The output is now a static catalog.** No DB at all: `_explain()` short-circuits before any
+`sqlite3` connection and its output is identical whether or not a `OPENCODE_DB` exists.
+`plan.py` gains `explain_text()` — the products legend once (from `PRODUCT_INTRO`, no third
+source), then one ficha per preset: its file-borne `description`, a `flags:` line (only when
+the preset sets some, from `annotate_flags`, joined with `·` because a hint contains a comma),
+and an **example file tree**. The tree comes from `example_tree()`, derived from the same
+`resolve()` the pipeline uses — `make_outdir_final` always nests a product dir under the stamp,
+so a bundle gets `<stamp>/index.md` + one dir per product, memory shows `corpus.jsonl`, a
+`json` preset adds `<title>.json`, and `sub: separate` adds `subagents/`. One derivation, so
+the tree cannot drift from the real layout. It is rendered with classic box-drawing connectors
+(`├──`/`└──`) rather than brace expansion — the user's choice, and it reads as a tree at a
+glance. `resolve()` now exposes each item's structured `config` (the tree reads booleans without
+re-parsing the flag CSV) and a top-level `bundle` flag.
+
+`export_smoke.sh` asserts the catalog (header, a product-bearing preset line, a `flags:` line,
+a `corpus.jsonl` leaf), that it carries no `matched:` line, and that its output is byte-identical
+with and without a DB; `menu_flow.sh` checks the `[?] what each preset produces` row. Counters:
+`menu_flow` 355, `export_smoke` 426.

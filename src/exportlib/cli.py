@@ -183,6 +183,8 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="print the resolved plan for <profile> and exit (static, no DB)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan + the sessions the selection would match; write nothing")
+    ap.add_argument("--explain", action="store_true",
+                    help="catalog every preset: what it produces and an example file tree (no DB)")
     return ap
 
 
@@ -288,6 +290,39 @@ def _show_plan(profile: str) -> int:
     return 0
 
 
+def _matched_sessions(con, args) -> dict:
+    """The selection's matched set, AFTER subagent inclusion — the same set the
+    real run writes, so a count taken here cannot disagree with the pipeline."""
+    sessions = load_sessions(con, args.filter, args.sessions,
+                             getattr(args, "last", None), getattr(args, "since", None))
+    if not sessions:
+        return {}
+    db_ids = all_session_ids(con)
+
+    def _is_subagent(v: dict) -> bool:
+        p = v.get("parent_id") or ""
+        return bool(p) and p in db_ids
+
+    if getattr(args, "no_subagents", False):
+        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
+    elif getattr(args, "no_orphan_subagents", False):
+        while True:
+            drop = {k for k, v in sessions.items()
+                    if _is_subagent(v) and v["parent_id"] not in sessions}
+            if not drop:
+                break
+            for k in drop:
+                del sessions[k]
+    return sessions
+
+
+def _counts(sessions: dict) -> str:
+    """`N session(s) = R root(s) + S subagent(s)` for a matched set."""
+    ids = set(sessions)
+    roots = sum(1 for v in sessions.values() if v["parent_id"] not in ids)
+    return f"{len(sessions)} session(s) = {roots} root(s) + {len(sessions) - roots} subagent(s)"
+
+
 def _dry_run(args, profile: str) -> int:
     """`export <name> --dry-run`: the plan plus the sessions the current
     selection would match (read-only), and nothing is written."""
@@ -310,37 +345,32 @@ def _dry_run(args, profile: str) -> int:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        sessions = load_sessions(con, args.filter, args.sessions,
-                                 getattr(args, "last", None), getattr(args, "since", None))
-        db_ids = all_session_ids(con)
+        sessions = _matched_sessions(con, args)
     finally:
         con.close()
     if not sessions:
         print(f"Matched: 0 sessions — nothing would be exported ({selection_label(args)}).")
         return 0
-
-    def _is_subagent(v: dict) -> bool:
-        p = v.get("parent_id") or ""
-        return bool(p) and p in db_ids
-
-    if args.no_subagents:
-        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
-    elif args.no_orphan_subagents:
-        while True:
-            drop = {k for k, v in sessions.items()
-                    if _is_subagent(v) and v["parent_id"] not in sessions}
-            if not drop:
-                break
-            for k in drop:
-                del sessions[k]
-    if not sessions:
-        print("Matched: 0 sessions after subagent filtering — nothing would be exported.")
-        return 0
-    ids = set(sessions)
-    roots = [k for k, v in sessions.items() if v["parent_id"] not in ids]
-    subs = len(sessions) - len(roots)
-    print(f"Matched: {len(sessions)} session(s) = {len(roots)} root(s) + {subs} subagent(s)")
+    print(f"Matched: {_counts(sessions)}")
     print("(dry run: nothing was written)")
+    return 0
+
+
+def _explain() -> int:
+    """`export --explain`: a static catalog of every preset — its description,
+    the flags it sets and an example of the files it writes. Never reads the DB:
+    the plan shown before a preset runs already accounts for any selection, so
+    the catalog stays about the recipes themselves."""
+    from exportlib.plan import explain_text, load_presets, preset_names
+    presets = load_presets()
+    if not preset_names(presets):
+        print(
+            f"No presets found at {default_presets()}.\n"
+            "Create one (see the shipped presets.json for the contract) or set OCED_PRESETS.",
+            file=sys.stderr,
+        )
+        return 1
+    print(explain_text(presets).rstrip("\n"))
     return 0
 
 
@@ -353,6 +383,8 @@ def main() -> None:
         sys.exit(_print_presets())
     if args.list_products:
         sys.exit(_print_products())
+    if args.explain:
+        sys.exit(_explain())
 
     profile_arg = args.profile
     resolve_profile(args, ap)

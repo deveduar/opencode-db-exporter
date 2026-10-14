@@ -16,13 +16,13 @@ oced_export_one() {
 oced_export() {
     o_check_deps
     # Preview/discovery commands decide for themselves whether the DB is needed:
-    # --list-presets/--list-products/--show never read it, and --dry-run reports
-    # a missing DB gracefully instead of dying in bash first. Everything else
-    # still needs it.
+    # --list-presets/--list-products/--show/--explain never read it, and --dry-run
+    # reports a missing DB gracefully instead of dying in bash first. Everything
+    # else still needs it.
     local need_db=1 a
     for a in "$@"; do
         case "$a" in
-            --list-presets|--list-products|--show|--dry-run) need_db=0 ;;
+            --list-presets|--list-products|--show|--explain|--dry-run) need_db=0 ;;
         esac
     done
     [ "$need_db" -eq 1 ] && o_db_exists

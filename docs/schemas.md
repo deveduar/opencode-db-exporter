@@ -45,9 +45,9 @@ in sync by construction.
         "memory":     { "files": true }
       }
     },
-    "share": {
+    "review": {
       "product": "transcript",            // single product: name resolves first
-      "json": true, "sanitize": true, "no_reasoning": true
+      "json": true, "no_reasoning": true
     },
     "notes": { "product": "transcript" },
     "rag":   { "product": "memory" },
