@@ -190,9 +190,9 @@ Every row carries one marker that says what it does:
 Export flow: session selection → plan → confirmation → run. Mark sessions in the picker
 (`[x]` = include), then pick a preset. The confirmation is a `-> Export plan` block: the
 header rows (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`) first, then the plan
-— the intros of the preset's products followed by its **ficha** (the `name (products)`
-line, its description, the effective `flags:` line and an example file tree, indented two
-spaces). That is the same block `export <name> --show` / `--dry-run` and
+— the **card** (the `name (products)` line, its description, the effective `flags:` line and
+an example file tree, indented two spaces). The header names the products, so there is no
+separate product-intro legend. That is the same block `export <name> --show` / `--dry-run` and
 `export --explain` print. Every line wraps at 72 columns and no information is dropped. A partial selection becomes `export <name> --sessions <csv>` (CLI wins over any
 embedded preset selection; a bundle shares the override); all marked runs the preset as
 configured. **No** variant tables or custom checklists in the menu — tuning and
@@ -250,47 +250,54 @@ and the `exports list` line).
 {
   "presets": {
     "archive": {
-      "description": "lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)",
+      "description": "lossless: full backup — complete tool outputs, faithful JSON, memory files (heavy)",
       "products": {
         "transcript": {"json": true, "tool_output": "full"},
         "memory": {"files": true}
       }
     },
     "quick": {
-      "description": "light daily review: same backup, truncated tool outputs (fast, compact)",
+      "description": "lossless: light daily backup — truncated tool outputs + faithful JSON (fast, compact)",
       "products": {
         "transcript": {"json": true, "tool_output": "truncated"},
         "memory": {"files": true}
       }
     },
+    "study": {
+      "description": "lossy: transcript (tool output truncated) + memory corpus (medium)",
+      "products": {
+        "transcript": {"tool_output": "truncated"},
+        "memory": {"files": true}
+      }
+    },
     "review": {
-      "description": "review copy: transcript without reasoning, plus the faithful JSON archive",
+      "description": "lossless: transcript without reasoning + faithful JSON (does not redact)",
       "product": "transcript",
       "json": true,
       "no_reasoning": true
     },
     "notes": {
-      "description": "plain conversation read: the transcript product with default options",
+      "description": "lossy: plain read — every message, tool output truncated to ~500 chars, patches and reasoning kept (light)",
       "product": "transcript"
     },
     "conversation": {
-      "description": "conversation only: user + assistant text, no tools, patches or reasoning (light)",
+      "description": "lossy: user + assistant text only — no tools, patches or reasoning (light)",
       "product": "transcript",
       "tool_output": "omit",
       "patch": "omit",
       "no_reasoning": true
     },
     "prompts": {
-      "description": "just your asks: only user prompts, no answers/reasoning/tools (task log)",
+      "description": "lossy: only user prompts — no answers/reasoning/tools (task log)",
       "product": "transcript",
       "role": "user"
     },
     "rag": {
-      "description": "corpus for another AI: the memory product with default options",
+      "description": "lossy: one JSON line per root session with tokens, first ask, last answer, todos, tools and digests (summary)",
       "product": "memory"
     },
     "digest": {
-      "description": "knowledge arc: only the compaction summaries",
+      "description": "lossy: only the compaction summaries (knowledge arc)",
       "product": "digest"
     }
   }

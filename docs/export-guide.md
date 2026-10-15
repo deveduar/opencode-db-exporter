@@ -105,12 +105,27 @@ their purpose:
 |---|---|---|---|
 | `archive` | transcript (`tool_output full` + `json`) + memory (`files`) | **lossless backup**: everything, complete tool outputs + faithful JSON + file lists | heavy |
 | `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
+| `study` | transcript (`tool_output truncated`) + memory (`files`) | **read + RAG**: a plain transcript plus the memory corpus, no faithful JSON | medium |
 | `review` | transcript (`json` + `no_reasoning`) | **review transcript**: faithful JSON, no reasoning. It does **not** redact — read the output before you pass it on | medium |
-| `notes` | transcript (defaults) | **read conversation**: plain transcript, nothing extra | light |
+| `notes` | transcript (defaults) | **read conversation**: every message, tool output truncated (~500 chars), patches and reasoning kept | light |
 | `conversation` | transcript (`tool_output omit` + `patch omit` + `no_reasoning`) | **the dialogue only**: just the user and assistant text, no tool calls, patches or reasoning — the cleanest read | light |
 | `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
-| `rag` | memory (defaults) | **feed another AI**: corpus with default options | light |
+| `rag` | memory (defaults) | **feed another AI**: one JSON line per root session (tokens, first ask, last answer, todos, tools, digests); no transcript | light |
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
+
+**Fidelity.** Every card ends with a derived `fidelity:` line. It is `lossless` when
+the run writes the faithful JSON **and** drops no data (no `no_subagents` /
+`no_orphan_subagents` / `sub: omit`, no `sanitize`), so the raw session is fully
+recoverable; otherwise `lossy`, naming the reasons. The reason fits the product that
+carries the data: a content product (`transcript`/`digest`) without the JSON is
+`no faithful JSON: the Markdown is filtered`, while a `memory`-only plan is `the RAG
+corpus is a summary, not the full session` (the corpus is distilled, so `json` — not a
+`memory` option — could not make it whole). That makes `archive`, `quick` and `review`
+**lossless** — their JSON keeps the whole session even where the Markdown is
+filtered — while `notes`, `conversation`, `prompts`, `rag`, `digest` and `study`
+are **lossy**. A bare product keyword (no preset) is lossy too. `sanitize` counts
+as lossy on purpose: redaction is best-effort and does not let you review what it
+removed.
 
 `sessions` and recency selection are **not** presets: a pinned id list goes stale the
 moment the session is renamed, and always-matching patterns (`%2026-09%`, `%this_week%`)
@@ -126,8 +141,9 @@ backup-alignment guard) ships in no preset; pass it per run, e.g.
 
 Run `opencode-db export --list-presets` to see every named plan (`--list-products`
 lists the three products + their aliases), `export --explain` for a catalog of every
-preset (its description, the flags it sets and an example file tree — static, no DB),
-`export <name> --show` for one resolved plan (static, no DB), and `export <name> --dry-run`
+preset (its description, the flags it sets, its `fidelity:` line and an example file
+tree — static, no DB), `export <name> --show` for one resolved plan (static, no DB), and
+`export <name> --dry-run`
 to see both the plan and the sessions the selection would match (read-only, writes
 nothing) — useful before running a hand-edited presets file. The menu's preset picker
 reaches the same catalog with its `[?] what each preset produces` row.
@@ -166,9 +182,10 @@ opencode-db menu  →  Export
 
 3. **Plan confirmation** — a `-> Export plan` block. The header rows
    (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`, plus `Note:` when the menu has
-   one) come first; then the plan: the intros of the preset's products, followed by the
-   **ficha** — the `name (products)` line, its description, the `flags:` line with the
-   effective flag phrases and an example file tree, all indented two spaces. It is the
+   one) come first; then the plan: the **card** — the `name (products)` line, its
+   description, the `flags:` line with the effective flag phrases and an example file tree,
+   all indented two spaces. The header names the products, so no separate product-intro
+   legend sits above it. It is the
    SAME block `export <name> --show` / `--dry-run` and `export --explain` print, so the
    catalog and the runtime plan can never disagree. Every line wraps at 72 columns. The
    point of the `Sessions:` line is that
@@ -246,8 +263,9 @@ Three behaviours worth knowing:
 |---|---|---|
 | keep a lossless backup of everything | `export archive` | complete tool outputs + faithful JSON + corpus |
 | review what I did today, fast | `export quick` | light, readable transcript + corpus |
+| read a conversation and keep its RAG corpus, no JSON | `export study` | plain transcript + corpus.jsonl, no faithful JSON |
 | review or hand a session to someone | `export review` | no reasoning + faithful JSON; it does **not** redact — **read the output before passing it on** |
-| read a conversation plain | `export notes` | plain transcript defaults, nothing extra |
+| read a conversation plain | `export notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
 | read only the dialogue (no tools, patches or reasoning) | `export conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |

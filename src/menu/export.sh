@@ -342,9 +342,8 @@ oc_export_plan() {
 #
 # The `%-10s` key column is what aligns the values ("Menu adds:" is exactly 10
 # chars, so `%-9s` used to push its value one column right of every other).
-# Below the header rows comes the plan: the intros of the preset's products,
-# then the ficha (name/products, description, flags and the example file tree) —
-# the SAME block `--show`/`--dry-run` print, built by plan.py.
+# Below the header rows comes the card (name/products, description, flags and the
+# example file tree) — the SAME block `--show`/`--dry-run` print, built by plan.py.
 oc_export_confirm() {
     local name="$1" sess="$2" menu_adds="${3:-nothing}" note="${4:-}"
     local db_est=0

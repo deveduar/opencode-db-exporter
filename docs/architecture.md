@@ -350,17 +350,17 @@ explain *purpose and relative size*: product rows carry a "use it when…" tag;
 each preset carries its own `description` **in the presets file**, so the shipped
 plans (`archive`/`quick`/`review`/`notes`/`conversation`/`prompts`/`rag`/`digest`) annotate themselves
 from the same source that defines them (a preset with no `description` shows the bare
-row). The confirm step prints the plan as the SAME **ficha** `--explain` prints, so a
-single builder describes every plan. `plan_text()` prints the intros of only the profile's
-products (a compact legend at the left margin), a blank line, then `ficha_lines()`: the
+row). The confirm step prints the plan as the SAME **card** `--explain` prints, so a
+single builder describes every plan. `plan_text()` prints `card_lines()` for a preset: the
 preset `name (products)` line, its `description`, a `flags:` line with the effective flag
-phrases (` · `-joined) and an example file tree, all indented two spaces; a bare product
-keyword prints its intro plus the `Default options, no flags set` caption and the same
-tree. `ficha_lines()` is shared by `explain_text()` (the static `--explain` catalog), so
-the catalog and the runtime plan cannot drift (a smoke test asserts archive's ficha is
-byte-identical in `--show` and `--explain`). `_wrap()` keeps every line inside a fixed
-72-column budget so the block is deterministic, and nothing is hidden — the full
-`PRODUCT_INTRO` is still printed, only folded. The old per-product blocks, the operator
+phrases (` · `-joined) and an example file tree, all indented two spaces. That header names
+the products, so no separate product-intro legend sits above it; a bare product keyword has
+no recipe and no card, so it prints its intro plus the `Default options, no flags set`
+caption and the same tree. `card_lines()` is shared by `explain_text()` (the static
+`--explain` catalog), so the catalog and the runtime plan cannot drift (a smoke test asserts
+archive's card is byte-identical in `--show` and `--explain`). `_wrap()` keeps every line
+inside a fixed 72-column budget so the block is deterministic; the keyword's
+`PRODUCT_INTRO` is still printed in full, only folded. The old per-product blocks, the operator
 symbology (a `+` on the first flag joined with `' · '`, which read as an expression rather
 than a list) and the separate `-> Notes` block are all gone: `annotate_flags()` returns a
 **list** of standalone phrases ` · `-joined on the single `flags:` line, and the caveats

@@ -15,8 +15,9 @@
 #   products-list        the friendly `export --list-products` screen (no DB)
 #   resolve <profile>    JSON plan for a product keyword or preset name
 #   plan <profile> [--width N]   the plan block shared by the confirm, --show and
-#                        --dry-run: the preset's product intros + the ficha
-#                        (name (products), description, flags, example tree)
+#                        --dry-run: a preset's card (name (products), description,
+#                        flags, fidelity, example tree); a keyword gets its intro,
+#                        caption, fidelity + tree
 #   snapshot <name>      "fresh" when the preset pins snapshot: fresh, else ""
 #   selection <name>     the selection the preset PINS, as a human phrase, or ""
 #   subagents <name>     "no_subagents" | "no_orphan_subagents" | "both" | ""
@@ -143,12 +144,45 @@ def _bundle_cfg(pdata: dict) -> dict:
     return prods if isinstance(prods, dict) else {}
 
 
+def fidelity_label(products: list[str], has_json: bool, has_sanitize: bool, configs: list[dict]) -> str:
+    """The data-fidelity phrase of a plan (label + reason), derived from the
+    resolved flags. `lossless` means the raw data is fully recoverable: the
+    faithful JSON (native `{info, messages}`) is written AND nothing drops data —
+    no subagent-dropping flag (`no_subagents`/`no_orphan_subagents`/`sub: omit`)
+    and no `sanitize` (redaction is best-effort and not reviewable, so the raw
+    data is not guaranteed). Every other case is `lossy` with the reasons.
+
+    The reason depends on WHICH product carries the data: a content product
+    (`transcript`/`digest`) without JSON loses what its Markdown filters out;
+    `memory` cannot write the JSON at all (it is not a transcript but a distilled
+    RAG corpus), so its reason is the corpus shape, not a missing copy.
+    """
+    reasons: list[str] = []
+    content = any(p in ("transcript", "digest") for p in products)
+    if content and not has_json:
+        reasons.append("no faithful JSON: the Markdown is filtered")
+    elif not content and products:
+        reasons.append("the RAG corpus is a summary, not the full session")
+    if has_sanitize:
+        reasons.append("sanitized (best-effort)")
+    if any(c.get("no_subagents") is True for c in configs):
+        reasons.append("all subagents dropped")
+    if any(c.get("no_orphan_subagents") is True for c in configs):
+        reasons.append("orphan subagents dropped")
+    if any(c.get("sub") == "omit" for c in configs):
+        reasons.append("subagents omitted")
+    if reasons:
+        return "lossy (" + ", ".join(reasons) + ")"
+    return "lossless (the faithful JSON keeps the full data)"
+
+
 def resolve(profile: str, presets: dict | None = None) -> dict:
     """Resolve any profile into its full plan (product keyword or preset name).
 
     Returns a dict with kind ("product" | "preset"), products, per-product items
-    (product/intro/flags/bits), has_json/has_sanitize and (presets only) the
-    name/purpose. Raises ValueError for unknown profiles.
+    (product/intro/flags/bits), has_json/has_sanitize, the derived `fidelity`
+    phrase and (presets only) the name/purpose. Raises ValueError for unknown
+    profiles.
     """
     if presets is None:
         presets = load_presets()
@@ -170,6 +204,7 @@ def resolve(profile: str, presets: dict | None = None) -> dict:
             ],
             "has_json": False,
             "has_sanitize": False,
+            "fidelity": fidelity_label([profile], False, False, []),
             "description": "",
             "bundle": False,
         }
@@ -208,6 +243,7 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
     else:
         has_json = pdata.get("json") is True
         has_sanitize = pdata.get("sanitize") is True
+    configs = [item["config"] for item in items]
     return {
         "kind": "preset",
         "name": name,
@@ -215,6 +251,7 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
         "items": items,
         "has_json": has_json,
         "has_sanitize": has_sanitize,
+        "fidelity": fidelity_label(products, has_json, has_sanitize, configs),
         "description": pdata.get(PRESET_DESCRIPTION_KEY, ""),
         "bundle": has_bundle,
     }
@@ -223,13 +260,13 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
 # --- text artifacts served to the menu ------------------------------------
 
 # The plan block is deliberately compact and cannot drift from `--explain`: the
-# ficha (name/products, description, flags and the file tree) is built ONCE, by
-# `ficha_lines()`, and used both by the per-preset catalog and by `plan_text()`.
-# Above the ficha come the intros of ONLY the products that preset exports (a
-# compact legend, so the reader knows what "transcript"/"memory" mean without
-# the whole catalog); a bare product keyword has no recipe, so it shows its intro,
-# the `Default options, no flags set` caption and the same tree. Fixed width (not
-# `tput cols`): it keeps the layout deterministic and assertable in the suite.
+# card (name/products, description, flags and the file tree) is built ONCE, by
+# `card_lines()`, and used both by the per-preset catalog and by `plan_text()`.
+# A preset emits the card alone: the products are named in its `name (products)`
+# header, so their generic intros are already covered. A bare product keyword has
+# no recipe, so it shows its intro, the `Default options, no flags set` caption
+# and the same tree. Fixed width (not `tput cols`): it keeps the layout
+# deterministic and assertable in the suite.
 PLAN_WIDTH = 72
 
 
@@ -253,42 +290,48 @@ def plan_text(
 ) -> str:
     """The plan block shared by the confirm, `--show` and `--dry-run`.
 
-    For a preset: the intros of ONLY the products it exports (a compact legend),
-    then the ficha from `ficha_lines()` (name/products, description, the flags it
-    sets and an example file tree). A bare product keyword has no recipe: its
-    intro, the `Default options, no flags set` caption and the same tree."""
+    A preset renders as its card alone, from `card_lines()` (name/products,
+    description, the flags it sets, its derived `fidelity:` line and an example
+    file tree): the card names its products in the `name (products)` header, so
+    repeating their generic intros above it would be a redundant legend. A bare
+    product keyword has no recipe and therefore no card, so it prints its intro,
+    the `Default options, no flags set` caption, its `fidelity:` line and the
+    same tree."""
     plan = resolve(profile, presets)
-    blocks: list[str] = []
     if plan["kind"] == "preset":
-        for item in plan["items"]:
-            blocks.append("\n".join([item["product"]] + _wrap(item["intro"], width)))
-        blocks.append("\n".join(ficha_lines(profile, presets, width)))
-    else:
-        item = plan["items"][0]
-        lines = [item["product"]] + _wrap(item["intro"], width)
-        # A bare product keyword has no preset behind it. That used to ride on the
-        # description as "(default options)"; it is a caption in its own right.
-        lines.append("Default options, no flags set")
-        lines += example_tree(profile, presets)
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+        return "\n".join(card_lines(profile, presets, width))
+    item = plan["items"][0]
+    lines = [item["product"]] + _wrap(item["intro"], width)
+    # A bare product keyword has no preset behind it. That used to ride on the
+    # description as "(default options)"; it is a caption in its own right.
+    lines.append("Default options, no flags set")
+    lines += _wrap("fidelity: " + plan["fidelity"], width)
+    lines += example_tree(profile, presets)
+    return "\n".join(lines)
 
 
-# --- example file tree + the shared ficha (the plan and `--explain`) -------
-# `--explain` is a STATIC catalog: it never reads the DB. The ficha below is the
-# ONE place a preset's output is described (description + flags + tree), reused
-# by `plan_text()` so the runtime plan and the catalog cannot drift.
+# --- example file tree + the shared card (the plan and `--explain`) -------
+# `--explain` is a STATIC catalog: it never reads the DB. The card below is the
+# ONE place a preset's output is described (description + flags + fidelity +
+# tree), reused by `plan_text()` so the runtime plan and the catalog cannot drift.
 
 def _session_tree(product: str, cfg: dict) -> dict:
     """The nested tree of ONE product's output dir (dict = dir, None = file)."""
     if product == "memory":
         return {"corpus.jsonl": None, "index.md": None, "metadata.json": None}
     # transcript and digest share the writer (and therefore the layout).
+    json_on = cfg.get("json") is True
     session: dict = {"<title>.md": None}
-    if cfg.get("json") is True:
+    if json_on:
         session["<title>.json"] = None
     if cfg.get("sub", "separate") == "separate":
-        session["subagents"] = {"<sub>_<id>.md": None}
+        subs: dict = {"<sub>_<id>.md": None}
+        if json_on:
+            subs["<sub>_<id>.json"] = None
+        session["subagents"] = subs
+    elif cfg.get("sub") == "inline" and json_on:
+        # An inline subagent has no folder: its JSON lands next to the root's.
+        session["<title>.sub-<id>.json"] = None
     return {"01-<title>_<id>": session, "index.md": None, "metadata.json": None}
 
 
@@ -316,14 +359,15 @@ def example_tree(profile: str, presets: dict | None = None) -> list[str]:
     return ["<stamp>/"] + _tree_lines(root)
 
 
-def ficha_lines(
+def card_lines(
     profile: str, presets: dict | None = None, width: int = PLAN_WIDTH
 ) -> list[str]:
-    """The ficha of ONE preset: `name (products)`, its description, the flags it
-    sets (one `flags:` line, only when it sets some) and an example file tree
-    indented under it. This is the ONE place a preset's output is described —
-    `explain_text()` prints it for every preset and `plan_text()` for the chosen
-    one, so the catalog and the runtime plan cannot drift apart."""
+    """The card of ONE preset: `name (products)`, its description, the flags it
+    sets (one `flags:` line, only when it sets some), its derived `fidelity:` line
+    and an example file tree indented under it. This is the ONE place a preset's
+    output is described — `explain_text()` prints it for every preset and
+    `plan_text()` for the chosen one, so the catalog and the runtime plan cannot
+    drift apart."""
     plan = resolve(profile, presets)
     prod = " + ".join(plan["products"])
     lines = [f"{profile} ({prod})"]
@@ -335,14 +379,16 @@ def ficha_lines(
     if bits:
         for ln in _wrap("flags: " + " · ".join(bits), width - 2):
             lines.append("  " + ln)
+    for ln in _wrap("fidelity: " + plan["fidelity"], width - 2):
+        lines.append("  " + ln)
     for ln in example_tree(profile, presets):
         lines.append("  " + ln)
     return lines
 
 
 def explain_text(presets: dict | None = None) -> str:
-    """The `export --explain` catalog: products once, then one ficha per preset
-    (description + set flags + an example file tree). Static, no DB."""
+    """The `export --explain` catalog: products once, then one card per preset
+    (description + set flags + fidelity + an example file tree). Static, no DB."""
     if presets is None:
         presets = load_presets()
     names = preset_names(presets)
@@ -353,7 +399,7 @@ def explain_text(presets: dict | None = None) -> str:
         lines.append(f"  {p:<{w}}  {intro}")
     lines.append("")
     for n in names:
-        lines += ficha_lines(n, presets)
+        lines += card_lines(n, presets)
         lines.append("")
     return "\n".join(lines)
 

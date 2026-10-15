@@ -569,21 +569,24 @@ full tool outputs" ] \
 reasoning omitted" ] \
     && ok "oc_annotate_flags sanitize+no_reasoning" || bad "annotate: [$(oc_annotate_flags "sanitize=true,no_reasoning=true")]"
 [ "$(oc_annotate_flags "cap=500")" = "cap 500 chars" ] && ok "oc_annotate_flags cap" || bad "annotate cap: [$(oc_annotate_flags "cap=500")]"
-# oc_export_plan produces the ficha (the SAME builder --explain prints): the
-# preset + products, the intros of ONLY its products, the flags it sets and an
-# example file tree.
+# oc_export_plan produces the card (the SAME builder --explain prints): the
+# preset + products, the flags it sets and an example file tree. The products are
+# named in the header, so there is NO separate intro legend above it.
 PLAN=$(oc_export_plan archive)
 grep -qx 'archive (transcript + memory)' <<<"$PLAN" \
     && ok "the plan leads with the preset and its products" || bad "plan header: $(head -1 <<<"$PLAN")"
-grep -qx 'transcript' <<<"$PLAN" && grep -qx 'memory' <<<"$PLAN" \
-    && ok "the plan shows an intro for each of the preset's products" || bad "plan intros: $(grep -E '^(transcript|memory)$' <<<"$PLAN" | paste -sd, -)"
+! grep -qx 'transcript' <<<"$PLAN" \
+    && ok "the plan drops the per-product intro legend (the header names them)" || bad "plan still has an intro: $(grep -E '^(transcript|memory)$' <<<"$PLAN" | paste -sd, -)"
 grep -q '^  flags: faithful JSON, raw and unfiltered · full tool outputs · touched$' <<<"$PLAN" \
     && ok "the plan lists the effective flags on the flags: line, wrapped to 72" || bad "plan flags: $(grep 'flags:' <<<"$PLAN")"
 grep -qx '  <stamp>/' <<<"$PLAN" && grep -q '└── memory/' <<<"$PLAN" \
     && ok "the plan shows an example file tree" || bad "plan tree: $(grep -c '──' <<<"$PLAN")"
 # review plan has no sanitize (a preset that redacted silently would promise a safety it cannot keep)
 ! oc_export_plan review | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
-# transcript default plan: no preset -> intro + the caption + the tree
+# transcript default plan: no preset -> intro + the caption + the tree. The intro
+# stays HERE (a keyword has no card to name/define its product).
+printf '%s\n' "$(oc_export_plan transcript)" | grep -qx 'transcript' \
+    && ok "the keyword plan keeps its product intro" || bad "keyword intro missing: $(oc_export_plan transcript | head -1)"
 printf '%s\n' "$(oc_export_plan transcript)" | grep -qx 'Default options, no flags set' \
     && ok "oc_export_plan transcript default (a caption, not a parenthetical)" || bad "plan transcript: $(oc_export_plan transcript)"
 # The old '-> Notes' block is gone: the flags: line already carries those facts.
@@ -899,32 +902,32 @@ grep -q 'the menu overrides the preset' "$CU" \
     && ok "narrowing overrides the preset's pinned filter (with a warning)" || bad "no override warning: $(grep 'Sessions:' "$CU")"
 [ "$(grep -oE -- '--sessions [^ ]+' "$CALLS" | cut -d' ' -f2 | tr ',' '\n' | sort | paste -sd, -)" = "ses_A0001,ses_A0002,ses_A0003" ] \
     && ok "narrowed run pins the menu's cascade (not the preset filter)" || bad "narrowed override csv: $(cat "$CALLS")"
-# The plan block is the shared ficha: an indented description/flags/tree under
-# the preset line. No "Will produce:" label, no bullets.
+# The plan block is the shared card: an indented description/flags/tree under
+# the preset line. No "Will produce:" label, no bullets, no intro legend.
 grep -q 'Will produce' "$XOUT" && bad "the old 'Will produce:' label is still there" \
     || ok "the plan dropped the 'Will produce:' label"
-grep -qE '^transcript$' "$XOUT" \
-    && ok "the product intros sit at the left margin" || bad "plan product margin: $(grep -nE 'transcript' "$XOUT" | head -3)"
+grep -qE '^notes \(transcript\)$' "$XOUT" \
+    && ok "the plan prints the preset card (its header names the product)" || bad "plan card header: $(grep -nE 'notes' "$XOUT" | head -3)"
 grep -qE '^[-*] ' "$XOUT" && bad "the plan grew a bullet again" || ok "the plan has no bullets"
-# The standalone-subagent note stays in the header rows (not the ficha).
+# The standalone-subagent note stays in the header rows (not the card).
 CSUB=$(oc_export_confirm notes "the 2 sessions you marked" "nothing" "the preset drops every subagent")
 grep -qE '^Note: +the preset drops every subagent' <<<"$CSUB" \
     && ok "the standalone-subagent note stays in the header rows" || bad "note row: [$(grep '^Note:' <<<"$CSUB")]"
-# The ficha is indented (description, flags:, tree) under the preset line.
+# The card is indented (description, flags:, tree) under the preset line.
 PLANOUT=$(oc_export_plan archive)
 grep -qE '^archive \(transcript \+ memory\)$' <<<"$PLANOUT" \
-    && ok "the plan prints the ficha header (preset + products)" || bad "ficha header: $(head -1 <<<"$PLANOUT")"
+    && ok "the plan prints the card header (preset + products)" || bad "card header: $(head -1 <<<"$PLANOUT")"
 grep -qE '^  flags: ' <<<"$PLANOUT" \
-    && ok "the ficha carries an indented flags: line" || bad "ficha flags line missing"
+    && ok "the card carries an indented flags: line" || bad "card flags line missing"
 grep -qE '^  <stamp>/$' <<<"$PLANOUT" \
-    && ok "the ficha carries an indented example tree" || bad "ficha tree missing"
+    && ok "the card carries an indented example tree" || bad "card tree missing"
 # No '-> Notes' block anywhere: the flags: line already carries those facts.
 grep -q 'Notes' <<<"$PLANOUT" && bad "the plan still prints a Notes block" || ok "the plan has no Notes block"
 # Nothing is hidden: the wrap may split a line but never a word, and no line
 # runs past the fixed width.
 # The contract is the LITERAL 72, not "$OCED_PLAN_WIDTH": comparing against the
 # same knob would still pass if both the width and the expectation moved.
-# Count CHARACTERS (the ficha carries a multibyte '·'), not bytes.
+# Count CHARACTERS (the card carries a multibyte '·'), not bytes.
 WIDEST=$(printf '%s\n' "$PLANOUT" | python3 -c "import sys; print(max((len(l.rstrip(chr(10))) for l in sys.stdin), default=0))")
 [ "$WIDEST" -le 72 ] \
     && ok "every plan line fits the fixed width ($WIDEST <= 72)" || bad "plan line too long: $WIDEST"
@@ -936,8 +939,24 @@ import importlib.util as u
 spec = u.spec_from_file_location('pl', '$MOD/exportlib/plan.py'); m = u.module_from_spec(spec); spec.loader.exec_module(m)
 print(m.PLAN_WIDTH)")" = "72" ] \
     && ok "plan.py PLAN_WIDTH default is 72" || bad "plan.py PLAN_WIDTH drifted"
-printf '%s\n' "$PLANOUT" | grep -q 'RAG corpus in corpus.jsonl' \
-    && ok "the plan keeps the full product intros (nothing hidden)" || bad "plan intro missing"
+printf '%s\n' "$PLANOUT" | grep -qE '^  lossless full backup: ' \
+    && ok "the card carries the preset's own description (not the product intros)" || bad "card description missing"
+# The card carries a DERIVED fidelity line (never a declared key): archive writes the
+# faithful JSON and drops no data -> lossless; a content preset without the JSON loses
+# what its Markdown filters; a memory-only preset is a distilled corpus, never the
+# full session (its reason is the corpus shape, not a missing copy).
+printf '%s\n' "$PLANOUT" | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
+    && ok "the card states the derived fidelity (archive: lossless)" || bad "archive fidelity: $(grep 'fidelity:' <<<"$PLANOUT")"
+oc_export_plan notes | grep -qx '  fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
+    && ok "a json-less content preset says lossy (notes)" || bad "notes fidelity: $(oc_export_plan notes | grep 'fidelity:')"
+oc_export_plan rag | grep -qx '  fidelity: lossy (the RAG corpus is a summary, not the full session)' \
+    && ok "a memory-only preset says lossy for the corpus, not a missing JSON (rag)" || bad "rag fidelity: $(oc_export_plan rag | grep 'fidelity:')"
+oc_export_plan transcript | grep -qx 'fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
+    && ok "the keyword plan states its fidelity too (lossy)" || bad "keyword fidelity: $(oc_export_plan transcript | grep 'fidelity:')"
+# The tree names every file the writer really emits: a json preset writes the
+# subagent JSON next to its Markdown (cli.py), so the tree must show it.
+printf '%s\n' "$PLANOUT" | grep -q '<sub>_<id>.json' \
+    && ok "the tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON: $(grep '<sub>' <<<"$PLANOUT")"
 # The bits are emitted verbatim: every one of them is present (the wrap may
 # split the flags: line, so flatten it before matching).
 PLANFLAT=$(tr '\n' ' ' <<<"$PLANOUT" | tr -s ' ')
@@ -945,9 +964,9 @@ for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched file
     grep -qF "$bit" <<<"$PLANFLAT" \
         && ok "the plan keeps the effective flag: $bit" || bad "plan flag missing: $bit"
 done
-# Every line of the description must be under its product, never beside it.
-grep -qE '^Markdown conversation per session' "$XOUT" \
-    && ok "the description goes BELOW its product" || bad "plan description placement"
+# The card description is indented under the preset line, never beside it.
+grep -qE '^  plain transcript read$' "$XOUT" \
+    && ok "the card description sits indented under the preset line" || bad "card description placement"
 
 echo "== the confirmation is honest about the EFFECTIVE selection =="
 # 'clean' pins filter "Project Beta"; 'notes' pins no selection at all.

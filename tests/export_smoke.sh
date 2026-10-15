@@ -1263,6 +1263,13 @@ DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}
     && ok "shipped 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "shipped quick dirs"
 jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcript/metadata.json" >/dev/null \
     && ok "shipped quick uses truncated tool output (light variant)" || bad "shipped quick meta"
+run export study >/dev/null
+STUDY="$(last_meta memory)"; STUDY="${STUDY%/metadata.json}"; STUDYR="${STUDY%/*}"
+njson=$(find "$STUDYR/transcript" -type f -name '*.json' ! -name 'metadata.json' | wc -l)
+[ -d "$STUDYR/transcript" ] && [ -d "$STUDYR/memory" ] && [ "$njson" -eq 0 ] \
+    && ok "shipped 'study' is transcript+memory with no per-session JSON" || bad "shipped study dirs/json ($njson)"
+jq -e '.preset == "study" and .tool_output == "truncated" and .json == false' "$STUDYR/transcript/metadata.json" >/dev/null \
+    && ok "shipped study applies truncated tool output and no json" || bad "shipped study meta"
 run export review >/dev/null
 jq -e '.preset == "review" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'review' applies its single-product flags (no sanitize)" || bad "shipped review meta"
@@ -1294,13 +1301,13 @@ SHNDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export prompts --
 DR=$(OCED_PRESETS="$EXAMPLE" run export archive --dry-run)
 printf '%s' "$DR" | grep -q "Matched: 6 session(s) = 3 root(s) + 3 subagent(s)" \
     && ok "export --dry-run counts the sessions the selection matches" || bad "--dry-run: $(printf '%s' "$DR" | grep Matched)"
-# The plan block and `--explain` share ONE ficha builder: archive's ficha must
+# The plan block and `--explain` share ONE card builder: archive's card must
 # be byte-identical in both (the catalog and the runtime plan cannot drift).
 EXF=$(OCED_PRESETS="$EXAMPLE" run export --explain | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
 ASHOW=$(OCED_PRESETS="$EXAMPLE" run export archive --show | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
 [ -n "$EXF" ] && [ "$EXF" = "$ASHOW" ] \
-    && ok "the plan ficha is identical to --explain's" \
-    || bad "ficha drift: [$(printf '%s' "$EXF" | head -1)] != [$(printf '%s' "$ASHOW" | head -1)]"
+    && ok "the plan card is identical to --explain's" \
+    || bad "card drift: [$(printf '%s' "$EXF" | head -1)] != [$(printf '%s' "$ASHOW" | head -1)]"
 # The old '-> Notes' block is gone from every plan surface.
 if printf '%s%s' "$SH" "$DR" | grep -q '^-> Notes'; then
     bad "'-> Notes' still printed by a plan surface"
@@ -1317,16 +1324,16 @@ NDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-prese
     && ok "export --list-presets needs no database" || bad "list-presets without DB rc=$ndrc"
 # The description travels with the recipe (the presets file): prompts is not a
 # plain transcript, and the renamed review plan says what it does.
-printf '%s' "$LP" | grep -q "just your asks" \
+printf '%s' "$LP" | grep -q "no answers/reasoning/tools" \
     && ok "--list-presets carries the description of prompts from the file" || bad "prompts description: $(printf '%s' "$LP" | grep prompts)"
-printf '%s' "$LP" | grep -q "review copy: transcript without reasoning" \
+printf '%s' "$LP" | grep -q "transcript without reasoning" \
     && ok "--list-presets carries the review description from the file" || bad "review description missing"
 # The picker rows use the same file description (never a flag-derived guess):
 # the old taxonomy labelled prompts AND the snapshot plan "read (transcript defaults)".
 PROWS=$(OCED_PRESETS="$EXAMPLE" python3 "$MOD/exportlib/plan.py" rows)
 printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only user prompts' \
     && ok "picker row of prompts shows its file description" || bad "prompts description: $(printf '%s' "$PROWS" | grep prompts)"
-printf '%s' "$PROWS" | grep -q '^__PRESET_review.*plus the faithful JSON archive' \
+printf '%s' "$PROWS" | grep -q '^__PRESET_review.*faithful JSON' \
     && ok "picker row of review shows its file description" || bad "review description missing"
 printf '%s' "$PROWS" | grep -q "transcript defaults" \
     && bad "picker row still claims 'transcript defaults'" || ok "no picker row falls back to 'transcript defaults'"
@@ -1351,6 +1358,20 @@ EXP=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --explain); 
     && printf '%s' "$EXP" | grep -q "flags: faithful JSON" \
     && printf '%s' "$EXP" | grep -q "corpus.jsonl"; } \
     && ok "export --explain is a static catalog with a file tree (no DB)" || bad "--explain rc=$expr_rc: $(printf '%s' "$EXP" | head -8)"
+# The card states every preset's DERIVED fidelity (never a declared key): lossless
+# iff a product writes the faithful JSON and nothing drops data. The JSON keeps the
+# whole session even where the Markdown truncates, so archive AND quick are lossless;
+# a content preset without it is lossy for the filtered Markdown, and a memory-only
+# preset for its corpus shape (json is not even a memory option). The tree names the
+# subagent JSON a json-capable preset really writes.
+printf '%s' "$EXP" | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
+    && ok "--explain shows archive as lossless" || bad "archive fidelity: $(printf '%s' "$EXP" | grep 'fidelity:')"
+printf '%s' "$EXP" | awk '/^quick \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
+    && ok "--explain shows quick as lossless (the JSON keeps the full session)" || bad "quick fidelity"
+printf '%s' "$EXP" | awk '/^rag \(memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossy (the RAG corpus is a summary, not the full session)' \
+    && ok "--explain shows rag as lossy for the corpus shape (not a missing JSON)" || bad "rag fidelity"
+printf '%s' "$EXP" | grep -q '<sub>_<id>.json' \
+    && ok "--explain's tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON"
 printf '%s' "$EXP" | grep -q "matched:" \
     && bad "--explain still reads the DB (a 'matched:' line)" || ok "export --explain never reads the DB"
 EXPDB=$(OCED_PRESETS="$EXAMPLE" run export --explain)

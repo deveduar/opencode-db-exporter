@@ -1964,7 +1964,7 @@ catalog depend on the machine.
 **The output is now a static catalog.** No DB at all: `_explain()` short-circuits before any
 `sqlite3` connection and its output is identical whether or not a `OPENCODE_DB` exists.
 `plan.py` gains `explain_text()` — the products legend once (from `PRODUCT_INTRO`, no third
-source), then one ficha per preset: its file-borne `description`, a `flags:` line (only when
+source), then one card per preset: its file-borne `description`, a `flags:` line (only when
 the preset sets some, from `annotate_flags`, joined with `·` because a hint contains a comma),
 and an **example file tree**. The tree comes from `example_tree()`, derived from the same
 `resolve()` the pipeline uses — `make_outdir_final` always nests a product dir under the stamp,
@@ -1980,40 +1980,110 @@ a `corpus.jsonl` leaf), that it carries no `matched:` line, and that its output 
 with and without a DB; `menu_flow.sh` checks the `[?] what each preset produces` row. Counters:
 `menu_flow` 355, `export_smoke` 426.
 
-## §55 The plan block is the ficha `--explain` prints (current)
+## §55 The plan block is the card `--explain` prints
 
-§54 gave `--explain` a ficha per preset: `name (products)`, the file-borne `description`,
-a `flags:` line and an example tree. Reading it next to the confirm screen showed *two*
-formats for one fact — `--explain` had the ficha, while `plan_text()` (the confirm,
-`--show`, `--dry-run`) still emitted the older flat, flush-left block: one line per
+§54 gave `--explain` a per-preset summary block — a "ficha" at the time (renamed **card**
+here, since the codebase is written in English) — with `name (products)`, the file-borne
+`description`, a `flags:` line and an example tree. Reading it next to the confirm screen
+showed *two* formats for one fact: `--explain` had the block, while `plan_text()` (the
+confirm, `--show`, `--dry-run`) still emitted the older flat, flush-left block: one line per
 product at the margin, its intro and effective flags below, each flag on its own line, and
 a hand-written `-> Notes` block for the caveats. The caveats were the worst of it: they
 were a *second* description of the same flags (`faithful JSON keeps everything`,
 `sanitize is per-run`), derived from `has_json`/`has_sanitize` — text that had to be kept
 in sync with the `flags:` line that already said the same thing.
 
-**One builder, one format.** `plan_text()` is now: the intros of only the profile's
-products (a compact legend at the left margin), a blank line, then `ficha_lines()`. The
-same `ficha_lines()` feeds `explain_text()`, so the catalog and the runtime plan are one
-piece of code (a smoke guard extracts archive's ficha from `--show` and from `--explain`
-and asserts they are byte-identical). A bare product keyword has no preset: `plan_text()`
-prints its intro and the `Default options, no flags set` caption, then the same
-`example_tree()`. The `-> Notes` block is gone, and with it `notes_text()`,
+**One builder, one format.** `plan_text()` prints `card_lines()` for a preset. The same
+`card_lines()` feeds `explain_text()`, so the catalog and the runtime plan are one piece of
+code (a smoke guard extracts archive's card from `--show` and from `--explain` and asserts
+they are byte-identical). A bare product keyword has no preset and therefore no card, so
+`plan_text()` prints its intro and the `Default options, no flags set` caption, then the
+same `example_tree()`. The `-> Notes` block is gone, and with it `notes_text()`,
 `SANITIZE_WARN`-style constants and `NOTES_JSON`; the confirm, `--show` and `--dry-run`
-lost their `-> Notes` section and `menu/export.sh` lost `oc_export_notes` (a menu helper
-with no consumer). The header rows (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Note:`)
-are untouched — only the block below them changed.
+lost their `-> Notes` section and `menu/export.sh` lost `oc_export_notes`. The header rows
+(`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Note:`) are untouched — only the block below
+them changed.
 
-**The flags line wraps.** The ficha's `flags:` line is ` · `-joined; for `quick` it is 83
-columns and for `archive` 78, so `ficha_lines()` runs it through `_wrap()` at `PLAN_WIDTH
+**No product-intro legend.** The first cut of §55 kept, above the card, a compact legend:
+one block per product of the preset, the product name and its `PRODUCT_INTRO`. Reading the
+result showed it *redundant* — the card's `name (products)` header already names the
+products, and the intro text is the same generic definition on every plan — so the legend
+was dropped. A preset now prints the card alone. A bare product keyword keeps its intro: it
+has no card to name or define its product.
+
+**The flags line wraps.** The card's `flags:` line is ` · `-joined; for `quick` it is 83
+columns and for `archive` 78, so `card_lines()` runs it through `_wrap()` at `PLAN_WIDTH
 - 2` like the description and the tree. The whole block now stays inside the same 72-column
 budget as before. This changed `--explain`'s archive/quick output from one long line to a
 wrapped pair — an improvement, not a regression.
 
 **Tests.** `menu_flow.sh`'s old guards asserted the flat layout (flush-left, no
 indentation, no `·`, no `+`) and the `-> Notes` block; they are replaced with guards for
-the new shape (the ficha header, an indented `flags:` line, an indented tree, no `Notes`
-anywhere, every line ≤72 characters counted as *characters* — the ficha carries a
-multibyte `·`, so an `awk length` byte count overcounts by two). `export_smoke.sh` adds the
+the new shape (the card header, an indented `flags:` line, an indented tree, no `Notes`
+anywhere, no per-product intro legend on a preset, every line ≤72 characters counted as
+*characters* — the card carries a multibyte `·`, so an `awk length` byte count overcounts by
+two); a keyword guard asserts its intro is still printed. `export_smoke.sh` adds the
 `--show`-vs-`--explain` byte-identity check and a scan that no plan surface prints
-`-> Notes`. Counters: `menu_flow` 350, `export_smoke` 428.
+`-> Notes`. Counters: `menu_flow` 351, `export_smoke` 428.
+
+## §56 Fidelity is stated, defaults are spelled out, and `study` fills the JSON-less gap (current)
+
+A plan could say `the transcript product with default options` and leave the user to
+guess what *default* means. It does not mean "everything": the transcript defaults are
+`tool_output truncated` (~500 chars), patches and reasoning kept, all roles, subagents in
+separate files, **no** faithful JSON. So `notes` — worded "plain read" — was quietly
+lossy, and the card printed no `flags:` line (it sets none) to warn about it. Two fixes,
+plus a gap in the shipped set.
+
+**A derived `fidelity:` line.** Every card now ends with `fidelity: lossless (…)` or
+`fidelity: lossy (…)`, computed by `plan.py:fidelity_label()` from the resolved flags (and
+exposed in the `resolve` JSON). It is **not** a preset key — a declared label could lie
+about the flags; a derived one cannot. The criterion, agreed with the user: the raw data
+is recoverable iff a product writes the **faithful JSON** (`json: true`) and nothing drops
+data — no `no_subagents` / `no_orphan_subagents` / `sub: omit`, and no `sanitize`
+(redaction is best-effort and does not let the user review what it removed, so the raw
+session is not guaranteed). That makes `archive`, `quick` and `review` **lossless** — the
+JSON keeps the whole session even where the Markdown truncates or filters it, "the inverse
+dump" the user described — while `notes`, `conversation`, `prompts`, `rag`, `digest` and
+`study` are **lossy**. The reason names the product that carries the data: a **content**
+product (`transcript`/`digest`) without the JSON is `lossy (no faithful JSON: the Markdown
+is filtered)`, while a **`memory`-only** plan is `lossy (the RAG corpus is a summary, not
+the full session)` — `json` is not a `memory` option, so its absence there is not a
+declined copy (the corpus is *distilled*, and no `--json` could make it whole). A bare
+product keyword follows the same rule. The line is printed by `card_lines()`, so it appears
+in `--explain`, `--show`, `--dry-run` and the menu confirm at once, and the keyword branch
+of `plan_text()` prints it as well.
+
+**The example tree lists the subagent JSON too.** The user spotted that a `json` preset's
+tree stopped at `<sub>_<id>.md`, while `cli.py` really writes `<sub>_<id>.json` next to it
+(`separate`) and `<title>.sub-<id>.json` for an `inline` subagent. A tree that omits files
+the writer emits is a false contract, so `_session_tree()` now adds both.
+
+**The descriptions say what the defaults are.** Rather than a machine-generated `defaults:`
+line, the two file-borne descriptions that hid behind "default options" were rewritten so
+the prose travels with the recipe (the §52 rule): `notes` now names its truncation and
+`rag` its corpus shape.
+
+**Every description leads with `lossless:` / `lossy:`.** The picker row shows the
+*description* (not the card's `fidelity:` line), so the user asked for the verdict up front
+in the prose too: each shipped `description` now opens with `lossless:` or `lossy:`, and the
+faithful JSON is named ONLY where it is what makes the preset lossless (`archive`/`quick`/
+`review`) — a lossy recipe no longer says "no faithful JSON" (the verdict already says it,
+and for `memory` the JSON is not even an option). The derived `fidelity:` line stays: it is
+still the un-fakeable reason, while the prefix is the human-facing one-liner. The JSON that
+"makes it lossless" is still below (a `json` field in `archive`/`quick`/`review`).
+
+**`study`.** The shipped set had no transcript+memory recipe *without* the per-session
+`<title>.json`: `quick` includes it (that is why `quick` is lossless), `notes`/`rag` are
+single-product. `study` = `transcript {tool_output: truncated}` + `memory {files: true}` and
+nothing else — the same as `quick` minus the JSON, i.e. the lossy sibling. It is a
+presets-file change (plus the README snippet, the guide table/matrix and the schema
+example), no engine change.
+
+**Tests.** `menu_flow.sh` asserts the card's `fidelity:` line (archive → lossless; `notes`
+→ the content reason; `rag` → the corpus reason) and that the tree shows the subagent JSON,
+and keeps the ≤72-character guard over the wider card; `export_smoke.sh` keeps the
+`--show`-vs-`--explain` byte-identity check (the fidelity line is on both sides), asserts
+the shipped lossless/lossy split (including the memory-only reason) and the subagent-JSON
+tree, and runs `study` end-to-end.
+Counters: `menu_flow` 356, `export_smoke` 434.

@@ -45,6 +45,12 @@ in sync by construction.
         "memory":     { "files": true }
       }
     },
+    "study": {
+      "products": {
+        "transcript": { "tool_output": "truncated" },
+        "memory":     { "files": true }
+      }
+    },
     "review": {
       "product": "transcript",            // single product: name resolves first
       "json": true, "no_reasoning": true
@@ -77,6 +83,17 @@ in sync by construction.
 Unknown keys fail (`additionalProperties: false`). Flags that a product ignores are
 harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole
 preset selection; any explicit flag beats the preset value per product.
+
+**`fidelity:` is derived, not a key.** No preset declares lossless/lossy: the plan
+computes it (`plan.py:fidelity_label`, exposed in the `resolve` JSON) — **lossless**
+iff a product writes the faithful JSON (`json: true`) and no flag drops data
+(`no_subagents` / `no_orphan_subagents` / `sub: omit`, or `sanitize`, which redacts
+best-effort), else **lossy** with the reasons. The reason depends on the product that
+carries the data: a content product (`transcript` / `digest`) without the JSON is lossy
+for the filtered Markdown; a `memory`-only plan is lossy because the RAG corpus is a
+distilled summary, never the full session (`json` is not even a `memory` option, so its
+absence is not a declined copy). It is the line each
+`--explain` / `--show` / `--dry-run` / menu-confirm card prints after `flags:`.
 
 **Selection is run-time state** (menu). A preset is a *plan*: its embedded
 `filter`/`sessions` makes it automatable, but in the menu the **sessions picker comes
