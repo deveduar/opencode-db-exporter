@@ -99,15 +99,16 @@ EOF
 
 Named presets (presets file, source of truth for the menu and the CLI):
   export <name>      run a named preset from $OCED_PRESETS (JSON):
-                     {"presets":{"clean":{"product":"transcript","json":true,
+                     {"presets":{"clean":{"product":"transcript",
                      "sanitize":true,"no_reasoning":true,"filter":"Project Beta"}}}
                      The preset pins the product, its config flags and optionally
                      the selection ('filter' or exact 'sessions' ids, not both;
                      none = ALL). Explicit CLI flags (--filter/--sessions/--cap...)
-                     override the preset. 'export transcript'/'memory'/'digest'
-                     always mean the product (its aliases and flags are unchanged).
+                     override the preset. 'export transcript'/'memory'/'digest'/
+                     'faithful' always mean the product (its aliases and flags are
+                     unchanged).
   export --list-presets   list the named presets (no DB access)
-  export --list-products  list the three products (document kinds) (no DB access)
+  export --list-products  list the export products (document kinds) (no DB access)
   export <name> --show    print the resolved plan, static, without reading the DB
   export <name> --dry-run print the plan + the sessions that would be matched,
                      writing nothing (reads the DB read-only)

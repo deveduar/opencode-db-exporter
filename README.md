@@ -250,54 +250,53 @@ and the `exports list` line).
 {
   "presets": {
     "archive": {
-      "description": "lossless: full backup — complete tool outputs, faithful JSON, memory files (heavy)",
+      "description": "full backup — complete tool outputs and the raw session, with touched-file lists (heavy)",
       "products": {
-        "transcript": {"json": true, "tool_output": "full"},
-        "memory": {"files": true}
+        "transcript": {"tool_output": "full"},
+        "memory": {"files": true},
+        "faithful": {}
       }
     },
     "quick": {
-      "description": "lossless: light daily backup — truncated tool outputs + faithful JSON (fast, compact)",
-      "products": {
-        "transcript": {"json": true, "tool_output": "truncated"},
-        "memory": {"files": true}
-      }
+      "description": "the raw session, losslessly — one native-JSON file per session (fast, compact)",
+      "product": "faithful"
     },
     "study": {
-      "description": "lossy: transcript (tool output truncated) + memory corpus (medium)",
+      "description": "a readable log plus a searchable corpus, no raw copy (medium)",
       "products": {
         "transcript": {"tool_output": "truncated"},
         "memory": {"files": true}
       }
     },
     "review": {
-      "description": "lossless: transcript without reasoning + faithful JSON (does not redact)",
-      "product": "transcript",
-      "json": true,
-      "no_reasoning": true
+      "description": "the readable log without reasoning, plus the raw session (does not redact)",
+      "products": {
+        "transcript": {"no_reasoning": true},
+        "faithful": {}
+      }
     },
     "notes": {
-      "description": "lossy: plain read — every message, tool output truncated to ~500 chars, patches and reasoning kept (light)",
+      "description": "plain read — every message, tool output truncated to ~500 chars (light)",
       "product": "transcript"
     },
     "conversation": {
-      "description": "lossy: user + assistant text only — no tools, patches or reasoning (light)",
+      "description": "the dialogue only — no tools, patches or reasoning (light)",
       "product": "transcript",
       "tool_output": "omit",
       "patch": "omit",
       "no_reasoning": true
     },
     "prompts": {
-      "description": "lossy: only user prompts — no answers/reasoning/tools (task log)",
+      "description": "just your prompts — no answers, reasoning or tools (task log)",
       "product": "transcript",
       "role": "user"
     },
     "rag": {
-      "description": "lossy: one JSON line per root session with tokens, first ask, last answer, todos, tools and digests (summary)",
+      "description": "one line per session — tokens, asks, todos, tools and digests (summary)",
       "product": "memory"
     },
     "digest": {
-      "description": "lossy: only the compaction summaries (knowledge arc)",
+      "description": "only the compaction summaries (knowledge arc)",
       "product": "digest"
     }
   }
@@ -367,15 +366,16 @@ The **menu** has no product-only flow: each preset is a first-class action (read
   state, so it is asked before the plan and simply applied (a plan runs **ad-hoc** just like raw
   flags do). Marking **every** session runs the preset as configured (keeping its embedded
   selection); a partial selection becomes a `--sessions` override shared by every product of a
-  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`review` cover
-  the three products with defaults); without a presets file the export picker prints setup
+  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`review`
+  cover the raw copy and the readable log); without a presets file the export picker prints setup
   guidance (`cp presets.json …`) and the raw CLI as fallback — the manual session →
   product flow is gone from the menu.
 - `digest` is a valid product and ships as its own single-product preset. It is
   **not** part of any **bundle** preset: its digests are already inline in
   `transcript` and in the memory corpus (`compaction_digests`), so bundling it
   would triple the same text.
-- `export --list-presets` prints every named plan (and `--show <name>` its resolved
+- `export --list-presets` prints every named plan (name + derived verdict + its
+  description; `--show <name>` its resolved
   plan, `--dry-run <name>` the plan plus the sessions the selection would match,
   reading the DB read-only and writing nothing). Use them to inspect a plan or a
   hand-edited presets file before running it.

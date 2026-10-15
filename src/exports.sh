@@ -133,7 +133,6 @@ oced_export_meta_pairs() {   # $1 = metadata.json
           pair("Sub";                 (.sub // "-")),
           (if ((.role // "all") != "all") then pair("Role"; .role) else empty end),
           pair("Sanitize";            (.sanitize // false)),
-          pair("JSON archive";        (.json // false)),
           pair("Reasoning";           (.reasoning // false)),
           pair("Summary diffs";       (.summary_diffs // false)),
           pair("Tokens backfilled";   (.tokens_backfilled // 0)),

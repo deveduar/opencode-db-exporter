@@ -1,11 +1,11 @@
 # Export guide — what do I export when?
 
 > User-facing counterpart of the design docs. `opencode-db export` turns your opencode
-> sessions into documents. There are **three products** (what a document is) and
+> sessions into documents. There are **four products** (what a document is) and
 > **named plans** (a product or a bundle of products plus its configuration).
 > If you are unsure, start with the **decision matrix** at the end.
 
-## 1. The three products
+## 1. The four products
 
 ### `transcript` — "read, share, audit" (the human document)
 
@@ -13,8 +13,8 @@ What it produces: one Markdown file per session (and per subagent, `--sub separa
 with the **whole conversation**: your messages, the assistant answers, the model's
 reasoning, every tool call (command + arguments + its output), the code/patch diffs,
 and the compaction summaries **inline** where they happened. A per-run `index.md`
-lists all sessions; with `--json` an additional **faithful archive** (the native
-opencode message shape) is written next to each Markdown file.
+lists all sessions; with `faithful` an additional **lossless machine archive** (the
+native opencode message shape, see below) is written alongside it.
 
 Sizing: **the heavy product** — it grows with every tool output you kept. By default
 tool outputs are **truncated** to ~500 chars; `--tool-output full` keeps everything
@@ -55,6 +55,28 @@ the same digests are already inside `transcript` (inline) and `memory`
 (`compaction_digests`); the standalone product is a convenient extract, not new
 information — it is redundant when you are exporting either of the others.
 
+### `faithful` — "lossless machine archive" (the raw copy)
+
+What it produces: one **JSON file per session** (and per subagent, always under its
+root's `subagents/` folder) in the **native opencode shape** `{info, messages:[{info,
+parts}]}`. Nothing is display-filtered: every message, every part, the full tool
+output, the reasoning, the patches — the raw record. Only `--sanitize` redacts
+(recursively, in memory, before the file is written).
+
+Sizing: **the heaviest possible** — it grows with every token the conversation ever
+produced. It is the counterpart to `transcript`: where `transcript` is the
+human-readable, filtered view, `faithful` is the recoverable source.
+
+Use it when you want the session *back*, machine-exact: to rebuild a transcript
+yourself, to feed a tool that wants opencode's native JSON, or to keep a backup that
+nothing has summarised away. A run containing `faithful` is what the cards call
+**lossless** — everything else is a view.
+
+`faithful` has no layout flag: the subagent folders are always separate (`--sub`
+only re-arranges the Markdown products). It ignores the display filters
+(`--tool-output`, `--patch`, `--role`, `--no-reasoning`, `--mark-compactions`,
+`--summary-diffs`) because it never applied them in the first place.
+
 ## 1b. Subagents: include them or not (all products)
 
 A **subagent** is a session that opencode spawned from another one (`parent_id`
@@ -62,7 +84,7 @@ set). Two things about them are independent:
 
 | | flag | effect |
 |---|---|---|
-| **which subagents are in the export** | `--no-subagents` | drops every subagent, for **all three** products. A session whose parent is gone is *not* a subagent for this purpose (it is an orphan = a root), so it survives |
+| **which subagents are in the export** | `--no-subagents` | drops every subagent, for **all four** products. A session whose parent is gone is *not* a subagent for this purpose (it is an orphan = a root), so it survives |
 | **where a kept subagent is rendered** | `--sub separate\|inline\|omit` | transcript only: its own `subagents/` file, appended to the parent's file, or not rendered |
 
 So a "roots only" export is just `opencode-db export notes --no-subagents`, and the
@@ -89,7 +111,6 @@ Products run, by default, with their plain defaults:
 | tool output | truncated (~500 chars) |
 | subagents | included, in separate files |
 | patches / reasoning | included |
-| faithful `--json` | off |
 | sessions | **all** (or `--filter` / `--sessions` to narrow; recency is `--last N` / `--since DATE` — both **CLI-only**, never plan keys) |
 
 These are the defaults a plan that configures nothing inherits. To repeat a configured
@@ -103,10 +124,10 @@ their purpose:
 
 | plan | products | purpose | relative size |
 |---|---|---|---|
-| `archive` | transcript (`tool_output full` + `json`) + memory (`files`) | **lossless backup**: everything, complete tool outputs + faithful JSON + file lists | heavy |
-| `quick` | transcript (`tool_output truncated` + `json`) + memory (`files`) | **light daily review**: the same backup without the bulky tool outputs | medium |
-| `study` | transcript (`tool_output truncated`) + memory (`files`) | **read + RAG**: a plain transcript plus the memory corpus, no faithful JSON | medium |
-| `review` | transcript (`json` + `no_reasoning`) | **review transcript**: faithful JSON, no reasoning. It does **not** redact — read the output before you pass it on | medium |
+| `archive` | transcript (`tool_output full`) + memory (`files`) + **faithful** | **lossless backup**: everything — complete tool outputs, touched-file lists and the raw session | heavy |
+| `quick` | **faithful** | **raw copy**: the whole session as native JSON, lossless, with no Markdown | light |
+| `study` | transcript (`tool_output truncated`) + memory (`files`) | **read + RAG**: a readable log plus the searchable corpus, no raw copy | medium |
+| `review` | transcript (`no_reasoning`) + **faithful** | **review log**: no reasoning, plus the raw session for the raw copy. It does **not** redact — read the output before you pass it on | medium |
 | `notes` | transcript (defaults) | **read conversation**: every message, tool output truncated (~500 chars), patches and reasoning kept | light |
 | `conversation` | transcript (`tool_output omit` + `patch omit` + `no_reasoning`) | **the dialogue only**: just the user and assistant text, no tool calls, patches or reasoning — the cleanest read | light |
 | `prompts` | transcript (`role user`) | **just what I asked**: only the user prompts, no assistant replies/reasoning/tools — a task log or a prompt library | tiny |
@@ -114,18 +135,21 @@ their purpose:
 | `digest` | digest (defaults) | **knowledge arc**: just the compaction summaries | tiny |
 
 **Fidelity.** Every card ends with a derived `fidelity:` line. It is `lossless` when
-the run writes the faithful JSON **and** drops no data (no `no_subagents` /
-`no_orphan_subagents` / `sub: omit`, no `sanitize`), so the raw session is fully
-recoverable; otherwise `lossy`, naming the reasons. The reason fits the product that
-carries the data: a content product (`transcript`/`digest`) without the JSON is
+the run includes the `faithful` product **and** drops no data (no `no_subagents` /
+`no_orphan_subagents`, no `sanitize`), so the raw session is fully recoverable;
+otherwise `lossy`, naming the reasons. The reason fits the product that
+carries the data: a content product (`transcript`/`digest`) without `faithful` is
 `no faithful JSON: the Markdown is filtered`, while a `memory`-only plan is `the RAG
-corpus is a summary, not the full session` (the corpus is distilled, so `json` — not a
-`memory` option — could not make it whole). That makes `archive`, `quick` and `review`
-**lossless** — their JSON keeps the whole session even where the Markdown is
+corpus is a summary, not the full session` (the corpus is *distilled*, so no faithful
+copy exists there). That makes `archive`, `quick` and `review`
+**lossless** — the faithful archive keeps the whole session even where the Markdown is
 filtered — while `notes`, `conversation`, `prompts`, `rag`, `digest` and `study`
 are **lossy**. A bare product keyword (no preset) is lossy too. `sanitize` counts
 as lossy on purpose: redaction is best-effort and does not let you review what it
-removed.
+removed. The same verdict is a **column of the preset picker row** (between the product
+list and the description) and of `--list-presets`/the legend — it is computed by one
+helper, so the row and the card can never disagree, and the description never repeats
+it.
 
 `sessions` and recency selection are **not** presets: a pinned id list goes stale the
 moment the session is renamed, and always-matching patterns (`%2026-09%`, `%this_week%`)
@@ -139,18 +163,18 @@ would promise a safety it cannot keep. See §5. Likewise `--snapshot fresh` (a
 backup-alignment guard) ships in no preset; pass it per run, e.g.
 `export transcript --snapshot fresh`.
 
-Run `opencode-db export --list-presets` to see every named plan (`--list-products`
-lists the three products + their aliases), `export --explain` for a catalog of every
-preset (its description, the flags it sets, its `fidelity:` line and an example file
-tree — static, no DB), `export <name> --show` for one resolved plan (static, no DB), and
-`export <name> --dry-run`
+Run `opencode-db export --list-presets` to see every named plan (name + derived verdict
++ description; `--list-products` lists the four products + their aliases), `export
+--explain` for a catalog of every preset (its description, the flags it sets, its
+`fidelity:` line and an example file tree — static, no DB), `export <name> --show` for
+one resolved plan (static, no DB), and `export <name> --dry-run`
 to see both the plan and the sessions the selection would match (read-only, writes
 nothing) — useful before running a hand-edited presets file. The menu's preset picker
 reaches the same catalog with its `[?] what each preset produces` row.
 
-Sizing is DB-dependent: `archive` can easily be 10× `quick` on the same sessions, and
-`quick` ~4× the plain CLI transcript. Delete runs you no longer need with
-`opencode-db exports remove <stamp>`.
+Sizing is DB-dependent, and `quick` (the native JSON) is the raw data: `archive` adds
+the readable transcript and the corpus on top of it, so it is several times larger.
+Delete runs you no longer need with `opencode-db exports remove <stamp>`.
 
 ## 3. The menu flow, step by step
 
@@ -209,7 +233,7 @@ opencode-db menu  →  Export
    subfolder per product (`transcript/`, `memory/`, …) and all sessions aggregated by
    `opencode-db exports list|view`.
 
-Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|digest [flags]`; `full` and `compactions` still resolve as aliases). ESC always climbs back / cancels.
+Without a presets file, the classic raw-flags CLI remains available (`opencode-db export transcript|memory|digest|faithful [flags]`; `full` and `compactions` still resolve as aliases). ESC always climbs back / cancels.
 
 ## 3b. Managing your runs
 
@@ -261,17 +285,17 @@ Three behaviours worth knowing:
 
 | I want to… | use | notes |
 |---|---|---|
-| keep a lossless backup of everything | `export archive` | complete tool outputs + faithful JSON + corpus |
-| review what I did today, fast | `export quick` | light, readable transcript + corpus |
-| read a conversation and keep its RAG corpus, no JSON | `export study` | plain transcript + corpus.jsonl, no faithful JSON |
-| review or hand a session to someone | `export review` | no reasoning + faithful JSON; it does **not** redact — **read the output before passing it on** |
+| keep a lossless backup of everything | `export archive` | complete tool outputs + the raw session + corpus |
+| keep the raw session, losslessly | `export quick` (or `export faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
+| read a conversation and keep its RAG corpus, no raw copy | `export study` | readable log + corpus.jsonl, no faithful JSON |
+| review or hand a session to someone | `export review` | no reasoning + the raw session; it does **not** redact — **read the output before passing it on** |
 | read a conversation plain | `export notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
 | read only the dialogue (no tools, patches or reasoning) | `export conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
 | archive-grade export, but make sure the backup is current first | `export transcript --snapshot fresh` | offers a fresh backup when the last one diverged, then a full transcript |
-| read one conversation in full | `export transcript` (CLI) | add `--json` if you also want the faithful archive |
+| read one conversation in full **and** keep the raw copy | `export archive` (CLI: `export transcript` then `export faithful`) | the Markdown plus the native-JSON archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |

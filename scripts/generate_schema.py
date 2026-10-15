@@ -182,8 +182,6 @@ def _flag_type(allowed: str, f) -> tuple[str, str]:
 def _flag_applies(f) -> str:
     if f.products == ["*"]:
         return "any"
-    if f.name == "json":
-        return "transcript/digest (faithful archive)"
     if f.name == "files":
         return "memory (touched files)"
     return ", ".join(f.products)
@@ -192,9 +190,9 @@ def _flag_applies(f) -> str:
 def flags_table() -> str:
     """Render the docs/schemas.md §1 per-key table from FLAGS (also written to generated/flags-table.md)."""
     rows = [
-        "| `product` | string | `transcript` \\| `memory` \\| `digest` | "
+        "| `product` | string | `transcript` \\| `memory` \\| `digest` \\| `faithful` | "
         "single only (`full` is a CLI alias, **not** a preset product) |",
-        "| `products` | object | keys restricted to the 3 products | "
+        "| `products` | object | keys restricted to the products above | "
         "bundle only (exclusive with `product`) |",
         f"| `{PRESET_DESCRIPTION_KEY}` | string | — | optional human one-liner "
         "(picker row / `--list-presets` / legend); it travels with the recipe |",

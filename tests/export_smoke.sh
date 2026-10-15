@@ -289,8 +289,8 @@ TC=$(cat "$(last_transcript transcript 'Project Alpha')")
 echo "$TC" | grep -q "**Tool:**" && ok "transcript keeps tool calls" || bad "transcript no tools"
 echo "$TC" | grep -q "Let me think first" && ok "transcript keeps reasoning by default" || bad "transcript reasoning lost"
 MT=$(last_meta transcript)
-jq -e '.profile == "transcript" and .json == false and .sanitize == false and .reasoning == true and .tool_output == "truncated"' "$MT" >/dev/null \
-    && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,json,sanitize,reasoning,tool_output}' "$MT")"
+jq -e '.profile == "transcript" and .sanitize == false and .reasoning == true and .tool_output == "truncated"' "$MT" >/dev/null \
+    && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,sanitize,reasoning,tool_output}' "$MT")"
 
 echo "== export transcript --no-reasoning =="
 run export transcript --no-reasoning --filter ses_A0001 >/dev/null
@@ -354,29 +354,29 @@ jq -e '.touched_files == false and .files == ["corpus.jsonl", "index.md"] and .p
     && ok "memory metadata: touched_files false + produced files list" \
     || bad "memory meta contract: $(jq -c '{touched_files,files,profile}' "$MB/metadata.json")"
 
-echo "== faithful JSON archive (--json) =="
-run export transcript --json --filter ses_A0001 >/dev/null
-JR=$(find "$OUT" -path "*/transcript/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-[ -n "$JR" ] && ok "faithful JSON file written next to the transcript" || bad "json file missing"
-jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.backfilled == true and .info.cost == 0.05' "$JR" >/dev/null \
-    && ok "json info carries the backfilled tokens" || bad "json info tokens"
-jq -e '.messages | length == 6' "$JR" >/dev/null && ok "json keeps ALL messages (6)" || bad "json messages: $(jq '.messages | length' "$JR")"
-jq -e '.messages[0].parts[0].type == "text"' "$JR" >/dev/null && ok "json message shape {info, parts}" || bad "json shape"
-printf '%s' "$(cat "$JR")" | grep -q "sk-test1234567890abcdefghijkl" && ok "faithful JSON keeps raw data when not sanitizing" || bad "json raw data missing"
-jq -e '.info.model == "model-a" and .info.parentId == null and .info.agent == "build" and (.info.time.created | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "$JR" >/dev/null \
+echo "== faithful product (lossless JSON archive) =="
+run export faithful --filter ses_A0001 >/dev/null
+FR=$(find "$OUT" -path "*/faithful/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+[ -n "$FR" ] && ok "faithful JSON file written in the faithful product dir" || bad "faithful json file missing"
+jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.backfilled == true and .info.cost == 0.05' "$FR" >/dev/null \
+    && ok "faithful info carries the backfilled tokens" || bad "faithful info tokens"
+jq -e '.messages | length == 6' "$FR" >/dev/null && ok "faithful keeps ALL messages (6)" || bad "faithful messages: $(jq '.messages | length' "$FR")"
+jq -e '.messages[0].parts[0].type == "text"' "$FR" >/dev/null && ok "faithful message shape {info, parts}" || bad "faithful shape"
+printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && ok "faithful keeps raw data when not sanitizing" || bad "faithful raw data missing"
+jq -e '.info.model == "model-a" and .info.parentId == null and .info.agent == "build" and (.info.time.created | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "$FR" >/dev/null \
     && ok "faithful info: plain model id, null parentId, ISO time" \
-    || bad "faithful contract: $(jq -c '.info | {model,parentId,agent,time}' "$JR")"
+    || bad "faithful contract: $(jq -c '.info | {model,parentId,agent,time}' "$FR")"
 
-echo "== --sanitize redacts secrets in markdown and JSON =="
+echo "== --sanitize redacts secrets in markdown and faithful JSON =="
 run export transcript --sanitize --filter ses_A0001 >/dev/null
 TC=$(cat "$(last_transcript transcript 'Project Alpha')")
 printf '%s' "$TC" | grep -q "sk-test1234567890abcdefghijkl" && bad "sanitize leaked the API key" || ok "sanitize redacts the API key"
 printf '%s' "$TC" | grep -q "sk-\[REDACTED\]" && ok "sanitize shows the redaction marker" || bad "sanitize marker missing"
-run export transcript --json --sanitize --filter ses_A0001 >/dev/null
-JR=$(find "$OUT" -path "*/transcript/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-printf '%s' "$(cat "$JR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "json sanitize leaked" || ok "json sanitize redacts recursively"
-MT=$(last_meta transcript)
-jq -e '.json == true and .sanitize == true' "$MT" >/dev/null && ok "json+sanitize recorded in metadata" || bad "json sanitize metadata"
+run export faithful --sanitize --filter ses_A0001 >/dev/null
+FR=$(find "$OUT" -path "*/faithful/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "faithful sanitize leaked" || ok "faithful sanitize redacts recursively"
+MT=$(last_meta faithful)
+jq -e '.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize recorded in metadata" || bad "faithful sanitize metadata"
 
 echo "== shared-stamp bundle (products share one run folder) =="
 BSTAMP="stplug-$(date -u +%s)"
@@ -1088,21 +1088,21 @@ echo "== export presets (JSON file = source of truth) =="
 PRESETS="$TMP/presets.json"
 cat > "$PRESETS" <<'EOF'
 {"presets": {
-  "clean": {"product":"transcript","json":true,"sanitize":true,"no_reasoning":true,"filter":"Project Beta"},
+  "clean": {"product":"transcript","sanitize":true,"no_reasoning":true,"filter":"Project Beta"},
   "corpus":  {"product":"memory","cap":400,"files":true,"filter":"ses_%"},
   "dorky":   {"product":"transcript","role":"banana"}
 }}
 EOF
 export OCED_PRESETS="$PRESETS"
 run export clean >/dev/null
-jq -e '.preset == "clean" and .json == true and .sanitize == true and .reasoning == false' "$(last_meta transcript)" >/dev/null \
-    && ok "preset 'clean' applies product + config flags" || bad "preset flags: $(jq -r '.preset,.json,.sanitize,.reasoning' "$(last_meta transcript)")"
+jq -e '.preset == "clean" and .sanitize == true and .reasoning == false' "$(last_meta transcript)" >/dev/null \
+    && ok "preset 'clean' applies product + config flags" || bad "preset flags: $(jq -r '.preset,.sanitize,.reasoning' "$(last_meta transcript)")"
 jq -e '.filter == "Project Beta"' "$(last_meta transcript)" >/dev/null \
     && ok "preset pins its own filter" || bad "preset filter"
 jq -e '.sessions.total == 1' "$(last_meta transcript)" >/dev/null \
     && ok "preset filter selects the matching session" || bad "preset filter sessions: $(jq -r .sessions.total "$(last_meta transcript)")"
 # Product keyword still means the product (regression): preset file present but "transcript" is one.
-run export transcript --json >/dev/null
+run export transcript >/dev/null
 jq -e '.preset == null' "$(last_meta transcript)" >/dev/null \
     && ok "product keyword ignores presets (preset=null)" || bad "product keyword leak"
 run export memory --sessions ses_A0001 >/dev/null
@@ -1132,7 +1132,7 @@ printf '%s' "$UNK" | grep -q "unknown export target 'nope'" && ok "unknown targe
 printf '%s' "$UNK" | grep -q "presets: clean, corpus, dorky" && ok "unknown target lists the known presets" || bad "unknown target presets: $(printf '%s' "$UNK" | tail -1)"
 # No presets file -> raw flags still rule (no presets configured path).
 export OCED_PRESETS="$TMP/missing-presets.json"
-run export transcript --json >/dev/null
+run export transcript >/dev/null
 jq -e '.preset == null' "$(last_meta transcript)" >/dev/null \
     && ok "absent presets file is a no-op (preset=null)" || bad "missing presets file"
 export OCED_PRESETS="$PRESETS"
@@ -1140,7 +1140,7 @@ export OCED_PRESETS="$PRESETS"
 echo "== export preset snapshot: fresh -> backup alignment warning =="
 SNAP_PRESETS="$TMP/presets-snap.json"
 cat > "$SNAP_PRESETS" <<'EOF'
-{"presets": {"snap": {"product": "transcript", "json": true, "snapshot": "fresh"}}}
+{"presets": {"snap": {"product": "transcript", "snapshot": "fresh"}}}
 EOF
 export OCED_PRESETS="$SNAP_PRESETS"
 export OCED_BACKUP_DIR="$TMP/bk-snap"
@@ -1163,10 +1163,10 @@ export OCED_PRESETS="$PRESETS"
 echo "== export bundle presets (products: one stamp, per-product flags) =="
 cat > "$TMP/presets-bundle.json" <<'EOF'
 {"presets": {
-  "everything": {"products": {"transcript": {"json": true, "tool_output": "full"},
-                              "memory": {"files": true}}},
-  "debugmsg":   {"products": {"transcript": {"json": true}, "memory": {"files": true},
-                              "digest": {"json": true}}},
+  "everything": {"products": {"transcript": {"tool_output": "full"},
+                              "memory": {"files": true}, "faithful": {}}},
+  "debugmsg":   {"products": {"transcript": {}, "memory": {"files": true},
+                              "digest": {}}},
   "badmix":     {"product": "transcript", "products": {"memory": {}}},
   "badprod":    {"products": {"scribble": {}}}
 }}
@@ -1174,17 +1174,17 @@ EOF
 export OCED_PRESETS="$TMP/presets-bundle.json"
 run export everything >/dev/null
 BT="$(last_meta transcript)"; BT="${BT%/metadata.json}"; BSTAMP="${BT%/*}"
-[ -d "$BSTAMP/transcript" ] && [ -d "$BSTAMP/memory" ] && [ ! -d "$BSTAMP/digest" ] \
-    && ok "bundle 'everything' = one stamp with transcript+memory (no digest)" \
+[ -d "$BSTAMP/transcript" ] && [ -d "$BSTAMP/memory" ] && [ -d "$BSTAMP/faithful" ] && [ ! -d "$BSTAMP/digest" ] \
+    && ok "bundle 'everything' = one stamp with transcript+memory+faithful (no digest)" \
     || bad "bundle dirs: $BSTAMP"
-jq -e '.preset == "everything" and .profile == "transcript" and .json == true and .tool_output == "full"' "$BSTAMP/transcript/metadata.json" >/dev/null \
+jq -e '.preset == "everything" and .profile == "transcript" and .tool_output == "full"' "$BSTAMP/transcript/metadata.json" >/dev/null \
     && ok "bundle transcript runs with its preset flags + provenance" || bad "bundle transcript meta"
 jq -e '.preset == "everything" and .profile == "memory"' "$BSTAMP/memory/metadata.json" >/dev/null \
     && ok "bundle memory records preset + profile" || bad "bundle memory meta"
 printf '%s' "$(sed -n '1p' "$BSTAMP/memory/corpus.jsonl")" | jq -e '.files | length >= 1' >/dev/null \
     && ok "bundle memory --files applies" || bad "bundle memory files"
-[ -n "$(ls "$BSTAMP"/transcript/*/*.json 2>/dev/null)" ] && ok "bundle transcript writes faithful JSON per session" || bad "bundle transcript json files"
-grep -q "transcript + memory" "$BSTAMP/index.md" && ok "bundle stamp has a root index tying the products" || bad "bundle root index"
+[ -n "$(ls "$BSTAMP"/faithful/*/*.json 2>/dev/null)" ] && ok "bundle faithful writes JSON per session" || bad "bundle faithful json files"
+grep -q "transcript + memory + faithful" "$BSTAMP/index.md" && ok "bundle stamp has a root index tying the products" || bad "bundle root index"
 # A CLI selection/config override applies to every product of the bundle.
 run export everything --sessions ses_A0001 --cap 100 --tool-output omit >/dev/null
 BT2="$(last_meta transcript)"; BT2="${BT2%/metadata.json}"; BSTAMP2="${BT2%/*}"
@@ -1206,7 +1206,7 @@ BAD1=$(run export badmix); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$BAD1" | grep -q "use either 'product' or 'products'" \
     && ok "bundle rejects product+products mix" || bad "badmix: $(printf '%s' "$BAD1" | tail -1)"
 BAD2=$(run export badprod); rc=$?
-[ "$rc" -ne 0 ] && printf '%s' "$BAD2" | grep -q "must be transcript, memory or digest (got 'scribble')" \
+[ "$rc" -ne 0 ] && printf '%s' "$BAD2" | grep -q "'products' keys must be transcript | memory | digest | faithful (got 'scribble')" \
     && ok "bundle rejects an invalid product" || bad "badprod: $(printf '%s' "$BAD2" | tail -1)"
 export OCED_PRESETS="$PRESETS"
 
@@ -1251,28 +1251,36 @@ echo "== shipped presets.json end-to-end (archive/quick/review) =="
 export OCED_PRESETS="$EXAMPLE"
 run export archive >/dev/null
 EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
-[ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ ! -d "$EJSTAMP/digest" ] \
-    && ok "shipped 'archive' runs transcript+memory under one stamp" || bad "shipped archive dirs"
+[ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ -d "$EJSTAMP/faithful" ] && [ ! -d "$EJSTAMP/digest" ] \
+    && ok "shipped 'archive' runs transcript+memory+faithful under one stamp" || bad "shipped archive dirs"
 jq -e '.preset == "archive" and .tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
     && ok "shipped archive transcript flags applied" || bad "shipped archive meta"
 grep -q '^| Preset | `archive` |$' "$EJSTAMP/transcript/index.md" \
     && ok "index.md records the preset that produced the run" || bad "index preset row"
-run export quick >/dev/null
-DBUG="$(last_meta memory)"; DBUG="${DBUG%/metadata.json}"; DBUGSTAMP="${DBUG%/*}"
-[ -d "$DBUGSTAMP/transcript" ] && [ -d "$DBUGSTAMP/memory" ] && [ ! -d "$DBUGSTAMP/digest" ] \
-    && ok "shipped 'quick' is a light transcript+memory bundle (no redundant digest)" || bad "shipped quick dirs"
-jq -e '.preset == "quick" and .tool_output == "truncated"' "$DBUGSTAMP/transcript/metadata.json" >/dev/null \
-    && ok "shipped quick uses truncated tool output (light variant)" || bad "shipped quick meta"
+# quick runs on its OWN output shelf: in the shared shelf a same-second run can
+# occupy a `<stamp>/transcript` slot next to quick's `<stamp>/faithful` (stamp
+# collisions are per-profile, not per-stamp), which would make the faithful-only
+# check lie. A dedicated shelf removes the collision entirely.
+QOUT="$TMP/quick-out"
+QRUN=$(OCED_OUT="$QOUT" OCED_PRESETS="$EXAMPLE" run export quick)
+DQUICK="$(find "$QOUT" -path '*/faithful/metadata.json' | head -1)"
+DQUICKDIR="${DQUICK%/metadata.json}"; DBUGSTAMP="${DQUICKDIR%/*}"
+[ -n "$DQUICK" ] && [ -d "$DBUGSTAMP/faithful" ] && [ ! -d "$DBUGSTAMP/transcript" ] && [ ! -d "$DBUGSTAMP/memory" ] \
+    && ok "shipped 'quick' is the faithful product alone (no transcript/memory)" || bad "shipped quick dirs: $(ls "$DBUGSTAMP" 2>&1)"
+jq -e '.preset == "quick"' "$DQUICK" >/dev/null \
+    && ok "shipped quick records the preset in its faithful metadata" || bad "shipped quick meta"
 run export study >/dev/null
 STUDY="$(last_meta memory)"; STUDY="${STUDY%/metadata.json}"; STUDYR="${STUDY%/*}"
 njson=$(find "$STUDYR/transcript" -type f -name '*.json' ! -name 'metadata.json' | wc -l)
 [ -d "$STUDYR/transcript" ] && [ -d "$STUDYR/memory" ] && [ "$njson" -eq 0 ] \
     && ok "shipped 'study' is transcript+memory with no per-session JSON" || bad "shipped study dirs/json ($njson)"
-jq -e '.preset == "study" and .tool_output == "truncated" and .json == false' "$STUDYR/transcript/metadata.json" >/dev/null \
-    && ok "shipped study applies truncated tool output and no json" || bad "shipped study meta"
+jq -e '.preset == "study" and .tool_output == "truncated"' "$STUDYR/transcript/metadata.json" >/dev/null \
+    && ok "shipped study applies truncated tool output" || bad "shipped study meta"
 run export review >/dev/null
-jq -e '.preset == "review" and .reasoning == false and .json == true and .sanitize == false' "$(last_meta transcript)" >/dev/null \
-    && ok "shipped 'review' applies its single-product flags (no sanitize)" || bad "shipped review meta"
+jq -e '.preset == "review" and .reasoning == false and .sanitize == false' "$(last_meta transcript)" >/dev/null \
+    && ok "shipped 'review' applies its transcript flags (no sanitize)" || bad "shipped review meta"
+[ -d "$(dirname "$(dirname "$(last_meta transcript)")")/faithful" ] \
+    && ok "shipped 'review' also runs the faithful product" || bad "shipped review faithful dir"
 run export prompts >/dev/null
 jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
@@ -1303,8 +1311,8 @@ printf '%s' "$DR" | grep -q "Matched: 6 session(s) = 3 root(s) + 3 subagent(s)" 
     && ok "export --dry-run counts the sessions the selection matches" || bad "--dry-run: $(printf '%s' "$DR" | grep Matched)"
 # The plan block and `--explain` share ONE card builder: archive's card must
 # be byte-identical in both (the catalog and the runtime plan cannot drift).
-EXF=$(OCED_PRESETS="$EXAMPLE" run export --explain | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
-ASHOW=$(OCED_PRESETS="$EXAMPLE" run export archive --show | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f')
+EXF=$(OCED_PRESETS="$EXAMPLE" run export --explain | awk '/^archive \(transcript \+ memory \+ faithful\)$/{f=1;next} f&&/^$/{exit} f')
+ASHOW=$(OCED_PRESETS="$EXAMPLE" run export archive --show | awk '/^archive \(transcript \+ memory \+ faithful\)$/{f=1;next} f&&/^$/{exit} f')
 [ -n "$EXF" ] && [ "$EXF" = "$ASHOW" ] \
     && ok "the plan card is identical to --explain's" \
     || bad "card drift: [$(printf '%s' "$EXF" | head -1)] != [$(printf '%s' "$ASHOW" | head -1)]"
@@ -1324,23 +1332,32 @@ NDB=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-prese
     && ok "export --list-presets needs no database" || bad "list-presets without DB rc=$ndrc"
 # The description travels with the recipe (the presets file): prompts is not a
 # plain transcript, and the renamed review plan says what it does.
-printf '%s' "$LP" | grep -q "no answers/reasoning/tools" \
+printf '%s' "$LP" | grep -q "just your prompts" \
     && ok "--list-presets carries the description of prompts from the file" || bad "prompts description: $(printf '%s' "$LP" | grep prompts)"
-printf '%s' "$LP" | grep -q "transcript without reasoning" \
+printf '%s' "$LP" | grep -q "readable log without reasoning" \
     && ok "--list-presets carries the review description from the file" || bad "review description missing"
+# The verdict is a DERIVED column of the row, never a word in the description: the
+# same `fidelity_parts` behind the card's `fidelity:` line feeds it.
+printf '%s' "$LP" | grep -qE '^archive +lossless +' \
+    && ok "--list-presets shows the derived verdict as its own column (archive: lossless)" || bad "archive verdict column: $(printf '%s' "$LP" | grep archive)"
+printf '%s' "$LP" | grep -qE '^rag +lossy +' \
+    && ok "--list-presets shows lossy for the memory-only plan (rag)" || bad "rag verdict column: $(printf '%s' "$LP" | grep rag)"
 # The picker rows use the same file description (never a flag-derived guess):
 # the old taxonomy labelled prompts AND the snapshot plan "read (transcript defaults)".
 PROWS=$(OCED_PRESETS="$EXAMPLE" python3 "$MOD/exportlib/plan.py" rows)
-printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*only user prompts' \
+printf '%s' "$PROWS" | grep -q '^__PRESET_prompts.*just your prompts' \
     && ok "picker row of prompts shows its file description" || bad "prompts description: $(printf '%s' "$PROWS" | grep prompts)"
-printf '%s' "$PROWS" | grep -q '^__PRESET_review.*faithful JSON' \
+printf '%s' "$PROWS" | grep -q '^__PRESET_review.*readable log without reasoning' \
     && ok "picker row of review shows its file description" || bad "review description missing"
+printf '%s' "$PROWS" | grep -qE '^__PRESET_quick.*\[faithful\].*lossless' \
+    && ok "picker row of quick is the faithful product alone, verdict lossless" || bad "quick row: $(printf '%s' "$PROWS" | grep quick)"
 printf '%s' "$PROWS" | grep -q "transcript defaults" \
     && bad "picker row still claims 'transcript defaults'" || ok "no picker row falls back to 'transcript defaults'"
 # --list-products names the document kinds and their aliases; no DB needed.
 PROD=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --list-products); prc=$?
 { [ "$prc" -eq 0 ] && printf '%s' "$PROD" | grep -q "transcript" && printf '%s' "$PROD" | grep -q "memory" \
-    && printf '%s' "$PROD" | grep -q "digest" && printf '%s' "$PROD" | grep -q "full = transcript" \
+    && printf '%s' "$PROD" | grep -q "digest" && printf '%s' "$PROD" | grep -q "faithful" \
+    && printf '%s' "$PROD" | grep -q "full = transcript" \
     && printf '%s' "$PROD" | grep -q "compactions = digest"; } \
     && ok "export --list-products lists the products + aliases (no DB)" || bad "--list-products rc=$prc: $PROD"
 # The snapshot guard is invisible unless annotated: a plan that sets it must SAY
@@ -1354,24 +1371,24 @@ printf '%s' "$ASHOW" | grep -q "fresh-backup guard" \
 EXP=$(OPENCODE_DB="$TMP/nope.db" OCED_PRESETS="$EXAMPLE" run export --explain); expr_rc=$?
 { [ "$expr_rc" -eq 0 ] \
     && printf '%s' "$EXP" | grep -q "== What each preset produces ==" \
-    && printf '%s' "$EXP" | grep -q "^archive (transcript + memory)$" \
-    && printf '%s' "$EXP" | grep -q "flags: faithful JSON" \
+    && printf '%s' "$EXP" | grep -q "^archive (transcript + memory + faithful)$" \
+    && printf '%s' "$EXP" | grep -q "flags: full tool outputs" \
     && printf '%s' "$EXP" | grep -q "corpus.jsonl"; } \
     && ok "export --explain is a static catalog with a file tree (no DB)" || bad "--explain rc=$expr_rc: $(printf '%s' "$EXP" | head -8)"
 # The card states every preset's DERIVED fidelity (never a declared key): lossless
 # iff a product writes the faithful JSON and nothing drops data. The JSON keeps the
 # whole session even where the Markdown truncates, so archive AND quick are lossless;
 # a content preset without it is lossy for the filtered Markdown, and a memory-only
-# preset for its corpus shape (json is not even a memory option). The tree names the
-# subagent JSON a json-capable preset really writes.
-printf '%s' "$EXP" | awk '/^archive \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
+# preset for its corpus shape (faithful is not a memory option). The tree names the
+# subagent JSON the faithful product really writes.
+printf '%s' "$EXP" | awk '/^archive \(transcript \+ memory \+ faithful\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
     && ok "--explain shows archive as lossless" || bad "archive fidelity: $(printf '%s' "$EXP" | grep 'fidelity:')"
-printf '%s' "$EXP" | awk '/^quick \(transcript \+ memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
-    && ok "--explain shows quick as lossless (the JSON keeps the full session)" || bad "quick fidelity"
+printf '%s' "$EXP" | awk '/^quick \(faithful\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossless (the faithful JSON keeps the full data)' \
+    && ok "--explain shows quick as lossless (the raw copy keeps the full session)" || bad "quick fidelity"
 printf '%s' "$EXP" | awk '/^rag \(memory\)$/{f=1;next} f&&/^$/{exit} f' | grep -qx '  fidelity: lossy (the RAG corpus is a summary, not the full session)' \
     && ok "--explain shows rag as lossy for the corpus shape (not a missing JSON)" || bad "rag fidelity"
 printf '%s' "$EXP" | grep -q '<sub>_<id>.json' \
-    && ok "--explain's tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON"
+    && ok "--explain's tree shows the subagent JSON the faithful product writes" || bad "tree hides the subagent JSON"
 printf '%s' "$EXP" | grep -q "matched:" \
     && bad "--explain still reads the DB (a 'matched:' line)" || ok "export --explain never reads the DB"
 EXPDB=$(OCED_PRESETS="$EXAMPLE" run export --explain)

@@ -20,7 +20,6 @@ class Renderer:
         self.filter = args.filter
         self.role = args.role
         self.reasoning = not args.no_reasoning
-        self.json_mode = args.json
         self.sanitize = args.sanitize
 
     def w(self, s: str) -> str:

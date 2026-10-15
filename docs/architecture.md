@@ -78,10 +78,13 @@ guarantees seeing everything).
 | `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers). `full` is an accepted alias |
 | `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
 | `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
+| `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |
 
 There is no `all` meta-profile; "all sessions" means selecting ALL in the picker (or an
 empty `--filter`). `--role` is a flag (`all|user|assistant`), not a preset; `memory`
-ignores it (documented in its `index.md`).
+ignores it (documented in its `index.md`). The `faithful` product ignores every
+display filter too (`--tool-output`, `--patch`, `--role`, `--no-reasoning`,
+`--mark-compactions`, `--summary-diffs`): it is the raw record.
 
 ### Named presets (`presets.json` = source of truth)
 
@@ -91,7 +94,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
 `product` + its config flags + optionally the selection (`filter` LIKE **or** exact
 `sessions`, never both). It is the source of truth for both the CLI and the menu:
 
-- `export <name>` resolves: if `name` ∈ `transcript|memory|digest|full` it is a
+- `export <name>` resolves: if `name` ∈ `transcript|memory|digest|faithful|full` it is a
   product; if it is a known preset, `apply_preset()` applies its keys over the argparse
   `args` (validating `choices`/types with `die()` on an invalid value); otherwise
   `ap.error` lists the known products and presets. `metadata.json` records `"preset"`
@@ -107,7 +110,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   before exporting; the menu turns that into an offer to create a fresh backup first.
   Skipped silently under `--from-backup` (the source *is* the snapshot).
 - **Bundle presets** (`products` instead of `product`): a map `{product: {flags}}` over
-  `transcript|memory|digest` (mutually exclusive with `product`). The selection is
+  `transcript|memory|digest|faithful` (mutually exclusive with `product`). The selection is
   top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
   (`run_bundle()` in `cli.py`) computes one shared collision-free stamp (bumped to
   `stamp@N` only when any product dir already exists), then re-executes `exportlib/cli.py
@@ -152,12 +155,17 @@ expansion is structural, so the guarantee does not depend on a CLI flag. In show
 each subagent is its own row with its own mark, and the confirm reports how many were
 explicitly unmarked.
 
-### Faithful JSON (`--json`)
+### `faithful`: the lossless JSON archive
 
-Each session writes a `.json` file next to its `.md` with the native shape
+The `faithful` product writes one `.json` file per root session (subagents under
+its `subagents/` folder) with the native shape
 `{"info": {...}, "messages": [{"info": {...}, "parts": [...]}]}` (parity with
-`session_faithful`). Inline subagents go to `<stem>.sub-<id8>.json`. `info.tokens`
-includes `backfilled`.
+`session_faithful`). It is a product, not a flag on `transcript` — the Markdown and
+the machine copy are two different documents, and a plan includes the one it needs
+(`archive`/`review` include both; `quick` is the raw copy alone). `info.tokens` includes
+`backfilled`.
+Because it never applies the display filters, a plan containing it is what the
+cards call **lossless**.
 
 ### Token backfill
 
@@ -198,7 +206,7 @@ if the corpus exceeds ~50 MB without `--cap`, it suggests bounding.
 
 Each run writes `index.md` (summary/index) + `metadata.json` (tool/version/date, `db` +
 `db_sha256` to correlate the export with a snapshot, `profile`, flags such as
-`role`/`json`/`sanitize`/`reasoning`/`tokens_backfilled`, counts). `exports.sh` aggregates
+`sanitize`/`reasoning`/`tokens_backfilled`, counts). `exports.sh` aggregates
 these `metadata.json` per stamp for `exports list/remove/prune`.
 
 ## 4. Menu design
@@ -364,7 +372,8 @@ inside a fixed 72-column budget so the block is deterministic; the keyword's
 symbology (a `+` on the first flag joined with `' · '`, which read as an expression rather
 than a list) and the separate `-> Notes` block are all gone: `annotate_flags()` returns a
 **list** of standalone phrases ` · `-joined on the single `flags:` line, and the caveats
-(raw/unfiltered faithful JSON, sanitize) are carried by that same line rather than a
+(sanitize, truncation) are carried by that same line (the `faithful` product, which used
+to be a `json` caveat, is now named in the products line) rather than a
 hand-written block. There are **no
 variant tables or custom checklists**: tuning and "bundle everything in one stamp" live
 in the presets file (`OCED_PRESETS`) or the CLI.
@@ -434,7 +443,7 @@ Backups deliberately has **no** such row: its per-row view already hashes the fi
 hashing the whole shelf would take seconds per gigabyte.
 
 The term **plan/preset** always means the named config; **product** always the keyword
-(`transcript|memory|digest`). Usage and the decision matrix:
+(`transcript|memory|digest|faithful`). Usage and the decision matrix:
 `docs/export-guide.md`; short usage: `README.md` (Menu).
 
 ## 5. `shrink`

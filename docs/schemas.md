@@ -9,7 +9,7 @@ JSON-serializable artifacts have machine-checkable schemas where noted.
 
 Dates are always **ISO-8601 UTC** (`YYYY-MM-DDTHH:MM:SSZ`, epoch ms converted via
 `ts_iso`). Absent values are `null` (never `""`) in machine artifacts
-(`corpus.jsonl`, faithful `--json` archives, `metadata.json`); `""` only appears
+(`corpus.jsonl`, the `faithful` archives, `metadata.json`); `""` only appears
 in human markdown rendering.
 
 Legend: `R?` = optional key.
@@ -33,17 +33,15 @@ in sync by construction.
   "presets": {
     "archive": {
       "products": {                       // bundle: one stamp, one index.md per product
-        "transcript": { "json": true, "tool_output": "full" },  // per-product flags only
-        "memory":     { "files": true }
+        "transcript": { "tool_output": "full" },  // per-product flags only
+        "memory":     { "files": true },
+        "faithful":   {}                   // the lossless JSON archive product
       },
       "filter": "ses_f7%",                 // optional shared selection: filter (SQL LIKE)…
       "sessions": ["ses_…", "ses_…"]      // …or exact ids — never both
     },
     "quick": {
-      "products": {
-        "transcript": { "json": true, "tool_output": "truncated" },
-        "memory":     { "files": true }
-      }
+      "product": "faithful"             // single product: the raw copy, lossless
     },
     "study": {
       "products": {
@@ -52,8 +50,10 @@ in sync by construction.
       }
     },
     "review": {
-      "product": "transcript",            // single product: name resolves first
-      "json": true, "no_reasoning": true
+      "products": {                       // no faithful flag needed: faithful IS a product
+        "transcript": { "no_reasoning": true },
+        "faithful":   {}
+      }
     },
     "notes": { "product": "transcript" },
     "rag":   { "product": "memory" },
@@ -66,17 +66,16 @@ in sync by construction.
 > — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
 > Summary of the non-obvious rows:
 
-> **The `product` / `products` values are `transcript` \| `memory` \| `digest`** and
-> nothing else: `full` is a CLI alias of `transcript` and `compactions` is a deprecated
+> **The `product` / `products` values are `transcript` \| `memory` \| `digest` \| `faithful`**
+> and nothing else: `full` is a CLI alias of `transcript` and `compactions` is a deprecated
 > alias of `digest` (both are normalised at resolve time, so a run records `digest`).
 > This table restates the non-obvious rows of the generated one; it is a summary, the
 > generated file is the contract.
 
-| `product` | string | `transcript` \| `memory` \| `digest` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
-| `products` | object | keys restricted to the 3 products | bundle only (exclusive with `product`) |
+| `product` | string | `transcript` \| `memory` \| `digest` \| `faithful` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
+| `products` | object | keys restricted to the products above | bundle only (exclusive with `product`) |
 | `description` | string | — | optional human one-liner (picker row / `--list-presets` / legend); it travels with the recipe, a preset without one shows no prose |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
-| `json` | bool | — | transcript/digest (faithful archive) |
 | `snapshot` | string | `"fresh"` | **single preset only** (never per-product/bundle): coordinate the export + the reference backup — CLI warns, menu offers a fresh backup, when no backup exists or the last one diverged from the live DB |
 | `out` | string | — | CLI-only (never a preset key) |
 
@@ -85,15 +84,18 @@ harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole
 preset selection; any explicit flag beats the preset value per product.
 
 **`fidelity:` is derived, not a key.** No preset declares lossless/lossy: the plan
-computes it (`plan.py:fidelity_label`, exposed in the `resolve` JSON) — **lossless**
-iff a product writes the faithful JSON (`json: true`) and no flag drops data
-(`no_subagents` / `no_orphan_subagents` / `sub: omit`, or `sanitize`, which redacts
+computes it (`plan.py:fidelity_parts`, exposed in the `resolve` JSON as the `fidelity`
+phrase) — **lossless** iff the `faithful` product is part of the plan and no flag drops
+data (`no_subagents` / `no_orphan_subagents`, or `sanitize`, which redacts
 best-effort), else **lossy** with the reasons. The reason depends on the product that
-carries the data: a content product (`transcript` / `digest`) without the JSON is lossy
+carries the data: a content product (`transcript` / `digest`) without `faithful` is lossy
 for the filtered Markdown; a `memory`-only plan is lossy because the RAG corpus is a
-distilled summary, never the full session (`json` is not even a `memory` option, so its
-absence is not a declined copy). It is the line each
-`--explain` / `--show` / `--dry-run` / menu-confirm card prints after `flags:`.
+distilled summary, never the full session. `sub: omit` is a loss only when no `faithful`
+copy carries the subagents. It is the line each
+`--explain` / `--show` / `--dry-run` / menu-confirm card prints after `flags:`. The same
+computation yields the **verdict column** of the preset picker row (`plan.py:_preset_row`)
+and of `--list-presets`/the legend — one helper, so the row and the card never disagree,
+and a `description` never repeats the verdict.
 
 **Selection is run-time state** (menu). A preset is a *plan*: its embedded
 `filter`/`sessions` makes it automatable, but in the menu the **sessions picker comes
@@ -121,14 +123,18 @@ list` aggregates it as `transcript+memory`.
 `OCED_OUT/<stamp>/`:
 
 ```
-<stamp>/                       transcript+memory bundle   <stamp>/               transcript bundle
-  index.md                       (bundle tie-in)          also:  index.md
-  transcript/index.md                                     (single product: one dir)
+<stamp>/                       transcript+memory+faithful bundle   <stamp>/            transcript bundle
+  index.md                       (bundle tie-in)                  also:  index.md
+  transcript/index.md                                        (single product: one dir)
   transcript/metadata.json
-  transcript/<session>.json     only with --json
+  transcript/<session>.md        subagents/<sub>_<id>.md  (per --sub layout)
   memory/index.md
   memory/metadata.json
   memory/corpus.jsonl
+  faithful/index.md              the lossless JSON product
+  faithful/metadata.json
+  faithful/01-<title>_<id>/<title>.json
+  faithful/01-<title>_<id>/subagents/<sub>_<id>.json
 ```
 
 The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
@@ -140,8 +146,8 @@ menu, the shrink discard-link).
 `index.md` mirrors the most useful `metadata.json` cells in a Markdown table, for
 a person reading the export without a JSON parser. The always-present rows are
 `Product · Date · Source DB · Selection · Sessions (roots/subagents/total) ·
-Messages · Compactions · Compaction digests · Tool output · Reasoning · JSON
-archive · Sanitize · Extraction · Full metadata`. The rows that only appear when
+Messages · Compactions · Compaction digests · Tool output · Reasoning ·
+Sanitize · Extraction · Full metadata`. The rows that only appear when
 the run actually set them (same rule as `--no-subagents`) are:
 
 | row | shown when |
@@ -175,10 +181,10 @@ the same conditional `Preset` row.
      "parent_id": "ses_a", "created": "…Z", "updated": "…Z"}
   ],
   "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
-  "profile": "transcript",              // product keyword: transcript | memory | digest (never a preset name)
+  "profile": "transcript",              // product keyword: transcript | memory | digest | faithful (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
   "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
-  "json": false, "sanitize": false, "role": "all",
+  "sanitize": false, "role": "all",
   "no_subagents": false,            // --no-subagents: subagents excluded from the set
   "no_orphan_subagents": false,     // --no-orphan-subagents: closed set (a subagent whose parent is not exported was dropped)
   "subagents_hidden": 0,            // how many subagents those two flags actually dropped from the MATCHED set
@@ -187,9 +193,12 @@ the same conditional `Preset` row.
   "sessions": {"total": 6, "roots": 1, "subagents": 5},
   "compactions": 2, "digests": 2, "messages": 21,
   "last_backup": {"file": "…", "date": "…"},   // R?: latest entry of the backup manifest, else null
-  "files": ["transcript/index.md", "transcript/ses_….json"]
+  "files": ["transcript/index.md", "transcript/ses_….md"]
 }
 ```
+
+The `faithful` product writes a **subset** of these keys (`sub`/`role`/`reasoning`/
+`tool_output` are display concerns it never applies), same as `memory`:
 
 `selection` records which of the four mutually exclusive selection rules ran, so a
 run is self-describing even when `filter`/`sessions_selected` are both `null`:
@@ -267,11 +276,20 @@ Same header keys, then product-specific: `"profile": "memory"` always, plus
 `"cap"`, `"touched_files"` (bool; whether the `--files` key was requested for the
 corpus) and `"files": ["corpus.jsonl", "index.md"]` (the produced files — same
 shape as the transcript `files` list). No `sub`/`tool_output`/`reasoning`/
-`summary_diffs`/`json`. The subagent inclusion keys (`no_subagents`,
+`summary_diffs`. The subagent inclusion keys (`no_subagents`,
 `no_orphan_subagents`, `subagents_hidden`) ARE present: memory folds each
 subagent into its root's corpus line, so `--no-subagents` empties the
 `subagents` array of every entry (`index.md` also carries a
 `Subagents excluded` row).
+
+### faithful `metadata.json`
+
+Same header keys, then product-specific: `"profile": "faithful"` always, plus
+`"sanitize"` and the produced `"files"` list (the `.json` files + `index.md`).
+No `sub`/`tool_output`/`reasoning`/`role`/`summary_diffs` — the faithful product
+is the raw record and applies none of the display filters. The subagent
+inclusion keys ARE present (`--no-subagents` drops the subagent `.json` files
+and `index.md` carries the `Subagents excluded` row).
 
 ---
 
@@ -318,9 +336,10 @@ Field notes:
 
 ---
 
-## 4. Faithful JSON archive (transcript/digest `--json`)
+## 4. Faithful JSON archive (the `faithful` product)
 
-One `<stamp>/<profile>/<session-id>.json` per root session. Native shape,
+One `<stamp>/faithful/01-<title>_<id>/<title>.json` per root session (subagents
+under the same folder's `subagents/<sub>_<id>.json`). Native shape,
 mirrors `{info, messages:[{info, parts}]}` (see `exportlib/faithful.py`):
 
 ```jsonc

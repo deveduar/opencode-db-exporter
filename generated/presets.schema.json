@@ -130,10 +130,6 @@
       ],
       "description": "Filter messages by role"
     },
-    "flagJson": {
-      "type": "boolean",
-      "description": "Write faithful JSON archive per session"
-    },
     "flagSanitize": {
       "type": "boolean",
       "description": "Redact safe secret prefixes (sk-, ghp_, AKIA, JWT, PEM) — best effort"
@@ -206,9 +202,6 @@
         "role": {
           "$ref": "#/definitions/flagRole"
         },
-        "json": {
-          "$ref": "#/definitions/flagJson"
-        },
         "sanitize": {
           "$ref": "#/definitions/flagSanitize"
         },
@@ -264,7 +257,8 @@
               "enum": [
                 "transcript",
                 "memory",
-                "digest"
+                "digest",
+                "faithful"
               ],
               "description": "full is a CLI alias, not a preset product."
             },
@@ -300,9 +294,6 @@
             },
             "role": {
               "$ref": "#/definitions/flagRole"
-            },
-            "json": {
-              "$ref": "#/definitions/flagJson"
             },
             "sanitize": {
               "$ref": "#/definitions/flagSanitize"
@@ -346,7 +337,7 @@
               "minProperties": 1,
               "additionalProperties": false,
               "patternProperties": {
-                "^(transcript|memory|digest)$": {
+                "^(transcript|memory|digest|faithful)$": {
                   "type": "object",
                   "description": "Per-product flags; the selection (top level) is shared by every product.",
                   "additionalProperties": false,
@@ -383,9 +374,6 @@
                     },
                     "role": {
                       "$ref": "#/definitions/flagRole"
-                    },
-                    "json": {
-                      "$ref": "#/definitions/flagJson"
                     },
                     "sanitize": {
                       "$ref": "#/definitions/flagSanitize"

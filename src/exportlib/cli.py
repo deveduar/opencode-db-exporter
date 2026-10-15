@@ -1,11 +1,12 @@
 # CLI entry: argument parsing, read-only DB access and run orchestration.
-# Products (transcript | memory | digest):
-# transcript  markdown transcript with verbosity toggles (+ optional faithful JSON)
+# Products (transcript | memory | digest | faithful):
+#   transcript  markdown transcript with verbosity toggles
 #   memory      RAG corpus (corpus.jsonl, one entry per root session)
 #   digest      the compacted-context digests (markdown)
-# Global flags: --filter, --json (faithful archive alongside), --sanitize (redact
-# secrets), --stamp. Transcript toggles: --sub, --tool-output, --patch,
-# --no-reasoning, --mark-compactions, --summary-diffs, --role.
+#   faithful    native {info, messages} JSON, one file per session (the lossless copy)
+# Global flags: --filter, --sanitize (redact secrets), --stamp. Transcript toggles:
+# --sub, --tool-output, --patch, --no-reasoning, --mark-compactions,
+# --summary-diffs, --role.
 import argparse
 import json
 import os
@@ -25,7 +26,7 @@ if MODULES_DIR not in sys.path:
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir, default_db, default_out, default_presets
 from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions, since_ms
-from exportlib.faithful import write_session_json
+from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile
 from exportlib.render import Renderer
@@ -145,7 +146,7 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("profile", nargs="?", default="transcript",
-                    help="product or named preset: transcript | memory | digest | full | <preset from the presets file>")
+                    help="product or named preset: transcript | memory | digest | faithful | full | <preset from the presets file>")
 
     # Selection + output root come from FLAGS (single source of truth): exactly
     # ONE selection rule per run (--filter | --sessions | --last | --since, all in
@@ -178,7 +179,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--list-presets", action="store_true",
                     help="list the named presets in the presets file and exit (no DB)")
     ap.add_argument("--list-products", action="store_true",
-                    help="list the three products (document kinds) and exit (no DB)")
+                    help="list the products (document kinds) and exit (no DB)")
     ap.add_argument("--show", action="store_true",
                     help="print the resolved plan for <profile> and exit (static, no DB)")
     ap.add_argument("--dry-run", action="store_true",
@@ -236,9 +237,15 @@ def _backup_aligned(db_path: Path) -> str:
 
 def _print_presets() -> int:
     """`export --list-presets`: the named recipes of the presets file, one per
-    line (name + its own `description`; a preset without one prints the name
-    alone). No DB, no profile."""
-    from exportlib.plan import PRESET_DESCRIPTION_KEY, load_presets, preset_names
+    line (name + derived verdict + its own `description`; a preset without one
+    prints the name alone). No DB, no profile."""
+    from exportlib.plan import (
+        PRESET_DESCRIPTION_KEY,
+        fidelity_parts,
+        load_presets,
+        preset_names,
+        resolve,
+    )
     presets = load_presets()
     names = preset_names(presets)
     if not names:
@@ -249,16 +256,22 @@ def _print_presets() -> int:
         )
         return 1
     for n in names:
+        plan = resolve(n, presets)
+        verdict = fidelity_parts(
+            plan["products"],
+            plan["has_sanitize"],
+            [item["config"] for item in plan["items"]],
+        )[0]
         line = presets[n].get(PRESET_DESCRIPTION_KEY, "")
-        print(f"{n:<16} {line}".rstrip())
+        print(f"{n:<16} {verdict:<9} {line}".rstrip())
     print()
     print(f"Details for one plan: opencode-db export <name> --show  (file: {default_presets()})")
     return 0
 
 
 def _print_products() -> int:
-    """`export --list-products`: the three document kinds (the raw CLI nouns),
-    their aliases and a pointer at the named plans. No DB, no profile."""
+    """`export --list-products`: the document kinds (the raw CLI nouns), their
+    aliases and a pointer at the named plans. No DB, no profile."""
     from exportlib.plan import product_listing
     print("== Products (the document kinds; raw CLI) ==")
     print()
@@ -502,6 +515,10 @@ def main() -> None:
         memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden=n_hidden)
         return
 
+    if args.profile == "faithful":
+        faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden=n_hidden)
+        return
+
     # ------- write sessions -------
     written = []
     total_comp = 0
@@ -516,8 +533,6 @@ def main() -> None:
         stem = safe_filename(root['title'] or root['slug'])
         rfile = rfolder / f"{stem}.md"
         n_msgs, n_comp = write_transcript(con, renderer, root, rfile)
-        if renderer.json_mode:
-            write_session_json(con, root, rfolder / f"{stem}.json", renderer.sanitize)
         total_msgs += n_msgs
         total_comp += n_comp
         total_digest += root.get("digests") or 0
@@ -529,8 +544,6 @@ def main() -> None:
                 subdir.mkdir(exist_ok=True)
                 sfile = subdir / f"{safe_filename(sub['title'] or sub['slug'])}_{sid_[:8]}.md"
                 sn, sc = write_transcript(con, renderer, sub, sfile)
-                if renderer.json_mode:
-                    write_session_json(con, sub, sfile.with_suffix(".json"), renderer.sanitize)
                 total_msgs += sn
                 total_comp += sc
                 total_digest += sub.get("digests") or 0
@@ -539,8 +552,6 @@ def main() -> None:
                 sub = sessions[sid_]
                 block_head = f"### Subagent: {sub['title'] or sub['slug']}  (`{sid_[:8]}`)\n\n"
                 m, c = append_transcript_inline(con, renderer, sub, rfile, block_head=block_head)
-                if renderer.json_mode:
-                    write_session_json(con, sub, rfolder / f"{stem}.sub-{sid_[:8]}.json", renderer.sanitize)
                 total_msgs += m
                 total_comp += c
                 total_digest += sub.get("digests") or 0
@@ -574,7 +585,6 @@ def main() -> None:
         "tool_output": args.tool_output,
         "reasoning": renderer.reasoning,
         "summary_diffs": args.summary_diffs,
-        "json": bool(args.json),
         "sanitize": bool(args.sanitize),
         "role": args.role,
         "tokens_backfilled": n_backfilled,

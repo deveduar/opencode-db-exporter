@@ -67,19 +67,22 @@ except ImportError:
 # the fzf picker. Served to menu.sh by the `products` subcommand. Rows stay SHORT;
 # the "use it when / size / redundancy" legend lives in the header (see menu.sh).
 PRODUCT_PICKER_LABEL = {
-    "transcript": "READ / SHARE / AUDIT — the full conversation as Markdown (per session)",
+    "transcript": "READ / SHARE / AUDIT — the conversation as Markdown (per session, display-filtered)",
     "memory": "FEED ANOTHER AI — machine-readable corpus (corpus.jsonl, one line per session)",
     "digest": "QUICK KNOWLEDGE REVIEW — only the compaction summaries",
+    "faithful": "LOSSLESS MACHINE ARCHIVE — the complete session as native JSON (info + messages)",
 }
 
 PRODUCT_PICKER_LEGEND = [
     "Choose ONE product (runs with DEFAULT options; ESC: back):",
     "   transcript   HEAVY, human-readable: your asks, the answers, reasoning, every tool call + output",
-    "                and the code patches, compaction digests inline. Add --json for a faithful machine archive.",
+    "                and the code patches, compaction digests inline (display-filtered).",
     "   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL",
     "                compaction digests per session. For feeding another AI (RAG); streamed line by line.",
     "   digest       TINY extract: only the compaction summaries (the knowledge arc of a session). Already",
     "                inside transcript AND memory — standalone is just a fast skim.",
+    "   faithful     LOSSLESS: the native opencode JSON, one file per session, unfiltered (only --sanitize",
+    "                redacts). The raw copy a filtered product cannot promise; pair it to be lossless.",
     "Tune flags via the presets file (plans) or the CLI.",
 ]
 
@@ -144,45 +147,62 @@ def _bundle_cfg(pdata: dict) -> dict:
     return prods if isinstance(prods, dict) else {}
 
 
-def fidelity_label(products: list[str], has_json: bool, has_sanitize: bool, configs: list[dict]) -> str:
-    """The data-fidelity phrase of a plan (label + reason), derived from the
+def fidelity_parts(
+    products: list[str], has_sanitize: bool, configs: list[dict]
+) -> tuple[str, str]:
+    """The data fidelity of a plan as `(verdict, reason)`, derived from the
     resolved flags. `lossless` means the raw data is fully recoverable: the
-    faithful JSON (native `{info, messages}`) is written AND nothing drops data —
-    no subagent-dropping flag (`no_subagents`/`no_orphan_subagents`/`sub: omit`)
-    and no `sanitize` (redaction is best-effort and not reviewable, so the raw
-    data is not guaranteed). Every other case is `lossy` with the reasons.
+    `faithful` product is part of the plan AND nothing drops data — no
+    subagent-dropping flag (`no_subagents`/`no_orphan_subagents`) and no
+    `sanitize` (redaction is best-effort and not reviewable, so the raw data is
+    not guaranteed). Every other case is `lossy` with the reasons.
 
     The reason depends on WHICH product carries the data: a content product
-    (`transcript`/`digest`) without JSON loses what its Markdown filters out;
-    `memory` cannot write the JSON at all (it is not a transcript but a distilled
-    RAG corpus), so its reason is the corpus shape, not a missing copy.
+    (`transcript`/`digest`) without `faithful` loses what its Markdown filters
+    out; `memory` is not a transcript but a distilled RAG corpus, so its reason
+    is the corpus shape, not a missing copy. `sub: omit` only affects the
+    Markdown layout (the subagents are still in the set), so it is a loss only
+    when no `faithful` copy carries them.
+
+    This is the ONE fidelity computation: the `fidelity:` card line
+    (`fidelity_label`) and the picker row's verdict column both read it, so the
+    two can never disagree.
     """
     reasons: list[str] = []
     content = any(p in ("transcript", "digest") for p in products)
-    if content and not has_json:
-        reasons.append("no faithful JSON: the Markdown is filtered")
-    elif not content and products:
-        reasons.append("the RAG corpus is a summary, not the full session")
+    has_faithful = "faithful" in products
+    if not has_faithful:
+        if content:
+            reasons.append("no faithful JSON: the Markdown is filtered")
+        elif products:
+            reasons.append("the RAG corpus is a summary, not the full session")
     if has_sanitize:
         reasons.append("sanitized (best-effort)")
     if any(c.get("no_subagents") is True for c in configs):
         reasons.append("all subagents dropped")
     if any(c.get("no_orphan_subagents") is True for c in configs):
         reasons.append("orphan subagents dropped")
-    if any(c.get("sub") == "omit" for c in configs):
+    if not has_faithful and any(c.get("sub") == "omit" for c in configs):
         reasons.append("subagents omitted")
     if reasons:
-        return "lossy (" + ", ".join(reasons) + ")"
-    return "lossless (the faithful JSON keeps the full data)"
+        return "lossy", "(" + ", ".join(reasons) + ")"
+    return "lossless", "(the faithful JSON keeps the full data)"
+
+
+def fidelity_label(
+    products: list[str], has_sanitize: bool, configs: list[dict]
+) -> str:
+    """The full `fidelity:` phrase (verdict + reason) of a plan's card."""
+    verdict, reason = fidelity_parts(products, has_sanitize, configs)
+    return f"{verdict} {reason}"
 
 
 def resolve(profile: str, presets: dict | None = None) -> dict:
     """Resolve any profile into its full plan (product keyword or preset name).
 
     Returns a dict with kind ("product" | "preset"), products, per-product items
-    (product/intro/flags/bits), has_json/has_sanitize, the derived `fidelity`
-    phrase and (presets only) the name/purpose. Raises ValueError for unknown
-    profiles.
+    (product/intro/flags/bits), has_sanitize, the derived `fidelity` phrase and
+    (presets only) the name/purpose. Raises ValueError for unknown profiles.
     """
     if presets is None:
         presets = load_presets()
@@ -202,9 +222,8 @@ def resolve(profile: str, presets: dict | None = None) -> dict:
                     "config": {},
                 }
             ],
-            "has_json": False,
             "has_sanitize": False,
-            "fidelity": fidelity_label([profile], False, False, []),
+            "fidelity": fidelity_label([profile], False, []),
             "description": "",
             "bundle": False,
         }
@@ -234,14 +253,10 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
             }
         )
     if has_bundle:
-        has_json = any(
-            _bundle_cfg(pdata).get(p, {}).get("json") is True for p in products
-        )
         has_sanitize = any(
             _bundle_cfg(pdata).get(p, {}).get("sanitize") is True for p in products
         )
     else:
-        has_json = pdata.get("json") is True
         has_sanitize = pdata.get("sanitize") is True
     configs = [item["config"] for item in items]
     return {
@@ -249,9 +264,8 @@ def _resolve_preset(name: str, pdata: dict) -> dict:
         "name": name,
         "products": products,
         "items": items,
-        "has_json": has_json,
         "has_sanitize": has_sanitize,
-        "fidelity": fidelity_label(products, has_json, has_sanitize, configs),
+        "fidelity": fidelity_label(products, has_sanitize, configs),
         "description": pdata.get(PRESET_DESCRIPTION_KEY, ""),
         "bundle": has_bundle,
     }
@@ -319,19 +333,21 @@ def _session_tree(product: str, cfg: dict) -> dict:
     """The nested tree of ONE product's output dir (dict = dir, None = file)."""
     if product == "memory":
         return {"corpus.jsonl": None, "index.md": None, "metadata.json": None}
+    if product == "faithful":
+        # JSON only, always one folder per session with subagents/ inside (there
+        # is no `sub` layout: inline/omit only make sense for Markdown).
+        return {
+            "01-<title>_<id>": {
+                "<title>.json": None,
+                "subagents": {"<sub>_<id>.json": None},
+            },
+            "index.md": None,
+            "metadata.json": None,
+        }
     # transcript and digest share the writer (and therefore the layout).
-    json_on = cfg.get("json") is True
     session: dict = {"<title>.md": None}
-    if json_on:
-        session["<title>.json"] = None
     if cfg.get("sub", "separate") == "separate":
-        subs: dict = {"<sub>_<id>.md": None}
-        if json_on:
-            subs["<sub>_<id>.json"] = None
-        session["subagents"] = subs
-    elif cfg.get("sub") == "inline" and json_on:
-        # An inline subagent has no folder: its JSON lands next to the root's.
-        session["<title>.sub-<id>.json"] = None
+        session["subagents"] = {"<sub>_<id>.md": None}
     return {"01-<title>_<id>": session, "index.md": None, "metadata.json": None}
 
 
@@ -489,17 +505,18 @@ def preset_rows(presets: dict | None = None) -> list[str]:
 
 
 def _preset_row(key: str, pdata: dict) -> str:
-    has_bundle = bool(_bundle_cfg(pdata))
-    if has_bundle:
-        products = list(pdata["products"].keys())
-    else:
-        products = [pdata.get("product", "")]
-    # Three columns: name | [products] | description, exactly like the session
-    # rows. The description is the preset's OWN `description` key (empty when it
-    # has none) — never derived from the flag combo (that taxonomy let `prompts`
-    # and the snapshot plan fall through to "transcript (defaults)"). A pinned
-    # selection is still prefixed when the (possibly user-edited) preset carries
-    # one, so the row can't hide it.
+    # Four columns: name | [products] | verdict | description, exactly like the
+    # session rows. The verdict is DERIVED (fidelity_parts) — never a word in the
+    # description, so the two cannot duplicate. The description is the preset's
+    # OWN `description` key (empty when it has none) — never derived from the flag
+    # combo (that taxonomy let `prompts` and the snapshot plan fall through to
+    # "transcript (defaults)"). A pinned selection is still prefixed when the
+    # (possibly user-edited) preset carries one, so the row can't hide it.
+    plan = _resolve_preset(key, pdata)
+    products = plan["products"]
+    verdict = fidelity_parts(
+        products, plan["has_sanitize"], [item["config"] for item in plan["items"]]
+    )[0]
     if "filter" in pdata:
         sel = "filter " + _jq_tostring(pdata["filter"])
     elif "sessions" in pdata:
@@ -510,10 +527,12 @@ def _preset_row(key: str, pdata: dict) -> str:
     desc = pdata.get(PRESET_DESCRIPTION_KEY, "")
     col3 = "  ".join(x for x in (sel, desc) if x)
     disp = "+".join(x for x in products if x)
-    # Padding ONLY (name at 15, products at 22): a long name or product list
-    # pushes the description right; fzf truncates the row's end, never the name.
+    # Padding ONLY (name at 15, products at 22, verdict at 9): a long name or
+    # product list pushes the rest right; fzf truncates the row's end, never the
+    # name.
     name = f"{key:<15}"
-    row = f"{name} [{disp}]" if not col3 else f"{name} {f'[{disp}]':<22} {col3}"
+    prods = f"{f'[{disp}]':<22}"
+    row = f"{name} {prods} {verdict}" if not col3 else f"{name} {prods} {verdict:<9} {col3}"
     return f"__PRESET_{key}\t{row}"
 
 
@@ -524,14 +543,26 @@ def preset_names(presets: dict | None = None) -> list[str]:
 
 
 def legend_text(presets: dict | None = None) -> str:
-    """Header lines ('   %-6s %s') for each preset that carries a description."""
+    """Header lines (`   %-6s %s`) for each preset that carries a description.
+
+    The derived verdict is a column too (same source as the picker row), so the
+    legend and the rows can never disagree.
+    """
     if presets is None:
         presets = load_presets()
     names = [n for n in preset_names(presets) if presets[n].get(PRESET_DESCRIPTION_KEY)]
     width = max((len(n) for n in names), default=0)
-    lines = [
-        f"   {name:<{width}} {presets[name][PRESET_DESCRIPTION_KEY]}" for name in names
-    ]
+    lines = []
+    for name in names:
+        plan = _resolve_preset(name, presets[name])
+        verdict = fidelity_parts(
+            plan["products"],
+            plan["has_sanitize"],
+            [item["config"] for item in plan["items"]],
+        )[0]
+        lines.append(
+            f"   {name:<{width}} {verdict:<9} {presets[name][PRESET_DESCRIPTION_KEY]}"
+        )
     return "\n".join(lines)
 
 

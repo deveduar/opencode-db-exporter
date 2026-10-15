@@ -1,13 +1,14 @@
 # Named export presets.
 # A presets file (JSON, default ~/.config/opencode-db/presets.json, path via
 # OCED_PRESETS) is the source of truth for named export recipes:
-#   {"presets": {"clean": {"product": "transcript", "json": true, "sanitize": true,
+#   {"presets": {"clean": {"product": "transcript", "sanitize": true,
 #                          "no_reasoning": true, "filter": "Project Beta"},
-#                "everything": {"products": {"transcript": {"json": true, "tool_output": "full"},
+#                "everything": {"products": {"transcript": {"tool_output": "full"},
+#                                            "faithful": {},
 #                                            "memory": {"files": true}}}}}
 # A preset pins the product + config flags and optionally the selection
 # ('filter' LIKE pattern, or exact 'sessions' ids — not both). A single preset
-# uses 'product' (transcript | memory | compactions); a BUNDLE preset uses
+# uses 'product' (transcript | memory | digest | faithful); a BUNDLE preset uses
 # 'products' = {product: {flags...}} (selection stays top-level, shared by all
 # products). Invoked as `export <name>`; explicit CLI flags
 # (e.g. --filter, --sessions, --cap) win over the preset values.
@@ -21,6 +22,7 @@ from exportlib.util import die
 from exportlib.flags import (
     FLAGS,
     PRODUCTS,
+    PRODUCT_KEYWORDS,
     PRODUCT_ALIASES,
     PRESET_DESCRIPTION_KEY,
     BUNDLE_PRODUCT_KEYS,
@@ -152,9 +154,9 @@ def apply_bundle(args, name: str, pdata: dict) -> None:
         die(f"preset '{name}': 'products' must be a non-empty object (product -> flags)")
     cleaned = {}
     for prod, cfg in products.items():
-        if prod not in _PRODUCTS[:3]:
+        if prod not in PRODUCT_KEYWORDS:
             die(
-                f"preset '{name}': 'products' keys must be transcript, memory or digest "
+                f"preset '{name}': 'products' keys must be {' | '.join(PRODUCT_KEYWORDS)} "
                 f"(got {prod!r})"
             )
         if not isinstance(cfg, dict):
@@ -235,9 +237,9 @@ def resolve_profile(args, ap) -> None:
         prod = pdata.get("product")
         if prod in PRODUCT_ALIASES:
             prod = PRODUCT_ALIASES[prod]
-        if prod not in _PRODUCTS[:3]:
+        if prod not in PRODUCT_KEYWORDS:
             die(
-                f"preset '{profile}': 'product' must be transcript, memory or digest "
+                f"preset '{profile}': 'product' must be {' | '.join(PRODUCT_KEYWORDS)} "
                 f"(got {prod!r})"
             )
         args.profile = prod if prod != "full" else "transcript"

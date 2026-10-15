@@ -64,7 +64,6 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
             f.write("| Summary diffs | `on` |\n")
         if getattr(args, "mark_compactions", False):
             f.write("| Mark compactions | `on` |\n")
-        f.write(f"| JSON archive | `{'on' if args.json else 'off'}` |\n")
         f.write(f"| Sanitize | `{'on' if args.sanitize else 'off'}` |\n")
         # Token/cost backfill only when it happened.
         if n_backfilled:

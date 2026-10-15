@@ -69,8 +69,8 @@ class Flag:
 
 
 # ---- Product registry ----
-PRODUCTS = ["transcript", "memory", "digest", "full"]
-PRODUCT_KEYWORDS = ["transcript", "memory", "digest"]  # 'full' is alias
+PRODUCTS = ["transcript", "memory", "digest", "faithful", "full"]
+PRODUCT_KEYWORDS = ["transcript", "memory", "digest", "faithful"]  # 'full' is alias
 # Accepted spelling of a product keyword that is NOT its real name. `compactions`
 # was the original name of the `digest` product and is kept working as a deprecated
 # alias. Two things are deliberately NOT renamed: the marker/event (opencode writes
@@ -83,6 +83,7 @@ PRODUCT_INTRO: Dict[str, str] = {
     "transcript": "Markdown conversation per session, with reasoning and tool calls",
     "memory": "RAG corpus in corpus.jsonl, one line per root session: tokens, todos, tools and digests",
     "digest": "Markdown digests only: the compacted knowledge arc",
+    "faithful": "The complete session as native JSON (info + messages), one file per session: the unfiltered machine archive",
 }
 
 # ---- Flag registry ----
@@ -237,14 +238,6 @@ FLAGS: list[Flag] = [
         description="Filter messages by role",
         cli_help="Filter messages by role"
     ),
-    Flag(
-        name="json",
-        flag_type="bool",
-        products=["transcript", "digest"],
-        default=False,
-        description="Write faithful JSON archive per session",
-        cli_help="Write faithful JSON archive"
-    ),
 
     # Global / shared
     Flag(
@@ -296,8 +289,8 @@ PRODUCT_HELP: Dict[str, str] = {
     "transcript": (
         "the conversation in markdown: text + reasoning + tool calls +\n"
         "               patches + step markers (tool output is truncated by default:\n"
-        "               use --tool-output full for the complete output). Optional\n"
-        "               --json writes a faithful archive per session (native shape.)"
+        "               use --tool-output full for the complete output). For the raw\n"
+        "               session use the 'faithful' product (native JSON, lossless)."
     ),
     "memory": (
         "RAG/memory corpus: corpus.jsonl with one JSON per root session\n"
@@ -305,6 +298,11 @@ PRODUCT_HELP: Dict[str, str] = {
         "               compaction digests) - ready for embeddings, not a transcript"
     ),
     "digest": "only the compacted-context digests (mode=compaction messages)",
+    "faithful": (
+        "the complete session as native JSON (info + messages), one file per\n"
+        "               session: the unfiltered machine archive. Ignores the display\n"
+        "               filters (tool output, patches, role...); only --sanitize redacts"
+    ),
 }
 
 # Flag name -> exact line(s) of the `export flags:` block (emitted verbatim in
@@ -354,10 +352,6 @@ FLAG_HELP: Dict[str, str] = {
         "  --role all|user|assistant   transcripts/digest: render only one role's\n"
         "                       messages (--role user = prompts only, --role assistant =\n"
         "                       answers only; memory ignores it)"
-    ),
-    "json": (
-        "  --json             also write a faithful JSON archive per session (transcripts\n"
-        "                     and digest)"
     ),
     "sanitize": (
         "  --sanitize         redact secret-looking values (API keys, bearer tokens,\n"
@@ -428,7 +422,7 @@ PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
         and f.name not in SINGLE_ONLY_KEYS
         and f.name not in CLI_ONLY_KEYS
     ]
-    for p in ("transcript", "memory", "digest")
+    for p in ("transcript", "memory", "digest", "faithful")
 }
 
 # For bundle presets: per-product allowed keys
@@ -455,7 +449,6 @@ BUNDLE_PRESET_KEYS = ["products", "filter", "sessions", PRESET_DESCRIPTION_KEY]
 # ---- Human-readable annotation hints (menu.confirm/annotate) ----
 # value-aware phrases per key=value pair (CSV "key=value,key=value").
 ANNOTATE_HINTS: Dict[str, str] = {
-    "json=true": "faithful JSON, raw and unfiltered",
     "tool_output=full": "full tool outputs",
     "tool_output=truncated": "truncated tool outputs",
     "tool_output=omit": "no tool outputs",

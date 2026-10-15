@@ -117,15 +117,15 @@ rows_with_label() { local n=0 line; while IFS= read -r line; do
     [[ "$line" == *$'\t'* ]] || continue
     [ -n "${line%%$'\t'*}" ] && [ -n "${line#*$'\t'}" ] && n=$((n + 1))
 done; echo "$n"; }
-[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "3" ] && ok "plan.py products rows (3) have key+label" || bad "product rows: $PROD"
-printf '%s' "$PROD" | grep -qE '^(transcript|memory|compactions)' && ok "product rows are transcript/memory/compactions" || bad "product keys: $PROD"
+[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "4" ] && ok "plan.py products rows (4) have key+label" || bad "product rows: $PROD"
+printf '%s' "$PROD" | grep -qE '^(transcript|memory|digest|faithful)' && ok "product rows are transcript/memory/digest/faithful" || bad "product keys: $PROD"
 printf '%s' "$PROD" | grep -q '^full\b' && bad "full leaked as a picker row (CLI alias only)" || ok "full is NOT a picker row"
 printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product rows" || ok "product rows have NO variant rows"
 
 echo "== help exports block stays in sync with FLAGS (flags.py --help-exports) =="
 HELPEXPORTS=$(python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports) || bad "flags.py --help-exports exited non-zero"
 printf '%s' "$HELPEXPORTS" | grep -q "^export products (default: transcript):" && ok "help block: products header" || bad "help block missing products header"
-for cli in filter sessions out sub tool-output patch mark-compactions no-reasoning summary-diffs role json sanitize cap; do
+for cli in filter sessions out sub tool-output patch mark-compactions no-reasoning summary-diffs role sanitize cap; do
     printf '%s' "$HELPEXPORTS" | grep -q -- "--$cli" && ok "help block covers --$cli" || bad "help block missing --$cli"
 done
 
@@ -503,14 +503,14 @@ echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
 export OCED_PRESETS="$TMP/presets.json"
 cat > "$OCED_PRESETS" <<'EOF'
 {"presets": {
-   "clean": {"description": "sanitized redacted transcript", "product": "transcript", "json": true, "sanitize": true, "no_reasoning": true, "filter": "Project Beta"},
-   "everything": {"description": "everything bundle", "products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
-   "archive": {"description": "lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)", "products": {"transcript": {"json": true, "tool_output": "full"}, "memory": {"files": true}}},
+   "clean": {"description": "sanitized redacted transcript", "product": "transcript", "sanitize": true, "no_reasoning": true, "filter": "Project Beta"},
+   "everything": {"description": "everything bundle", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}}},
+   "archive": {"description": "full backup: complete tool outputs + faithful JSON + memory with files (heavy)", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}, "faithful": {}}},
    "notes": {"description": "plain transcript read", "product": "transcript"},
    "rag": {"description": "memory corpus", "product": "memory"},
    "digest": {"description": "compaction digests", "product": "compactions"},
    "snappy": {"description": "fresh-backup transcript", "product": "transcript", "snapshot": "fresh"},
-   "review": {"description": "review copy", "product": "transcript", "json": true, "no_reasoning": true},
+   "review": {"description": "review copy", "product": "transcript", "no_reasoning": true},
    "nosub": {"description": "transcript without subagents", "product": "transcript", "no_subagents": true},
    "narrow": {"description": "narrow transcript", "product": "transcript", "sub": "omit"}
 }}
@@ -539,32 +539,33 @@ printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless
     && ok "preset rows include the preset's own description (archive shows lossless)" || bad "preset rows missing description: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive')"
 printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_clean' | grep -q 'sanitized redacted transcript' \
     && ok "preset rows carry arbitrary file description text verbatim" || bad "clean description: $(printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_clean')"
-# Preset rows are THREE columns (name | [products] | description) and carry no
-# operator symbology: the old row chained `key  [products]  —  · purpose`, and
-# the `—` placeholder + `·` marker were noise on every shipped preset (which
-# pins no selection and always carries a description).
+# Preset rows are FOUR columns (name | [products] | verdict | description) and
+# carry no operator symbology: the old row chained `key  [products]  —  · purpose`,
+# and the `—` placeholder + `·` marker were noise on every shipped preset (which
+# pins no selection and always carries a description). The verdict is DERIVED
+# (fidelity_parts), never a word in the description, so the two cannot duplicate.
 PROWS=$(oc_export_rows)
 printf '%s\n' "$PROWS" | grep -qE ' · |—' \
     && bad "export preset rows reintroduced symbology: [$(printf '%s\n' "$PROWS" | grep -nE ' · |—' | head -1)]" \
     || ok "export preset rows have no ' · ' marker and no em dash"
 ACT_ARCH=$(printf '%s\n' "$PROWS" | grep '^__PRESET_archive' | cut -f2)
-EXPECT_ARCH="archive         [transcript+memory]    lossless full backup: complete tool outputs + faithful JSON + memory with files (heavy)"
+EXPECT_ARCH="archive         [transcript+memory+faithful] lossless  full backup: complete tool outputs + faithful JSON + memory with files (heavy)"
 [ "$ACT_ARCH" = "$EXPECT_ARCH" ] \
-    && ok "export preset row is three columns (name | [products] | description)" \
+    && ok "export preset row is four columns (name | [products] | verdict | description)" \
     || bad "archive preset row shape: [$ACT_ARCH]"
 ACT_CLEAN=$(printf '%s\n' "$PROWS" | grep '^__PRESET_clean' | cut -f2)
-EXPECT_CLEAN="clean           [transcript]           filter Project Beta  sanitized redacted transcript"
+EXPECT_CLEAN="clean           [transcript]           lossy     filter Project Beta  sanitized redacted transcript"
 [ "$ACT_CLEAN" = "$EXPECT_CLEAN" ] \
-    && ok "a pinned selection rides in the description column" \
+    && ok "a pinned selection rides in the description column, after the derived verdict" \
     || bad "clean preset row: [$ACT_CLEAN]"
-printf '%s\n' "$(oc_preset_legend)" | grep -q 'lossless full backup' \
-    && ok "oc_preset_legend explains each shipped plan in the header" || bad "preset legend: $(printf '%s\n' "$(oc_preset_legend)")"
+printf '%s\n' "$(oc_preset_legend)" | grep -q 'lossless  full backup' \
+    && ok "oc_preset_legend explains each shipped plan in the header (with the derived verdict)" || bad "preset legend: $(printf '%s\n' "$(oc_preset_legend)")"
 # New helper tests. One phrase per LINE: no separator, no leading marker, because
 # a joined string rendered as an expression (`+faithful JSON... · full tool
 # outputs`) instead of a list of things the export adds.
-[ "$(oc_annotate_flags "json=true,tool_output=full")" = "faithful JSON, raw and unfiltered
+[ "$(oc_annotate_flags "files=true,tool_output=full")" = "touched files
 full tool outputs" ] \
-    && ok "oc_annotate_flags json+tool_output, one phrase per line" || bad "annotate: [$(oc_annotate_flags "json=true,tool_output=full")]"
+    && ok "oc_annotate_flags files+tool_output, one phrase per line" || bad "annotate: [$(oc_annotate_flags "files=true,tool_output=full")]"
 [ "$(oc_annotate_flags "sanitize=true,no_reasoning=true")" = "sanitize ON (safe prefixes: sk-, ghp_, AKIA, JWT, PEM…)
 reasoning omitted" ] \
     && ok "oc_annotate_flags sanitize+no_reasoning" || bad "annotate: [$(oc_annotate_flags "sanitize=true,no_reasoning=true")]"
@@ -573,13 +574,13 @@ reasoning omitted" ] \
 # preset + products, the flags it sets and an example file tree. The products are
 # named in the header, so there is NO separate intro legend above it.
 PLAN=$(oc_export_plan archive)
-grep -qx 'archive (transcript + memory)' <<<"$PLAN" \
+grep -qx 'archive (transcript + memory + faithful)' <<<"$PLAN" \
     && ok "the plan leads with the preset and its products" || bad "plan header: $(head -1 <<<"$PLAN")"
 ! grep -qx 'transcript' <<<"$PLAN" \
     && ok "the plan drops the per-product intro legend (the header names them)" || bad "plan still has an intro: $(grep -E '^(transcript|memory)$' <<<"$PLAN" | paste -sd, -)"
-grep -q '^  flags: faithful JSON, raw and unfiltered · full tool outputs · touched$' <<<"$PLAN" \
+grep -q '^  flags: full tool outputs · touched files$' <<<"$PLAN" \
     && ok "the plan lists the effective flags on the flags: line, wrapped to 72" || bad "plan flags: $(grep 'flags:' <<<"$PLAN")"
-grep -qx '  <stamp>/' <<<"$PLAN" && grep -q '└── memory/' <<<"$PLAN" \
+grep -qx '  <stamp>/' <<<"$PLAN" && grep -q '└── faithful/' <<<"$PLAN" \
     && ok "the plan shows an example file tree" || bad "plan tree: $(grep -c '──' <<<"$PLAN")"
 # review plan has no sanitize (a preset that redacted silently would promise a safety it cannot keep)
 ! oc_export_plan review | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
@@ -915,7 +916,7 @@ grep -qE '^Note: +the preset drops every subagent' <<<"$CSUB" \
     && ok "the standalone-subagent note stays in the header rows" || bad "note row: [$(grep '^Note:' <<<"$CSUB")]"
 # The card is indented (description, flags:, tree) under the preset line.
 PLANOUT=$(oc_export_plan archive)
-grep -qE '^archive \(transcript \+ memory\)$' <<<"$PLANOUT" \
+grep -qE '^archive \(transcript \+ memory \+ faithful\)$' <<<"$PLANOUT" \
     && ok "the plan prints the card header (preset + products)" || bad "card header: $(head -1 <<<"$PLANOUT")"
 grep -qE '^  flags: ' <<<"$PLANOUT" \
     && ok "the card carries an indented flags: line" || bad "card flags line missing"
@@ -939,7 +940,7 @@ import importlib.util as u
 spec = u.spec_from_file_location('pl', '$MOD/exportlib/plan.py'); m = u.module_from_spec(spec); spec.loader.exec_module(m)
 print(m.PLAN_WIDTH)")" = "72" ] \
     && ok "plan.py PLAN_WIDTH default is 72" || bad "plan.py PLAN_WIDTH drifted"
-printf '%s\n' "$PLANOUT" | grep -qE '^  lossless full backup: ' \
+printf '%s\n' "$PLANOUT" | grep -qE '^  full backup: ' \
     && ok "the card carries the preset's own description (not the product intros)" || bad "card description missing"
 # The card carries a DERIVED fidelity line (never a declared key): archive writes the
 # faithful JSON and drops no data -> lossless; a content preset without the JSON loses
@@ -960,7 +961,7 @@ printf '%s\n' "$PLANOUT" | grep -q '<sub>_<id>.json' \
 # The bits are emitted verbatim: every one of them is present (the wrap may
 # split the flags: line, so flatten it before matching).
 PLANFLAT=$(tr '\n' ' ' <<<"$PLANOUT" | tr -s ' ')
-for bit in "faithful JSON, raw and unfiltered" "full tool outputs" "touched files"; do
+for bit in "full tool outputs" "touched files"; do
     grep -qF "$bit" <<<"$PLANFLAT" \
         && ok "the plan keeps the effective flag: $bit" || bad "plan flag missing: $bit"
 done

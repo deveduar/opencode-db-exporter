@@ -2026,7 +2026,7 @@ two); a keyword guard asserts its intro is still printed. `export_smoke.sh` adds
 `--show`-vs-`--explain` byte-identity check and a scan that no plan surface prints
 `-> Notes`. Counters: `menu_flow` 351, `export_smoke` 428.
 
-## §56 Fidelity is stated, defaults are spelled out, and `study` fills the JSON-less gap (current)
+## §56 Fidelity is stated, defaults are spelled out, and `study` fills the JSON-less gap (superseded by §57: the faithful JSON is a product, not a `--json` flag)
 
 A plan could say `the transcript product with default options` and leave the user to
 guess what *default* means. It does not mean "everything": the transcript defaults are
@@ -2087,3 +2087,110 @@ and keeps the ≤72-character guard over the wider card; `export_smoke.sh` keeps
 the shipped lossless/lossy split (including the memory-only reason) and the subagent-JSON
 tree, and runs `study` end-to-end.
 Counters: `menu_flow` 356, `export_smoke` 434.
+
+## §57 The faithful JSON is a product, not a `--json` flag (superseded by §58: the verdict is a derived column, and `quick` is the raw copy)
+
+§56 made "lossless" mean "a plan whose faithful JSON keeps the whole session", but it left
+the archive attached to `transcript` as a modifier: `json: true` in `archive`/`quick`/
+`review`. The user's verdict was that Markdown and JSON are two different documents, and a
+boolean flag on one product cannot express "I want the Markdown" versus "I want the raw
+archive" without a special case everywhere (label, fidelity, metadata, tree, bundle keys).
+The clean cut: **`faithful` becomes a product like the others, and `--json` is deleted in
+the same pass** (no back-compat — the tool has no users to migrate).
+
+**`faithful` is the fourth product keyword.** `flags.py`'s `PRODUCTS`/`PRODUCT_KEYWORDS`/
+`PRODUCT_INTRO`/`PRODUCT_HELP` gain it (next to `transcript|memory|digest`, `full` still an
+alias of `transcript`, `compactions` of `digest`), and `PRODUCT_FLAG_KEYS` covers all four.
+It applies only the flags that make sense for a machine copy — `sanitize` and the two
+subagent-inclusion switches — never the display filters (`sub`/`tool_output`/`patch`/`role`/
+`no_reasoning`/`mark_compactions`/`summary_diffs`). Its layout is fixed and separate:
+`<stamp>/faithful/01-<title>_<id>/<title>.json` + `subagents/<sub>_<id>.json` + the run's
+`index.md`/`metadata.json` (`profile: faithful`), i.e. no `sub: inline` (that only ever meant
+something for Markdown). `faithful.py` now owns `faithful_export()` (a sibling of
+`memory_export()`); `render.write_session_json` is gone.
+
+**`--json` the flag is gone.** The `Flag json` entry, `FLAG_HELP["json"]`, the
+`ANNOTATE_HINTS["json=true"]` phrase, `renderer.json_mode`, the `cli.py` meta `.json`, and
+the `JSON archive` row in `writers.py`/`exports.sh` all go. Presets that carried `"json":
+true` are rewritten to name `faithful` in a bundle. A preset that still says `"json"` fails
+loudly, like any unknown key.
+
+**Fidelity is now faithful-presence, not a flag.** `fidelity_label(products, has_sanitize,
+configs)` (three args; `has_json` is gone) is `lossless` iff `"faithful" in products` and
+nothing drops data (`no_subagents`/`no_orphan_subagents`/`sub: omit`/`sanitize`). The two
+lossy reasons are unchanged in wording but no longer lean on a flag: a content product
+without `faithful` is `no faithful JSON: the Markdown is filtered`; a `memory`-only plan is
+`the RAG corpus is a summary, not the full session` (`faithful` is not a `memory` option, so
+its absence is not a declined copy). The tree branch for `faithful` lists its `.json` files
+under the per-session folder; transcript/digest trees no longer carry a JSON child.
+
+**The shipped presets are bundles with `faithful`.** `archive` = `transcript {tool_output:
+full}` + `memory {files: true}` + `faithful`; `quick` = the same with `truncated`; `review`
+= `transcript {no_reasoning: true}` + `faithful`. They stay **lossless** by the new
+criterion (a bundle contains the faithful product). `study`/`notes`/`conversation`/
+`prompts`/`rag`/`digest` are unchanged and stay lossy; `study` is still the JSON-less
+sibling of `quick`, now literally "`quick` without the `faithful` product".
+
+**Discovery says four.** `--list-products` lists four products + aliases; `--explain` shows
+each preset's products line (e.g. `archive (transcript + memory + faithful)`), the flags line
+and the faithful tree. The `archive` card stays byte-identical in `--show` and `--explain`.
+
+**Tests.** `menu_flow.sh` (356→354: two `json`-flag assertions retired) checks the four-row
+product list, the bundle fixtures carrying `faithful`, the card's `fidelity:` line and the
+faithful tree. `export_smoke.sh` (434→435) runs `export faithful` end-to-end (asserting the
+`.json` layout and the `faithful` metadata), keeps the `--show`-vs-`--explain` byte identity,
+the shipped lossless/lossy split and the subagent-inclusion coverage across all four
+products, and the bundle error message now reads `... | faithful (got 'scribble')`.
+
+**Docs.** `export-guide.md` (four products, the `faithful` section), `schemas.md` (the
+product enum without a `json` row, the fidelity paragraph, the faithful `metadata.json`),
+`architecture.md` (the `faithful` product), `opencode-db.conf` (the preset example and the
+allowed-keys list), and this §. The anti-drift guards (README snippet == `presets.json`,
+`generated/` == `generate_schema.py`) hold.
+
+## §58 The verdict is a derived column and `quick` is the raw copy (current)
+
+§56 made every `description` open with a hand-written `lossless:` / `lossy:` prefix, and
+§57 kept it. Two problems surfaced once the faithful product was in. First, the prefix
+**duplicated** what the card already derives: the same preset showed `lossless` twice — a
+hand-written word inside the `description` and the derived `fidelity:` line the card
+prints right below it. A word a human must keep in sync with the flags is exactly the
+drift the file-borne `description` (the §52 rule) was meant to remove; the verdict is
+computable, so it must never be typed. Second, the descriptions (and the faithful JSON they
+named) **repeated the product list** that already sits in the row's `[products]` column:
+`archive [transcript+memory+faithful]  full backup — … faithful JSON …`. The products are a
+column, so naming them in the prose was pure redundancy.
+
+**The verdict is a column, not a prefix.** `plan.py`'s `fidelity_label` is split into
+`fidelity_parts(products, has_sanitize, configs) -> (verdict, reason)` — the ONE fidelity
+computation — plus a `fidelity_label` wrapper that rebuilds the full `fidelity:` phrase for
+the card. The preset picker row (`_preset_row`), `--list-presets` (`_print_presets`) and the
+legend (`legend_text`) take the `verdict` half and show it as their OWN column
+(`name | [products] | verdict | description`). The card and the row therefore read the same
+source and cannot disagree, and no `description` repeats the verdict. The user's framing:
+*the verdict is the same thing as fidelity — keep it under one name, do not duplicate it.*
+
+**The descriptions name no product.** All nine shipped `description` strings were rewritten
+without the `lossless:`/`lossy:` prefix and without product nouns (the product list is
+already a column): `archive` says "complete tool outputs and the raw session, with
+touched-file lists", `study` "a readable log plus a searchable corpus, no raw copy", `rag`
+"one line per session — tokens, asks, todos, tools and digests", etc. Free text, still
+validated non-empty (§52).
+
+**`quick` is the raw copy.** `quick` was a bundle that differed from `archive` only by
+`tool_output: truncated` (or from `review` by `no_reasoning`) — a whole preset for a flag
+that never changed the fidelity (the faithful JSON kept everything either way). It is now
+`{"product": "faithful"}`: the lossless raw session alone, no Markdown. `study` stays its
+raw-copy-less sibling (transcript truncated + corpus), `archive`/`review` stay the bundles
+that include both documents. `export quick` and `export faithful` are now the same plan
+(the preset adds the `quick` name and the description).
+
+**Docs/tests.** `presets.json` + the README snippet (anti-drift), the guide table and
+decision matrix, `schemas.md` (the `quick` example, the fidelity paragraph), `architecture.md`
+(`quick` is the raw copy alone) track it. Tests: `export_smoke.sh` runs `quick` end-to-end as
+the faithful-only layout (on its own output shelf, since a shared shelf can reuse a
+same-second `<stamp>/transcript` slot next to quick's `<stamp>/faithful`) and asserts the
+four-column rows of `--list-presets` (including the derived verdict); `menu_flow.sh` moves
+the `archive` fixture to a neutral description and expects the `lossless` verdict column
+between the product list and the description. Counters: `menu_flow` 354, `export_smoke`
+435→438.
