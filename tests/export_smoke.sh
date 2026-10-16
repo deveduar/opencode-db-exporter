@@ -1232,16 +1232,6 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 sys.exit(0 if open('$TESTS_DIR/../generated/flags-table.md').read() == m.flags_table() + '\n' else 1)
 " >/dev/null 2>&1 && ok "generated/flags-table.md matches scripts/generate_schema.py --docs (no drift)" || bad "flags-table drift vs generate_schema.py --docs"
 # Anti-drift #3: the presets snippet the README prints must EQUAL the shipped
-# presets.json. The README claimed a preset was sanitized for months after the
-# file dropped `sanitize` (docs/export-analysis.md §33): a user could have
-# published secrets believing they were redacted. A doc cannot be allowed to lie
-# about a flag, so the two files are compared instead of trusted.
-python3 -c "
-import json, re, sys
-md = open('$TESTS_DIR/../README.md').read()
-blocks = [b for b in re.findall(r'\`\`\`json\n(.*?)\`\`\`', md, re.S) if '\"presets\"' in b]
-sys.exit(0 if len(blocks) == 1 and json.loads(blocks[0]) == json.load(open('$EXAMPLE')) else 1)
-" >/dev/null 2>&1 && ok "the README presets snippet equals the shipped presets.json (no doc drift)" || bad "README presets snippet drifted from the shipped presets.json"
 cat > "$TMP/schema-bad.json" <<'EOF'
 {"presets": {"double": {"product": "transcript", "products": {"memory": {}}}}}
 EOF

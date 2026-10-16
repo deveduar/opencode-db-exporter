@@ -39,6 +39,13 @@ Use it when you want to *give context to another AI* (RAG: index it, search it,
 ingest a summary of yesterday's work), or when you want a terse *inventory* of what
 each conversation produced. Not for human continuous reading.
 
+`rag` is the same artifact as `memory` (a named preset, not a richer product). It is
+plain JSONL, ready for a loader (LangChain `JSONLinesLoader`) or a claim/supersession
+store such as `consolidation-memory`; the corpus is the *index*, the `faithful`
+archive is the lossless *evidence*, and the mapping (episodes, scopes, file anchors,
+time) is documented in [docs/schemas.md](schemas.md) under *Consuming
+`corpus.jsonl`*.
+
 ### `digest` — "quick knowledge review" (the digest-only extract)
 
 What it produces: one Markdown file per session with **only the compacted-context

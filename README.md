@@ -46,7 +46,7 @@ The tool can install its own missing dependencies idempotently:
 
 ```bash
 opencode-db deps --check   # report only (no sudo)
-opencode-db deps # install what's missing (apt/pacman/dnf, prompts for sudo)
+opencode-db deps           # install what's missing (apt/pacman/dnf, prompts for sudo)
 ```
 
 ## Install
@@ -77,13 +77,13 @@ opencode-db digest <session_id> [show [last|N|all]]
                                       # the DIGEST written for each one
                                       # ('compactions' is the deprecated alias)
 opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (.backup), gzip + sha256 + manifest
-                                       # --dry-run prints the plan (source/target/est. size) and writes nothing
-                                       # --yes skips the question AND the plan (the caller owns the gate)
+                                         # --dry-run prints the plan (source/target/est. size) and writes nothing
+                                         # --yes skips the question AND the plan (the caller owns the gate)
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
-opencode-db export <product> [FLAGS]  # products: transcript | memory | digest
-opencode-db export --list-presets     # list the named presets in the presets file
-opencode-db export <name> --show       # the resolved plan only (static, no DB read)
-opencode-db export <name> --dry-run    # plan + sessions the selection would match (writes nothing)
+opencode-db export <product> [FLAGS]    # products: transcript | memory | digest | faithful
+opencode-db export --list-presets       # list the named presets in the presets file
+opencode-db export <name> --show         # the resolved plan only (static, no DB read)
+opencode-db export <name> --dry-run      # plan + sessions the selection would match (writes nothing)
 opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
 opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
                     |--keep-sessions ID[,ID]|--discard-sessions ID[,ID]]
@@ -92,395 +92,126 @@ opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
                                       # unless --swap replaces it safely)
 opencode-db shrinks [list [--tsv]|view <stamp>|verify [--tsv] [--yes]|remove <stamp> [--yes]|prune <N>]
                                       # manage the produced shrink copies
-opencode-db deps [--check]            # idempotent dependency check/install (apt|pacman|dnf)
+opencode-db deps [--check]              # idempotent dependency check/install (apt|pacman|dnf)
 opencode-db help
 ```
 
 ## Menu (opencode-db menu)
 
-The interactive menu is **picker-driven**: the main pickers are real fzf lists, not nested
-menus. There is **no TAB multi-select** — mode switching and bulk operations are their own
-rows. The `backups`, `exports` and `shrinks` pickers have a `view`/`remove` toggle; the
-`sessions` picker is details-only and the export picker is **preset-only** (it needs a
-presets file).
-
-Picker rows show dates in **local time**, auto-detected from the system `TZ` (override with
-`OCED_TZ`, e.g. `OCED_TZ=Europe/Madrid`). Every CLI command, report and written file stays in
-**UTC** (`Z`), so the archives are reproducible and machine-readable.
-
-Every row carries one marker that says what it does:
+The interactive menu is **picker-driven**: real fzf lists, no nested menus, no TAB multi-select.
+Mode switching and bulk operations are their own rows.
 
 | Marker | What the row does | Examples |
 | --- | --- | --- |
-| `[>]` | opens a flow (create / swap / continue) | `[>] create backup`, `[>] swap a copy into the LIVE DB`, `[>] choose the preset` |
+| `[>]` | opens a flow (create / swap / continue) | `[>] create backup`, `[>] swap a copy into the LIVE DB` |
 | `[?]` | inspects something | `[?] verify` |
-| `[*]` | flips a mode and re-renders (shows both states) | `[*] view  →  remove`, `[*] newest first  →  old first`, `[*] subagents: shown  →  hidden` |
-| `[word]` | bulk action | `[mark all]`, `[unmark all]`, `[delete all]`, `[delete olds]` |
+| `[*]` | flips a mode and re-renders (shows both states) | `[*] view → remove`, `[*] newest first → old first` |
+| `[word]` | bulk action | `[mark all]`, `[unmark all]`, `[delete all]` |
 | `[x]` / `[ ]` | whether a session is included | `[x] My session (2 sub)` |
 
-- **status** — the full report (DB, backups alignment, version/schema, dependencies) + pause.
-  The header counts (DB/sessions/WAL/backups/exports) are recomputed on every root loop, so
-  they are never stale after an action.
-- **backups** picker (create + manage) — rows: `[>] create backup`, then the
-  `[*] view  →  remove` toggle, then `[*] newest first  →  old first` (re-sorts the rows
-  in both modes), then in remove mode `[delete all]` / `[delete olds]`, then one
-  row per backup (date/size/sessions/msgs/sha).
-  `[>] create backup` prints the **plan first** (`opencode-db backup --dry-run`: source, target,
-  estimated size), asks its own `y/N`, and only then runs the backup non-interactively — the
-  menu never asks you something you cannot see, the plan appears exactly once (the second,
-  `--yes` call does not repeat it), and a declined gate creates nothing.
-  In **view** mode a row shows that backup's details — `backups view <file>` prints the
-  manifest record, **runs the sha256 check** (`[OK]` / `[FAIL]` with both hashes /
-  `[MISSING]`), how it compares to the live DB and how to use it with `--from-backup`; in
-  **remove** mode the same row deletes it with confirmation. Shrink creation lives in its
-  own **shrinks** picker.
-- **sessions** picker (details only) — one row per session (short id in the label, full
-  id as the row key); selecting one shows the full info + compaction digests.
-- **shrinks** picker (create + manage) — rows: `[>] create shrink copy` (a 3-step wizard
-  from the LIVE DB, own snapshot), `[>] swap a copy into the LIVE DB` (destructive,
-  requires typing `confirm` — the copy is checked for staleness first), `[?] verify`,
-  a `[*] view  →  remove` toggle plus `[*] newest first  →  old first` (both modes;
-  remove mode adds `[delete all]` / `[delete olds]` and one
-  row per produced copy). A copy whose shrink.json predates the live DB shows a
-  `(stale)` tag in the list (a legacy/unverifiable one shows `(unverifiable)`), so a
-  `swap` into the live DB is never offered silently, and a run whose cascade was
-  exported first records it (`shrinks view` prints a `discard export:` line).
-  Creating a copy asks, in order: **(1) sessions** — one row per ROOT
-  session with a `(N sub)` badge, `[x]` = survive (default all marked; `mark all` /
-  `unmark all`; `continue` moves on), sorted **newest used first** with a row to flip
-  to old first (re-sorting keeps your marks),
-  **(2) the recipe** — `lean` (strip reasoning) or `quiet` (prune + vacuum), and nothing
-  else: picking one goes straight to **(3) the plan** — the exact read-only counts
-  (kept roots+subagents, discarded cascade, rows per table, reasoning, current size)
-  before the y/N gate; discarding offers `export archive --sessions <ids>` first
-  (the whole discard cascade, roots **and** their subagents, with each session named
-  by title), and declining goes back to the recipes. A profile that would drop those
-  subagents (`no_subagents`, `no_orphan_subagents` or `sub: omit`) is called out on
-  screen first — the export would otherwise succeed and quietly lose them.
-- **export** picker (preset-only) — **(1) sessions** first: one row per **root**
-  session, all marked by default (`[ ]` unmark, `mark all`/`unmark all`), sorted
-  **newest used first** with a row to flip to oldest (re-sorting keeps your marks) and a
-  `(N sub)` badge per root. Subagents start **hidden** (they follow their session), so
-  the picker opens roots-only: the header line is `3/3 marked · newest first · subagents
-  hidden (they follow their session)`. A second switch row, `subagents: hidden ⇄ shown`,
-  toggles visibility: while **hidden** the run exports the full cascade of subagents for
-  every marked root (no `--no-subagents` flag); while **shown**, each subagent is its own
-  row with its own mark — un-marking it drops it, and the confirmation reports how many
-  were explicitly unmarked (un-marking its session does **not** drop the subagent: it
-  still exports, standalone, and the confirmation says how many will before you start).
-  **(2) the preset** — one row per named plan in the presets file (bundle plans render
-  `[transcript+memory]`) — and then the confirmation. An **untouched** selection (every
-  rendered row still marked — all roots while hidden, all sessions while shown) runs the
-  preset as configured; a **narrowed** one runs it with `--sessions <ids>` (and a
-  narrowed hidden run cascades the marked roots to their subagents).
-  The confirmation states the **effective** selection in one `Sessions:` line, so a
-  preset that pins its own `filter`/`sessions` can never look like your marks won:
-  with everything marked you get `filter "%…%" (from the preset) — your 6 marks are not
-  used`, and with a partial selection the menu says it overrides the preset. A
-  `Menu adds:` line names only what the menu itself contributes (subagent cascade in
-  hidden mode, nothing in shown mode), and a `Note:` line warns about consequences
-  the rows cannot show. Without a presets file the export entry prints the setup guidance
-  (`cp presets.json …`) and points at the raw CLI — there is no manual
-  session→product picker anymore.
-- **Export runs** picker (mode `view` / `remove`) — rows: the `[*] view  →  remove`
-  toggle, then `[*] newest first  →  old first` (both modes), then in remove mode
-  `[delete all]` / `[delete olds]`, then one row per run
-  (date/profiles/roots/messages/size). `view` shows the run, `remove` deletes it.
+**Pickers** (each with a `view`/`remove` toggle + `newest first`/`old first` sort):
+- **status** — full report (DB, backups alignment, version/schema, deps); header counts refresh on every loop.
+- **backups** — create (plan → y/N → run) + manage; `view` runs sha256 check + live-DB compare.
+- **sessions** — details only; pick a row for `info` + digests.
+- **shrinks** — create (3-step wizard: sessions → recipe → plan) + manage; `swap` requires typing `confirm`, checks staleness first.
+- **export** — preset-only: (1) mark root sessions (subagents hidden by default, cascade included), (2) pick preset, (3) confirm with effective selection shown.
+- **export runs** — view/remove/prune past runs.
 
-Export flow: session selection → plan → confirmation → run. Mark sessions in the picker
-(`[x]` = include), then pick a preset. The confirmation is a `-> Export plan` block: the
-header rows (`Source:`/`Preset:`/`Sessions:`/`Menu adds:`/`Output:`) first, then the plan
-— the **card** (the `name (products)` line, its description, the effective `flags:` line and
-an example file tree, indented two spaces). The header names the products, so there is no
-separate product-intro legend. That is the same block `export <name> --show` / `--dry-run` and
-`export --explain` print. Every line wraps at 72 columns and no information is dropped. A partial selection becomes `export <name> --sessions <csv>` (CLI wins over any
-embedded preset selection; a bundle shares the override); all marked runs the preset as
-configured. **No** variant tables or custom checklists in the menu — tuning and
-multi-product runs in one stamp (bundle presets) live in the presets file (`OCED_PRESETS`)
-or on the CLI (`--no-reasoning`, `--json`, `--sanitize`, `--tool-output full`, …).
+> **Details:** the full menu design (picker flows, subagent handling, confirmations, symbol system) is documented in **[docs/architecture.md](docs/architecture.md) §4**.
 
 ## Export
 
-Products: `transcript` (the conversation, markdown) · `memory` (RAG corpus,
-`corpus.jsonl`) · `digest` (the compacted-context digests). `full` is accepted as
-an alias of `transcript`, and the old spelling `compactions` still resolves as a
-deprecated alias of `digest`.
+**Four products** (what a document is):
+
+| Product | Document | Typical use |
+| --- | --- | --- |
+| `transcript` | conversation in Markdown (text + tools + patches + digests) | read, share, audit |
+| `memory` | `corpus.jsonl` — one JSON line per root session (goal, outcome, digests, metadata) | feed another AI (RAG) |
+| `digest` | only the compacted-context digests | quick knowledge review |
+| `faithful` | lossless machine archive: one native JSON file per session (all messages, parts, reasoning) | recoverable source / tools |
+
+Named **presets** (a product or bundle + config + optional selection) live in `OCED_PRESETS`
+(default `~/.config/opencode-db/presets.json`, auto-created by `install.sh`).
 
 ```bash
-opencode-db export memory                  # full text, no truncation (default)
-opencode-db export memory --files          # also list the touched files per session
-opencode-db export memory --cap 2000       # cap EVERY text value to N chars (0 = unlimited)
-```
-
-The full flag list (name/choices/default per product) is generated from the single
-source of truth — `src/exportlib/flags.py` — shown by `opencode-db export --help`
-(`opencode-db help` prints the product/flags summary) and tabulated in
-[`generated/flags-table.md`](generated/flags-table.md). The purpose/size of every product and the
-decision matrix live in [docs/export-guide.md](docs/export-guide.md).
-
-> `transcript` is **one** export, not one per option: whether tool output is truncated depends on `--tool-output` (default `truncated`). In the `menu` every product runs with its default options (tune via the presets file or the CLI).
-
-**Token backfill** — sessions with `0`/NULL token/cost columns are reconstructed from the
-per-step `step-finish` parts at export time (flagged `tokens_backfilled`). The mechanism
-is described in [docs/architecture.md](docs/architecture.md).
-
-`memory` is a RAG-ready corpus, **not** a readable transcript: one `corpus.jsonl` entry per
-root session, subagents summarized inline, `first_user` (the goal), `last_assistant` (the
-outcome) and all `compaction_digests[]`. Keys are documented in each run's `index.md`.
-
-No text is ever truncated by default; `--cap N` caps every text value (first_user, last_assistant, digests) to N chars — a guard only you choose to raise if feeding the corpus to a strict model.
-
-Each run writes `exports/<timestamp>/<profile>/` with one Markdown file per session, an `index.md`, and a machine-readable `metadata.json`.
-
-## Named export presets
-
-Running the export by raw flags is fine for one-offs, but the recurring combinations
-are better pinned in a **presets file** (JSON, path in `OCED_PRESETS`, default
-`~/.config/opencode-db/presets.json`, same env>conf precedence as the rest; `install.sh`
-auto-creates it from the shipped `presets.json` when missing). The file is the **source of
-truth** for both the CLI and the menu: a preset names a product (or a *bundle* of
-products run under one stamp), its config flags and optionally the selection (`filter`
-or exact `sessions`). The contract (exact keys/types/choices) is machine-checkable in
-[`generated/presets.schema.json`](generated/presets.schema.json) and fully documented in
-[`docs/schemas.md`](docs/schemas.md) (which also covers `metadata.json`, the memory
-`corpus.jsonl`, the faithful JSON archive, the backup `manifest.json`, `shrink.json`
-and the `exports list` line).
-
-```json
-{
-  "presets": {
-    "archive": {
-      "description": "full backup — complete tool outputs and the raw session, with touched-file lists (heavy)",
-      "products": {
-        "transcript": {"tool_output": "full"},
-        "memory": {"files": true},
-        "faithful": {}
-      }
-    },
-    "quick": {
-      "description": "the raw session, losslessly — one native-JSON file per session (fast, compact)",
-      "product": "faithful"
-    },
-    "study": {
-      "description": "a readable log plus a searchable corpus, no raw copy (medium)",
-      "products": {
-        "transcript": {"tool_output": "truncated"},
-        "memory": {"files": true}
-      }
-    },
-    "review": {
-      "description": "the readable log without reasoning, plus the raw session (does not redact)",
-      "products": {
-        "transcript": {"no_reasoning": true},
-        "faithful": {}
-      }
-    },
-    "notes": {
-      "description": "plain read — every message, tool output truncated to ~500 chars (light)",
-      "product": "transcript"
-    },
-    "conversation": {
-      "description": "the dialogue only — no tools, patches or reasoning (light)",
-      "product": "transcript",
-      "tool_output": "omit",
-      "patch": "omit",
-      "no_reasoning": true
-    },
-    "prompts": {
-      "description": "just your prompts — no answers, reasoning or tools (task log)",
-      "product": "transcript",
-      "role": "user"
-    },
-    "rag": {
-      "description": "one line per session — tokens, asks, todos, tools and digests (summary)",
-      "product": "memory"
-    },
-    "digest": {
-      "description": "only the compaction summaries (knowledge arc)",
-      "product": "digest"
-    }
-  }
-}
-```
-
-That is the shipped `presets.json`, verbatim. No preset bakes in `--sanitize`:
-redaction is best-effort (high-confidence prefixes only), so it stays an explicit
-per-run flag you ask for on purpose — a plan that silently redacted part of the
-content would promise a safety it cannot keep. The same goes for `--snapshot fresh`
-(a backup-alignment guard, `export transcript --snapshot fresh`): the export always
-reads the live database, so the flag only coordinates a reference backup.
-
-**Product vs preset** — a *product* is **what the document is** (`transcript`,
-`memory`, `digest`: three artifact shapes); a *preset* is **a recipe for
-producing one** (a product or a bundle, plus flags and an optional selection).
-The menu is preset-only; the product keywords are the raw CLI surface. List
-them without touching a database: `export --list-products` (products + aliases)
-and `export --list-presets` (the named recipes).
-
-```bash
-opencode-db export review                # run the named preset (product + config + its own selection)
+opencode-db export review                # run the named preset
 opencode-db export review --sanitize     # opt into best-effort redaction for one run
-opencode-db export review --filter '%'   # a concrete CLI flag overrides the preset
-opencode-db export rag --cap 3000        # same, per-run
-opencode-db export transcript --json     # product keywords always mean the product (raw flags unchanged)
 opencode-db export archive               # bundle: transcript + memory under ONE stamp
-opencode-db export archive --sessions ses_abc   # one CLI flag overrides the whole selection
-opencode-db export transcript --last 5         # the 5 most recently used roots (+ their subagents)
-opencode-db export transcript --since 2026-09-01   # every session updated on/after that date
+opencode-db export transcript --last 5   # 5 most recently used roots (+ their subagents)
+opencode-db export rag --cap 3000        # per-run override
 ```
 
-**One selection rule per run**: `--filter`, `--sessions`, `--last` and `--since` are
-mutually exclusive. `--last N` counts ROOT sessions by last use and keeps every session
-that follows them (the same closure as `shrink --keep N`); `--since DATE`
-(`YYYY-MM-DD`, UTC) is a plain window, so a subagent is kept when it matches on its own.
-Both are **CLI-only, never preset keys**: the set they select changes every time they
-run, so a plan that pinned one would not be reproducible. The rule that ran is recorded
-in `metadata.json` (`.selection`) and in the `Selection` row of `index.md`.
+- **One selection rule per run**: `--filter`, `--sessions`, `--last`, `--since` (mutually exclusive; CLI-only, never preset keys).
+- **CLI wins over preset**: flags/selection on the command line override the preset.
+- `export --list-presets` / `--show <name>` / `--dry-run <name>` / `--explain` inspect plans without DB.
+- `--sanitize` redacts high-confidence secret prefixes — best-effort; review output before sharing.
 
-- `export <name>` resolves to a preset; `export transcript|memory|digest|full` always
-  mean the product (`compactions` still resolves to `digest`). An unknown name fails
-  listing the known presets.
-- Allowed preset keys: `product` + `sub`, `no_subagents`, `no_orphan_subagents`,
-  `tool_output`, `tool_input_limit`,
-  `tool_output_limit`, `patch`, `role`, `no_reasoning`, `mark_compactions`,
-  `summary_diffs`, `json`, `sanitize`, `cap`, `files` (bools/choices as in the flags),
-  `snapshot` = `"fresh"` (**single preset only**) and the selection `filter` (LIKE
-  string) **or** `sessions` (list of ids, not both).
-- A **bundle preset** uses `products` instead of `product`: a map of
-  `{product: {flags}}` (products may only be `transcript|memory|digest` and each
-  keeps its own flags, e.g. `cap`/`files` only matter for `memory`). The selection stays
-  at the top level and is shared by every product; the whole bundle runs under **one
-  stamp** (`exports/<stamp>/transcript`, `exports/<stamp>/memory`, plus an
-  `index.md` at the stamp root) and each subfolder is identical to running that product
-  alone. `product` and `products` are mutually exclusive.
-- A `filter`/`sessions`/`--sessions` passed on the command line overrides the preset's
-  selection; a config flag passed on the command line overrides the preset too (both for
-  single and bundle presets).
-- **`snapshot: fresh`** coordinates the export with the reference backup: when this key is
-  set the CLI warns if no backup exists or the last one diverged from the live DB (run
-  `opencode-db backup` to align it), and the menu offers a fresh backup first. The export
-  itself still reads the live DB read-only; this only keeps the *archive* reproducible.
-- No presets file (or none matching) → no presets: export behaves exactly as before.
-The **menu** has no product-only flow: each preset is a first-class action (read from the same
-  file), and the **sessions picker comes first** — a plan is config, the selection is run-time
-  state, so it is asked before the plan and simply applied (a plan runs **ad-hoc** just like raw
-  flags do). Marking **every** session runs the preset as configured (keeping its embedded
-  selection); a partial selection becomes a `--sessions` override shared by every product of a
-  bundle (CLI wins, see above). **No `Manual…` row** (the shipped presets `archive`/`quick`/`review`
-  cover the raw copy and the readable log); without a presets file the export picker prints setup
-  guidance (`cp presets.json …`) and the raw CLI as fallback — the manual session →
-  product flow is gone from the menu.
-- `digest` is a valid product and ships as its own single-product preset. It is
-  **not** part of any **bundle** preset: its digests are already inline in
-  `transcript` and in the memory corpus (`compaction_digests`), so bundling it
-  would triple the same text.
-- `export --list-presets` prints every named plan (name + derived verdict + its
-  description; `--show <name>` its resolved
-  plan, `--dry-run <name>` the plan plus the sessions the selection would match,
-  reading the DB read-only and writing nothing). Use them to inspect a plan or a
-  hand-edited presets file before running it.
-- `--sanitize` redacts high-confidence secret prefixes (sk-, ghp_, Bearer, JWT, PEM…) —
-  **best-effort; review the output before sharing**.
-
-```bash
-# weekly lossless export of everything, e.g. in crontab:
-0 2 * * 1 opencode-db export archive
-```
-
-Each run's `metadata.json` records `"preset": "<name>"` (and `sessions_selected`) for
-provenance (a bundle records the preset name in every product's metadata).
+> **Purpose/size of each product, decision matrix, and preset reference:** **[docs/architecture.md](docs/architecture.md) §8**.
+> **Machine contracts (presets, metadata.json, corpus.jsonl, faithful archive, manifests):** **[docs/schemas.md](docs/schemas.md)**.
+> **Shipped presets:** `presets.json` in the repo root (auto-created by `install.sh` if missing).
 
 ## Managing export runs
 
-Export folders accumulate; list, delete or prune them with `opencode-db exports` (also in the menu):
-
 ```bash
-opencode-db exports list              # date / profile / counts / size per run (bundle runs show 'transcript+memory', counts are totals)
-opencode-db exports view <stamp>      # detail: banner, per-product summary, aggregate totals, one field block per product
-opencode-db exports view <stamp> --files   # + the produced files with sizes
-opencode-db exports view <stamp> --json    # one metadata record per product as a JSON array
+opencode-db exports list              # date / profile / counts / size per run
+opencode-db exports view <stamp>      # detail: banner, per-product summary, totals, one block per product
+opencode-db exports view <stamp> --files   # + produced files with sizes
 opencode-db exports remove <stamp>    # delete one run (asks; --yes to skip)
 opencode-db exports prune 5           # keep only the 5 most recent runs
 ```
 
 ## Compaction digests
 
-`digest <id> show` prints a session's digests; the `digest` export product
-writes one markdown file per session with them. `compactions <id> show` and the
-`compactions` product keyword still work as deprecated aliases. How a compaction digest
-is stored in the DB (markers vs. the following `mode=compaction` message) is explained in
-[docs/architecture.md](docs/architecture.md).
+`opencode-db digest <id> show` prints a session's digests; the `digest` export product
+writes one markdown file per session with them. `compactions` is a deprecated alias.
+How compaction digests are stored in the DB is explained in
+**[docs/architecture.md](docs/architecture.md) §2**.
 
 ## shrink — a lighter DB copy to swap over opencode
 
-The opencode DB only grows, and most of the weight is the event store (`event` alone is ~375 MB of a typical 490 MB file): deleting sessions frees pages for reuse but does **not** shrink the file (only a `VACUUM` does, and it needs exclusive locks on the live DB). `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot: by default it never touches the live database (you swap the copy in manually), while `--swap` installs it over the live DB after taking its own safety snapshot:
+The opencode DB only grows. `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot; by default it never touches the live DB, while `--swap` installs it safely after a safety snapshot.
 
 ```bash
-opencode-db shrink                         # default: copy with the 10 most recent sessions
-opencode-db shrink lean                    # + strip the reasoning parts (recommended)
-opencode-db shrink quiet                   # prune + vacuum only, keep the full text
+opencode-db shrink                         # default: 10 most recent sessions
+opencode-db shrink lean                    # + strip reasoning parts (recommended)
+opencode-db shrink quiet                   # prune + vacuum only, keep full text
 opencode-db shrink --keep 5 --dry-run      # only report what would be pruned
-opencode-db shrink --keep-all              # keep every session (just prune orphans + vacuum)
 opencode-db shrink --older-than 30         # keep sessions updated in the last 30 days
 opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
-opencode-db shrink --keep-sessions ses_aaaaaa     # keep ONLY the listed ids + their parents/subagents
-opencode-db shrink --discard-sessions ses_bbbbbb  # keep everything EXCEPT the ids + their subagents
-                                               # (offers export archive --sessions <cascade> first)
-opencode-db shrink lean --keep 30          # raw flags compose over a recipe (30 most recent, still strips)
-opencode-db shrink lean --swap             # build the copy AND replace the live DB (safe: --yes to skip the prompt)
+opencode-db shrink --keep-sessions ID...   # keep ONLY the listed ids + their parents/subagents
+opencode-db shrink --discard-sessions ID...# keep everything EXCEPT the ids + their subagents
+                                           # (offers export archive --sessions <cascade> first)
+opencode-db shrink lean --keep 30          # raw flags compose over a recipe
+opencode-db shrink lean --swap             # build copy AND replace live DB (safe)
 ```
 
-A shrink has two independent parts, and they are split on purpose:
+A shrink has two independent parts:
+- **Selection** (exactly one): `--keep N` (default 10), `--older-than DAYS`, `--since DATE`, `--keep-all`, `--keep-sessions`, `--discard-sessions`.
+- **Operations** (recipe only): `lean` = strip reasoning, `quiet` = prune + vacuum only.
 
-- **Which sessions survive** = a **selection flag** (exactly one: `--keep N` = default
-  10, `--older-than DAYS`, `--since DATE`, `--keep-all`, `--keep-sessions`, `--discard-sessions`).
-- **What else happens to the copy** = the **operations**, and that is all a named recipe
-  may carry: `lean` = strip the reasoning parts, `quiet` = nothing (prune + vacuum only).
+Built-in recipes exist; a custom recipes file (`OCED_SHRINK_PRESETS`,
+`~/.config/opencode-db/shrink-presets.json`) extends/overrides them.
 
-So `shrink lean` means "the default selection, plus strip reasoning", and
-`shrink lean --keep 30` keeps 30 and still strips. A keep rule inside a recipe is
-rejected (it points at the flag to use instead). The built-ins always exist; a **shrink
-recipes file** (`OCED_SHRINK_PRESETS`, default `~/.config/opencode-db/shrink-presets.json`,
-auto-created from the shipped `shrink-presets.json`) extends/overrides them with operations
-only — see [`generated/shrink.schema.json`](generated/shrink.schema.json) and
-`shrink --list-presets`. `--keep-sessions`/`--discard-sessions` are exact-id selections
-(comma-separated). `shrink --help` lists everything.
+Output: `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (criteria, counts, per-table removed rows, sizes, integrity checks). The copy is verified before being stored.
 
-The kept set is **closed**: parents and subagents of a kept session are kept too (no orphan links), and the sessions-bound tables (message, part, todo, session_message, session_share, session_context_epoch, session_input) plus the `event`/`event_sequence` aggregates of the deleted sessions are pruned — orphans are never shipped. Output is written to `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (profile/criteria, counts, per-table removed rows, sizes, `integrity_check` and `foreign_key_check`). The copy is verified (`PRAGMA integrity_check` = ok, `PRAGMA foreign_key_check` = 0 rows) before being stored. If the swap is fine, replace the DB yourself:
+> **Full shrink design (closure rules, swap safeguards, freshness verification, discard-export coverage):** **[docs/architecture.md](docs/architecture.md) §6**.
 
-```bash
-mkdir -p "$OCED_BACKUP_DIR/pre-shrink"
-cp "$OPENCODE_DB" "$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink$(date +%s).db"   # safety copy
-cp <shrunk.db> "$OPENCODE_DB"
-rm -f "$OPENCODE_DB-wal" "$OPENCODE_DB-shm"
-```
-
-> **Stop opencode before swapping.** Replacing the DB behind a running opencode process
-> drops the WAL tail and can corrupt state. Prefer `opencode-db shrink --swap`, which
-> aborts if opencode is still running, snapshots a safety copy to
-> `$OCED_BACKUP_DIR/pre-shrink/` (sqlite `.backup`, WAL-safe), swaps atomically and
-> rolls back if the new DB does not open read-only (see
-> [docs/architecture.md](docs/architecture.md) §6).
-
-Workflow that preserves knowledge while reclaiming space: `opencode-db backup` → `opencode-db export memory` (keeps the distilled facts) → `opencode-db shrink`. `status` warns with a checklist when the live DB is over 1 GiB. The menu walks the same steps through its own pickers (`opencode-db menu`).
-
-Produced copies accumulate under `backups/shrink/`; manage them like export runs:
+## Managing shrink copies
 
 ```bash
 opencode-db shrinks list              # date / tag / kept/total / size delta
-opencode-db shrinks list --tsv        # same, as stamp<TAB>display (the menu picker's source)
-opencode-db shrinks view <stamp> [--json]  # detail screen (sessions/size/criteria/freshness/ids); --json = raw shrink.json
-opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, old pre-shrinks, freshness of EVERY copy vs live DB,
+opencode-db shrinks view <stamp> [--json]  # detail screen (sessions/size/criteria/freshness/ids)
+opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, freshness of EVERY copy vs live DB,
                                             # and that every discard's cascade still has a covering export run
 opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
 opencode-db shrinks prune 3           # keep only the 3 most recent copies
 ```
 
-`--strip-reasoning` additionally removes the `reasoning` parts on the copy (the weighty chain-of-thought, rarely useful once a session is over). Community tooling reports ~77% extra savings — the combined copy (`delete sessions → strip reasoning → VACUUM`) is the smallest file we can hand you. Reasoning is a *part* stored per message; the exported transcript reads it from the original DB (toggle `--no-reasoning`), so stripping never touches what you can re-export. Stripped reasoning is only **recoverable while you keep the original DB or a backup**: keep `opencode-db backup` and the `pre-shrink` safety copy if you ever need it. If you use opencode between a `shrink` and the swap, the copy is stale — **shrink again before swapping** (the pre-shrink copy is your only rollback).
-
 ## Activity log (opt-in)
 
-`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG` (default `~/.local/state/opencode-db/activity.log`, or `./activity.log` when running portably from the repo), one tab-separated line per event. Nothing is ever logged by default.
+`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG`
+(default `~/.local/state/opencode-db/activity.log`, or `./activity.log` when running portably
+from the repo), one tab-separated line per event. Nothing is ever logged by default.
 
 ## Reading from a backup
 
@@ -492,7 +223,7 @@ opencode-db --from-backup opencode-20260920-155652.db.gz list --root
 opencode-db --from-backup opencode-20260920-155652.db.gz export memory
 ```
 
-`status`/`version` report whether the backup is `[OK] aligned` with the live DB or `[!] out of sync` (same sessions/messages/last activity), so you know how stale the source is.
+`status`/`version` report whether the backup is `[OK] aligned` with the live DB or `[!] out of sync`.
 
 ## Uninstall
 
@@ -509,7 +240,7 @@ The detailed architecture — read-only discipline (WAL, `.backup`, `--from-back
 the opencode data model, the export pipeline (products, sanitization **in memory on
 native types before serializing**, token backfill, streaming corpus), the menu design and
 the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/architecture.md)**.
-The [`docs/export-analysis.md`](docs/export-analysis.md) log records how the export
+The [`docs/archive/export-analysis-2026-full.md`](docs/archive/export-analysis-2026-full.md) log records how the export
 redesign decisions were reached. **[`docs/schemas.md`](docs/schemas.md)** is the
 machine-facing contract reference (presets, `metadata.json`, the memory corpus, the
 faithful archive, backup/shrink manifests). This README covers usage only.
@@ -558,34 +289,16 @@ Environment variables still win over that file, which in turn wins over the per-
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 397 OK / 0 FAIL
-bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 346 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 438 OK / 0 FAIL
+bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 354 OK / 0 FAIL
 ```
 
-## Layout
+## Roadmap / Status
 
-```
-src/
-  opencode-db.sh   CLI dispatcher
-  common.sh        config + helpers (always read-only)
-  view.sh          status / list / info / digest (+ digests)
-  backup.sh        consistent snapshots + sha256 + manifest.json
-  export.sh        bash -> python bridge
-  exportlib/       Python renderer package (products transcript/memory/digest,
-                   subagents, presets, --json/--sanitize, index.md, metadata;
-                   cli.py is the self-bootstrapping CLI entry)
-  exports.sh       list/remove/prune of past export runs
-  shrink.sh        pruned + VACUUMed copy from a snapshot (dry-run / report / --swap)
-                   + the shrinks manager (list/view/remove/prune of produced copies)
-  deps.sh          idempotent dependency check/install
-  menu.sh          interactive fzf menu (pickers, preset-only export flow, shrinks picker)
-docs/
-  architecture.md  design & rationale (read-only model, schema, export pipeline, menu, shrink safeguards)
-  export-analysis.md  decision log of the export redesign
-install.sh         copies src/, symlinks the CLI
-uninstall.sh       removes the install (keeps data unless --all)
-tests/
-  make_fake_db.sh  generates a fake DB for the tests
-  export_smoke.sh  end-to-end assertions
-  menu_flow.sh     menu logic with a stubbed fzf
-```
+- ✅ **Export**: 4 products (`transcript`, `memory`, `digest`, `faithful`), presets, bundles, CLI discovery (`--show/--dry-run/--explain`), sanitization, token backfill, corpus streaming.
+- ✅ **Shrink**: selection (keep/older/since/keep-sessions/discard), recipes (`lean`/`quiet`), `shrinks verify` (freshness + discard-export coverage), `--swap` **designed and tested** (not yet validated manually in real environment).
+- ✅ **Backups**: WAL-safe snapshots, sha256 manifest, `view` with embedded check, `--from-backup` global.
+- ✅ **Menu**: preset-only export, sessions picker (subagents hidden/shown), backups/shrinks/exports pickers with toggle view/remove, integrated verify.
+- 🔄 **To validate**: `shrink --swap` in real environment (stop opencode → swap → verify).
+- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain (docs added in `schemas.md`), evaluate `schema_version: 2` if multi-source consumer emerges.
+- 📋 **Nice-to-have**: Windows native (PowerShell), pre-commit hooks for tests, complete `help` for subcommands.

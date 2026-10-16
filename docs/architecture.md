@@ -2,7 +2,7 @@
 
 > Design & rationale document. For practical usage (commands, flags, installation)
 > see [`README.md`](../README.md). The confirmed product decisions from the export
-> redesign are recorded in [`export-analysis.md`](export-analysis.md) (§7).
+> redesign are recorded in [`archive/export-analysis-2026-full.md`](archive/export-analysis-2026-full.md) (§7).
 
 ## 1. Philosophy: never write to the live DB
 
@@ -50,7 +50,7 @@ describe an invented schema):
   same two literals make `compactions` and `digests` two different counters in
   `metadata.json` (markers vs summaries) and are the reason the **product** is named
   `digest`: it only ever wrote digests. `compactions` survives as a deprecated alias
-  (`PRODUCT_ALIASES`, normalised at resolve time) — see `docs/export-analysis.md`.
+  (`PRODUCT_ALIASES`, normalised at resolve time) — see `archive/export-analysis-2026-full.md`.
 - Config precedence: **env > conf file > per-file default** (`load_conf` in `common.sh` snapshots
   the variables before sourcing `$OCED_CONF`). The per-file default is `~/.config/opencode-db/<file>`
   if present, else the repo-shipped copy when running portably, else the built-in.
@@ -302,7 +302,7 @@ it can never push the metadata right. Then `COL_GAP`=2 spaces, then `@<agent>` i
 `AGENT_COL_W`=10 column (always reserved, so `@build`/`@general`/`@explore`/empty all leave
 the date at the same offset), then the updated `YYYY-MM-DD HH:MM` date. The old "full title,
 never truncated" rule pushed the metadata right on a long title; the row is now
-deterministic on every row (see export-analysis §47).
+deterministic on every row (see `archive/export-analysis-2026-full.md` §47).
 
 **Heavy commands run under a light spinner.** The commands that stay quiet for a while
 before their one-line result (backup create, export create, the shrink discard-offer export,
@@ -311,7 +311,7 @@ shrink build, `--swap`) are bracketed by
 `run_oced_tool` runs. It never captures the output (the streaming contract holds), it is
 TTY-gated and a no-op under tests/pipes (and off with `OCED_SPINNER_DISABLE=1`), and the
 frames never reach stdout, so a pipe or the streamed log cannot see them (see
-export-analysis §48).
+`archive/export-analysis-2026-full.md` §48).
 
 **The export flow is sessions → preset → confirm.** The sessions picker comes first
 (`(N sub)` badges, `subagents: shown ⇄ hidden` **starting hidden** so roots-only is the
@@ -444,7 +444,7 @@ hashing the whole shelf would take seconds per gigabyte.
 
 The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|digest|faithful`). Usage and the decision matrix:
-`docs/export-guide.md`; short usage: `README.md` (Menu).
+§8; short usage: `README.md` (Menu).
 
 ## 5. `shrink`
 
@@ -602,7 +602,41 @@ unexported copy: the sessions are already gone, and the copy is the evidence. A 
 copy without a cascade is condemned only by a recorded `discard_exported` whose run
 has vanished — no record is never a false charge.
 
-## 7. Links
+## 7. Quick decision matrix — what do I export when?
+
+| I want to… | use | notes |
+|---|---|---|
+| keep a lossless backup of everything | `export archive` | complete tool outputs + the raw session + corpus |
+| keep the raw session, losslessly | `export quick` (or `export faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
+| read a conversation and keep its RAG corpus, no raw copy | `export study` | readable log + corpus.jsonl, no faithful JSON |
+| review or hand a session to someone | `export review` | no reasoning + the raw session; it does **not** redact — **read the output before passing it on** |
+| read a conversation plain | `export notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
+| read only the dialogue (no tools, patches or reasoning) | `export conversation` | user + assistant text only; the leanest readable transcript |
+| collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
+| give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
+| skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
+| archive-grade export, but make sure the backup is current first | `export transcript --snapshot fresh` | offers a fresh backup when the last one diverged, then a full transcript |
+| read one conversation in full **and** keep the raw copy | `export archive` (CLI: `export transcript` then `export faithful`) | the Markdown plus the native-JSON archive |
+| audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
+| skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
+| narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
+| export from a stored backup instead of the live DB | `--from-backup <file>` | every read command honors it |
+
+## 8. Precedence and safety
+
+- Environment > conf file > defaults for paths/options; **the CLI wins over a plan**
+  (`opencode-db export archive --filter ses_X` overrides the plan's selection; an
+  explicit flag overrides the plan's value).
+- The DB is always opened **read-only**; exports never mutate opencode data. The only
+  path that writes the live DB is the opt-in `shrink --swap`.
+- Every export's `metadata.json` carries a `db_sha256`, so you can correlate a run with
+  the exact snapshot that produced it.
+- **`--sanitize` is best-effort**: it redacts high-confidence secret prefixes
+  (sk-, ghp_, Bearer, JWT, PEM…) but is not a guarantee; always review the output
+  before sharing.
+
+## 9. Links
 
 - `../README.md` — usage guide (installation, commands, flags, tests, layout).
-- `export-analysis.md` — pre-redesign analysis and §7 with the confirmed decisions.
+- `schemas.md` — machine contracts (presets, metadata.json, corpus.jsonl, faithful, manifests).
+- `archive/export-analysis-2026-full.md` — full decision log (historical).

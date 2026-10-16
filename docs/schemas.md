@@ -28,39 +28,6 @@ Authoritative machine schema: [`generated/presets.schema.json`](../generated/pre
 validation in `exportlib/presets.py` imports the same key lists, so everything stays
 in sync by construction.
 
-```jsonc
-{
-  "presets": {
-    "archive": {
-      "products": {                       // bundle: one stamp, one index.md per product
-        "transcript": { "tool_output": "full" },  // per-product flags only
-        "memory":     { "files": true },
-        "faithful":   {}                   // the lossless JSON archive product
-      },
-      "filter": "ses_f7%",                 // optional shared selection: filter (SQL LIKE)…
-      "sessions": ["ses_…", "ses_…"]      // …or exact ids — never both
-    },
-    "quick": {
-      "product": "faithful"             // single product: the raw copy, lossless
-    },
-    "study": {
-      "products": {
-        "transcript": { "tool_output": "truncated" },
-        "memory":     { "files": true }
-      }
-    },
-    "review": {
-      "products": {                       // no faithful flag needed: faithful IS a product
-        "transcript": { "no_reasoning": true },
-        "faithful":   {}
-      }
-    },
-    "notes": { "product": "transcript" },
-    "rag":   { "product": "memory" },
-    "digest": { "product": "digest" }
-  }
-}
-```
 
 > Per-key rules table (generated, checked in): [`generated/flags-table.md`](../generated/flags-table.md)
 > — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
@@ -334,6 +301,53 @@ Field notes:
 - `created`/`updated` and `compaction_digests[].created` / `todos` timestamps are
   ISO-8601 UTC; absent → `null`.
 
+### Consuming `corpus.jsonl` (RAG, claims, supersession)
+
+`rag` is **not** a separate artifact: it is a named **preset** whose content is
+`{"product": "memory"}` (`presets.json`), so `export rag` and `export memory`
+produce the **same** `corpus.jsonl`. Nothing here needs a change to be consumed —
+this section is the contract for *other tools*.
+
+**Loading it.** Both artifacts are plain JSON and need no adapter:
+
+- `corpus.jsonl` → one JSON object per line (`langchain_community.document_loaders.JSONLinesLoader`).
+- `<stamp>/faithful/…/<title>.json` → one document per session (`JSONLoader` with a `jq_schema`).
+
+**What the corpus is, and what it is not.** Each entry is a **summary of one root
+session** (the goal, the outcome, the compaction digests, the counts, the touched
+files) — it is **lossy** and is neither a transcript nor a claim store. The
+lossless source of truth is the `faithful` archive, which carries the whole session
+(messages and `part.data` verbatim). A consumer that needs facts *inside* a
+conversation reads `faithful`; a consumer that only needs to *locate* the session
+(which chat, which project, which files, when) reads the corpus.
+
+**Mapping to a claim/supersession store** (e.g. [`consolidation-memory`](https://github.com/charliee1w/consolidation-memory),
+which models `episodes` as evidence and `claims` as reusable beliefs with drift
+detection, `as_of` time queries and `namespace/project/app/agent/session` scopes):
+
+| consolidation-memory | comes from `corpus.jsonl` |
+|---|---|
+| episode (per root) | one JSON line |
+| scope `project` | `directory` |
+| scope `agent` | `agent` |
+| scope `session` | `id` (`parent_id` for the subagent relation) |
+| scope `namespace` | the export itself (global / one source) |
+| **file anchors** (for drift) | `files` — present only with `--files` |
+| time axis (`as_of`) | `created` / `updated` / `compaction_digests[].created` |
+| **claims / supersession / drift** | **NOT in the corpus** — this is the consumer's job |
+
+The corpus deliberately stops at *evidence*: it keeps no claim identity
+(subject/relation/object), no "old value superseded" state and no drift events.
+Extracting claims is a write-side, LLM-assisted step (the consumer's), and the
+**faithful archive is its evidence source** while the corpus is its index.
+
+**Provenance.** It already lives at the **run** level, not per line: each run's
+`metadata.json` records `db`, `db_sha256`, `date`, `preset`, `selection` and
+`session_records`, and the enclosing directory name is the run's `stamp`. A
+consumer that keeps a corpus together with its `metadata.json` (and the `stamp`)
+knows exactly where every line came from, so no per-line provenance field is added
+(the corpus carries only `schema_version` to pin the shape).
+
 ---
 
 ## 4. Faithful JSON archive (the `faithful` product)
@@ -373,6 +387,11 @@ Absent `agent`/`mode`/`parentId` are `null`.
 `info.digests` count because the digests are not summarised here — they are in the
 archive itself, as the message whose `info.mode = 'compaction'` with its `text` part.
 A consumer that wants the number counts those messages.
+
+This archive is the **lossless evidence source** for extraction pipelines (claims,
+supersession): the `memory` corpus is a lossy index of the same run, so a consumer
+that needs the facts *inside* a session reads this and uses the corpus only to
+locate it — see *Consuming `corpus.jsonl`* under §3.
 
 ---
 
@@ -424,15 +443,6 @@ The built-in recipes **always exist** — `lean` (strip reasoning) and `quiet`
 (prune + vacuum) — and the file *extends/overrides* them (a file recipe with the
 same name shadows the built-in). A missing/empty file simply means "built-ins only".
 
-```jsonc
-{
-  "presets": {
-    "lean":      { "description": "…", "strip_reasoning": true },  // shadows the built-in lean
-    "quiet":     { "description": "…" },                          // same as the built-in quiet
-    "text-only": { "strip_reasoning": false }                     // keep the reasoning parts
-  }
-}
-```
 
 An empty object is legal (no operation = just prune + vacuum). A keep rule inside a
 recipe is **rejected** with a pointer to the matching CLI flag, unknown keys fail

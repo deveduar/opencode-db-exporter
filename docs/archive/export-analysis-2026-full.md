@@ -2194,3 +2194,29 @@ four-column rows of `--list-presets` (including the derived verdict); `menu_flow
 the `archive` fixture to a neutral description and expects the `lossless` verdict column
 between the product list and the description. Counters: `menu_flow` 354, `export_smoke`
 435→438.
+
+---
+
+## §59 Documenting consumption: `corpus.jsonl`, `faithful`, claims/supersession (current)
+
+The question came up whether the exported artifacts need extra provenance fields or a
+new "claim-ready" product to be useful for external tools (LangChain, a
+supersession store like `consolidation-memory`, etc.). The conclusion:
+
+- **No schema change.** The corpus already carries enough machine facts
+  (`created`/`updated`/`compaction_digests[].created`, `directory`, `agent`,
+  `files` with `--files`) to serve as the *episode index* for a claim store.
+  The lossless evidence is in `faithful/*.json` (full session, `part.data`
+  verbatim). Provenance lives at the **run level** in `metadata.json` +
+  the `stamp` directory, so no per-line field is added.
+
+- **The docs are the contract.** A new subsection in `schemas.md` (§3)
+  spells out: (a) `rag` is a preset of `memory`, not a richer product; (b)
+  LangChain loaders (`JSONLinesLoader` / `JSONLoader`) work as-is; (c) the
+  mapping to `consolidation-memory` (episodes, scopes, file anchors, time
+  axis) is a table; (d) claims/supersession/drift are **not** in the corpus
+  — they are the consumer's job; (e) `faithful` is the evidence source.
+
+- **Scope confirmed.** Analyzer/adapter for claims, `contrib/` scripts,
+  `schema_version: 2` — all explicitly parked as out of scope until a real
+  second consumer exists.
