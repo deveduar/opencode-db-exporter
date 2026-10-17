@@ -1,30 +1,32 @@
 # opencode-db-exporter
 
-Read, back up and export the local SQLite database of **opencode** (`opencode` CLI) to readable Markdown. It never writes to the opencode database: every access is read-only (`mode=ro`).
+Read, back up and export the local SQLite database of **opencode** (the `opencode` CLI) to readable Markdown. It never writes to the opencode database.
 
 Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
 
-## Motivation
+## Quick start
 
-OpenCode's CLI binds sessions to Git states and working directories, so switching
-branches or HEAD can hide older sessions even though the data is still in the global
-SQLite file. `opencode-db` reads that file directly in **strict read-only mode** — no
-CLI filters, no writes — so every prompt history, agent path and metric stays
-exportable.
+Run it straight from a checkout (no install), or install it once:
 
-## Related tools
+```bash
+# portable — nothing to install:
+bash src/opencode-db.sh menu
 
-opencode ships a built-in `opencode export [sessionID]` (and `opencode session export`),
-which dumps **one** session as JSON; `opencode session list` and `opencode db path` cover
-listing and locating the DB. `opencode-db-exporter` is an independent tool that overlaps
-only partly, and focuses on:
+# or install:
+./install.sh
+opencode-db menu
+```
 
-- **direct, strictly read-only access** to the SQLite file (`mode=ro`) — no CLI filters, so
-  sessions hidden by opencode's Git binding are still exportable;
-- **batch** work across many sessions and the whole hierarchy (roots + subagents);
-- readable **Markdown**, a RAG-ready **corpus**, **digests**, and a faithful `--json`;
-- **backups** with a sha256 manifest, and **`shrink`** (with an opt-in, guarded `--swap`);
-- named **presets**, an **fzf menu**, and a portable, no-install layout.
+The menu covers everything: export, backups, shrink and session browsing.
+
+## What it does
+
+OpenCode's CLI binds sessions to Git states and working directories, so switching branches or HEAD can hide older sessions even though the data is still in the global SQLite file. `opencode-db` reads that file directly, so every prompt history, agent path and metric stays reachable, and works over the whole hierarchy (roots + subagents):
+
+- **Export** to readable Markdown (`transcript`), a RAG-ready `corpus.jsonl` (`memory`), the compaction digests (`digest`) or a lossless native-JSON archive (`faithful`) — with named **presets** and **bundles**.
+- **Back up** the DB with a WAL-safe snapshot and a sha256 manifest; point any read command at a stored backup with `--from-backup`.
+- **Shrink** a pruned + VACUUMed **copy**, and optionally **swap** it into the live DB behind guards.
+- A **picker-driven fzf menu**, and a **portable** layout (run from a checkout, no install).
 
 ## Requirements
 
@@ -44,7 +46,6 @@ opencode-db deps           # install what's missing (apt/pacman/dnf, prompts for
 ```bash
 ./install.sh            # copies src/+uninstall.sh to ~/.local/share/opencode-db-exporter,
                         # symlinks ~/.local/bin/opencode-db, creates the config if missing
-export PATH="$HOME/.local/bin:$PATH"
 opencode-db status      # first check
 ```
 
@@ -216,7 +217,7 @@ It never removes system packages: dependencies installed by `opencode-db deps` s
 
 ## Design notes
 
-The detailed architecture — read-only discipline (WAL, `.backup`, `--from-backup`),
+The detailed architecture — the data-access model (WAL, `.backup`, `--from-backup`),
 the opencode data model, the export pipeline (products, sanitization **in memory on
 native types before serializing**, token backfill, streaming corpus), the menu design and
 the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/architecture.md)**.
@@ -224,21 +225,10 @@ the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/archit
 Machine contracts (presets, `metadata.json`, corpus, faithful archive, manifests):
 **[docs/schemas.md](docs/schemas.md)**.
 
-This README covers usage only.
-
-A few facts that are good to know anyway:
-
-- Config precedence is **environment > conf file > per-file default**, where the default
-  is `~/.config/opencode-db/<file>` if present, else the repo-shipped copy, else the
-  built-in: an explicitly exported `OPENCODE_DB`/`OCED_OUT`/`OCED_ACTIVITY_LOG`/... is
-  never clobbered by the conf.
-- Dates are stored and printed in **UTC** everywhere (ISO-8601, `Z`), except the **menu
-  picker rows**, which show your local time; set `OCED_TZ` (e.g. `Europe/Madrid`) to pin
-  the display zone instead of auto-detecting the system one. It never affects files or the
-  CLI.
-- Output dirs and the DB path are configurable via `~/.config/opencode-db/opencode-db.conf`
-  (that is `opencode-db.conf`). Running from the repo, the shipped
-  `opencode-db.conf`/`presets.json`/`shrink-presets.json` are read directly (see below).
+This README covers usage only. One fact worth knowing here: dates are stored and printed
+in **UTC** everywhere (ISO-8601, `Z`), except the **menu picker rows**, which show your
+local time — set `OCED_TZ` (e.g. `Europe/Madrid`) to pin the display zone instead of
+auto-detecting the system one. It never affects files or the CLI.
 
 ## Portability (WSL / Windows / portable)
 
@@ -270,7 +260,7 @@ Environment variables still win over that file, which in turn wins over the per-
 ## Tests
 
 ```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB -> 438 OK / 0 FAIL
+bash tests/export_smoke.sh   # end-to-end against a fake DB -> 437 OK / 0 FAIL
 bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 354 OK / 0 FAIL
 ```
 
@@ -281,5 +271,5 @@ bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 354 OK / 0 FAIL
 - ✅ **Backups**: WAL-safe snapshots, sha256 manifest, `view` with embedded check, `--from-backup` global.
 - ✅ **Menu**: preset-only export, sessions picker (subagents hidden/shown), backups/shrinks/exports pickers with toggle view/remove, integrated verify.
 - 🔄 **To validate**: `shrink --swap` in real environment (stop opencode → swap → verify).
-- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain (docs added in schemas.md), evaluate `schema_version: 2` if multi-source consumer emerges.
+- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain, evaluate `schema_version: 2` if a multi-source consumer emerges.
 - 📋 **Nice-to-have**: Windows native (PowerShell), pre-commit hooks for tests, complete `help` for subcommands.

@@ -145,6 +145,14 @@ A=$(printf '%s' "$ACTION_STATUS" | grep -oE 'Exports: [0-9]+')
 rm -rf "$OUT/refresh-run"
 [ -n "$A" ] && [ "$A" != "$B" ] && ok "oc_root_status recomputes Exports on refresh ($B -> $A)" || bad "root status refresh: before='$B' after='$A'"
 
+echo "== run_oc_menu gates on fzf AND the core deps at startup =="
+RUNOC=$(awk '/^run_oc_menu\(\)/{f=1} f{print} f&&/^}/{exit}' "$MOD/menu.sh")
+printf '%s' "$RUNOC" | grep -q 'menu_require_fzf' \
+    && ok "run_oc_menu checks fzf before drawing" || bad "run_oc_menu missing the fzf check"
+printf '%s' "$RUNOC" | grep -q 'o_check_deps' \
+    && ok "run_oc_menu checks the core deps (sqlite3/python3/jq/gzip) before drawing" \
+    || bad "run_oc_menu missing the core deps check"
+
 echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
 reset
 oc_test_entries=(

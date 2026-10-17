@@ -1,8 +1,7 @@
 # Architecture — opencode-db-exporter
 
 > Design & rationale document. For practical usage (commands, flags, installation)
-> see [`README.md`](../README.md). The confirmed product decisions from the export
-> redesign are recorded in [`archive/export-analysis-2026-full.md`](archive/export-analysis-2026-full.md) (§7).
+> see [`README.md`](../README.md).
 
 ## 1. Philosophy: never write to the live DB
 
@@ -444,7 +443,7 @@ hashing the whole shelf would take seconds per gigabyte.
 
 The term **plan/preset** always means the named config; **product** always the keyword
 (`transcript|memory|digest|faithful`). Usage and the decision matrix:
-§8; short usage: `README.md` (Menu).
+§7; short usage: `README.md` (Menu).
 
 ## 5. `shrink`
 
@@ -485,19 +484,11 @@ pruned copy is made; the menu makes it an actual offer. The hint and the offer b
 carry the **cascade**, not the listed roots: `--discard-sessions` drops the roots and
 every descendant, while `export --sessions` matches EXACT ids, so the roots alone
 exported part of what was about to be deleted — silently, because the export
-succeeded. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE` (default `archive` =
-transcript + memory), validated against products + preset names in
-`o_shrink_discard_profile`, so a typo is reported where the command is printed.
-
-That resolver also asks `plan.py subagent-gaps <profile>` (read across every product of a
-bundle) whether the profile would keep the subagents it is being handed:
-`no_subagents`/`no_orphan_subagents` drop the sessions themselves, and `sub: omit` empties
-`children_of`, so **no subagent body is written** while the run still reports plausible
-counts. All three are silent successes — the exact failure this offer exists to prevent,
-now with a closed set that specifically contains the subagents. So the resolver warns
-before the y/N gate. It is a warning and not a veto: dropping subagents on purpose is a
-legitimate reason to run the export. A product keyword can never gap, so `archive` stays
-silent for free.
+succeeded. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE` (default `archive`). That
+resolver also warns, before the y/N gate, when the profile would silently drop the
+subagents the cascade contains — a warning, never a veto (dropping them on purpose is
+legitimate). The field-level rules — defaults, validation, the exact warning — are in
+`schemas.md` §6.
 
 **The create flow is sessions-first** (`oc_pick_shrink` = the `__CREATE__` entry of the
 shrinks picker), and it is the only way to create a shrink from the menu:
@@ -577,30 +568,15 @@ while opencode is running can lose the WAL tail. `opencode-db shrink
 `--dry-run` never writes; combining it with `--swap` is rejected. Confirmation `[y/N]`
 can be skipped with `--yes`.
 
-`shrinks verify [--tsv] [--yes]` audits the produced copies: orphan run dirs (no
-valid `shrink.json`), old `pre-shrink/*` copies, **every copy's** freshness vs
-the live DB, and **every discard's export coverage**. Freshness is asked once per
-run, not once for the newest: a stale
-answer for `runs[0]` was a half-verification — a 3-copy shelf reported the orphan in
-the third directory but never that copies 1 and 2 were stale, which is the one thing
-you want to know before choosing one to swap. `shrink.json` records
-`sessions.max_updated` (newest kept session `time_updated`)
-so the freshness check runs in-database; a legacy shrink.json without that field is
-flagged as unverifiable rather than silently "up to date". An orphan dir is reported
-once, as an orphan, never also as a stale copy. The clean verdict names how many copies
-were asked (`all 7 shrink copies are up to date`): the count is the only visible proof
-that the loop ran, and a fresh-looking verdict over three unchecked copies is exactly
-the answer that hid the other two.
-
-Coverage is the same shape of question with a shelf that ages differently: a discard
-copy stores its closed cascade in `.selection.cascade` (the live DB cannot re-expand
-it after `--swap`), and `o_shrink_unexported` re-matches it against the exports shelf
-at **verify** time — an export made after the shrink clears the flag, `exports remove`
-brings it back, a root-only export of the same root never clears it. Only
-`discard_sessions` runs that deleted sessions are asked, and `--yes` never deletes an
-unexported copy: the sessions are already gone, and the copy is the evidence. A legacy
-copy without a cascade is condemned only by a recorded `discard_exported` whose run
-has vanished — no record is never a false charge.
+`shrinks verify [--tsv] [--yes]` audits the produced copies: orphan run dirs, old
+`pre-shrink/*` copies, **every copy's** freshness vs the live DB, and **every discard's
+export coverage**. Freshness is asked once per run, never only for the newest: a
+fresh-looking verdict over three unchecked copies is exactly the answer that hides the
+other two, so the clean line names the copy count. Coverage is the same shape of question
+against a shelf that ages differently: a discard copy stores its closed cascade
+(`.selection.cascade`) and the check re-matches it against the exports shelf at verify
+time (a root-only export is a different set, so it never clears the flag). The exact
+`--tsv` rows, field names and legacy rules are the contract in `schemas.md` §6.
 
 ## 7. Quick decision matrix — what do I export when?
 
@@ -639,4 +615,3 @@ has vanished — no record is never a false charge.
 
 - `../README.md` — usage guide (installation, commands, flags, tests, layout).
 - `schemas.md` — machine contracts (presets, metadata.json, corpus.jsonl, faithful, manifests).
-- `archive/export-analysis-2026-full.md` — full decision log (historical).

@@ -63,6 +63,7 @@ oc_show_status() {
 
 run_oc_menu() {
     menu_require_fzf
+    o_check_deps
     oc_root_status
     # --refresh-cb recomputes ACTION_STATUS at the top of every root loop so the
     # header never shows stale info after an action (backup, shrink, export…).

@@ -28,16 +28,12 @@ Authoritative machine schema: [`generated/presets.schema.json`](../generated/pre
 validation in `exportlib/presets.py` imports the same key lists, so everything stays
 in sync by construction.
 
-
 > Per-key rules table (generated, checked in): [`generated/flags-table.md`](../generated/flags-table.md)
 > — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
-> Summary of the non-obvious rows:
-
-> **The `product` / `products` values are `transcript` \| `memory` \| `digest` \| `faithful`**
-> and nothing else: `full` is a CLI alias of `transcript` and `compactions` is a deprecated
-> alias of `digest` (both are normalised at resolve time, so a run records `digest`).
-> This table restates the non-obvious rows of the generated one; it is a summary, the
-> generated file is the contract.
+> The table below is only a summary of its non-obvious rows; the generated file is the
+> contract. The `product` / `products` values are `transcript` \| `memory` \| `digest` \|
+> `faithful` and nothing else: `full` is a CLI alias of `transcript` and `compactions` is a
+> deprecated alias of `digest` (both normalised at resolve time, so a run records `digest`).
 
 | `product` | string | `transcript` \| `memory` \| `digest` \| `faithful` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
 | `products` | object | keys restricted to the products above | bundle only (exclusive with `product`) |
@@ -388,10 +384,8 @@ Absent `agent`/`mode`/`parentId` are `null`.
 archive itself, as the message whose `info.mode = 'compaction'` with its `text` part.
 A consumer that wants the number counts those messages.
 
-This archive is the **lossless evidence source** for extraction pipelines (claims,
-supersession): the `memory` corpus is a lossy index of the same run, so a consumer
-that needs the facts *inside* a session reads this and uses the corpus only to
-locate it — see *Consuming `corpus.jsonl`* under §3.
+This archive is the **lossless evidence source** for extraction pipelines; the `memory`
+corpus indexes the same run — see *Consuming `corpus.jsonl`* under §3.
 
 ---
 
