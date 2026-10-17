@@ -10,8 +10,7 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 branches or HEAD can hide older sessions even though the data is still in the global
 SQLite file. `opencode-db` reads that file directly in **strict read-only mode** — no
 CLI filters, no writes — so every prompt history, agent path and metric stays
-exportable. The full design rationale (data model, export pipeline, sanitization, menu
-and `shrink --swap` safeguards) is in **[docs/architecture.md](docs/architecture.md)**.
+exportable.
 
 ## Related tools
 
@@ -26,15 +25,6 @@ only partly, and focuses on:
 - readable **Markdown**, a RAG-ready **corpus**, **digests**, and a faithful `--json`;
 - **backups** with a sha256 manifest, and **`shrink`** (with an opt-in, guarded `--swap`);
 - named **presets**, an **fzf menu**, and a portable, no-install layout.
-
-Two caveats about the built-in `opencode export` explain the overlap and the gap this tool
-fills. First, it exports a **projected** transcript: the session *after* compaction and
-context-epoch cutoffs, with tool output bounded by opencode's own limits — so the earliest
-turns and the raw tool output can be missing. Second, piping its JSON to another program
-truncates large payloads to a multiple of 64 KiB (a known opencode bug; redirecting to a
-file avoids it). `opencode-db-exporter` sidesteps both by reading the raw SQLite file in
-`mode=ro`, so the full history, pre-compaction turns and complete tool outputs stay
-exportable. The full design rationale is in **[docs/architecture.md](docs/architecture.md)**.
 
 ## Requirements
 
@@ -77,8 +67,8 @@ opencode-db digest <session_id> [show [last|N|all]]
                                       # the DIGEST written for each one
                                       # ('compactions' is the deprecated alias)
 opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (.backup), gzip + sha256 + manifest
-                                         # --dry-run prints the plan (source/target/est. size) and writes nothing
-                                         # --yes skips the question AND the plan (the caller owns the gate)
+                                          # --dry-run prints the plan (source/target/est. size) and writes nothing
+                                          # --yes skips the question AND the plan (the caller owns the gate)
 opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
 opencode-db export <product> [FLAGS]    # products: transcript | memory | digest | faithful
 opencode-db export --list-presets       # list the named presets in the presets file
@@ -117,8 +107,6 @@ Mode switching and bulk operations are their own rows.
 - **export** — preset-only: (1) mark root sessions (subagents hidden by default, cascade included), (2) pick preset, (3) confirm with effective selection shown.
 - **export runs** — view/remove/prune past runs.
 
-> **Details:** the full menu design (picker flows, subagent handling, confirmations, symbol system) is documented in **[docs/architecture.md](docs/architecture.md) §4**.
-
 ## Export
 
 **Four products** (what a document is):
@@ -146,10 +134,6 @@ opencode-db export rag --cap 3000        # per-run override
 - `export --list-presets` / `--show <name>` / `--dry-run <name>` / `--explain` inspect plans without DB.
 - `--sanitize` redacts high-confidence secret prefixes — best-effort; review output before sharing.
 
-> **Purpose/size of each product, decision matrix, and preset reference:** **[docs/architecture.md](docs/architecture.md) §8**.
-> **Machine contracts (presets, metadata.json, corpus.jsonl, faithful archive, manifests):** **[docs/schemas.md](docs/schemas.md)**.
-> **Shipped presets:** `presets.json` in the repo root (auto-created by `install.sh` if missing).
-
 ## Managing export runs
 
 ```bash
@@ -164,8 +148,6 @@ opencode-db exports prune 5           # keep only the 5 most recent runs
 
 `opencode-db digest <id> show` prints a session's digests; the `digest` export product
 writes one markdown file per session with them. `compactions` is a deprecated alias.
-How compaction digests are stored in the DB is explained in
-**[docs/architecture.md](docs/architecture.md) §2**.
 
 ## shrink — a lighter DB copy to swap over opencode
 
@@ -193,8 +175,6 @@ Built-in recipes exist; a custom recipes file (`OCED_SHRINK_PRESETS`,
 `~/.config/opencode-db/shrink-presets.json`) extends/overrides them.
 
 Output: `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (criteria, counts, per-table removed rows, sizes, integrity checks). The copy is verified before being stored.
-
-> **Full shrink design (closure rules, swap safeguards, freshness verification, discard-export coverage):** **[docs/architecture.md](docs/architecture.md) §6**.
 
 ## Managing shrink copies
 
@@ -240,10 +220,11 @@ The detailed architecture — read-only discipline (WAL, `.backup`, `--from-back
 the opencode data model, the export pipeline (products, sanitization **in memory on
 native types before serializing**, token backfill, streaming corpus), the menu design and
 the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/architecture.md)**.
-The [`docs/archive/export-analysis-2026-full.md`](docs/archive/export-analysis-2026-full.md) log records how the export
-redesign decisions were reached. **[`docs/schemas.md`](docs/schemas.md)** is the
-machine-facing contract reference (presets, `metadata.json`, the memory corpus, the
-faithful archive, backup/shrink manifests). This README covers usage only.
+
+Machine contracts (presets, `metadata.json`, corpus, faithful archive, manifests):
+**[docs/schemas.md](docs/schemas.md)**.
+
+This README covers usage only.
 
 A few facts that are good to know anyway:
 
@@ -300,5 +281,5 @@ bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 354 OK / 0 FAIL
 - ✅ **Backups**: WAL-safe snapshots, sha256 manifest, `view` with embedded check, `--from-backup` global.
 - ✅ **Menu**: preset-only export, sessions picker (subagents hidden/shown), backups/shrinks/exports pickers with toggle view/remove, integrated verify.
 - 🔄 **To validate**: `shrink --swap` in real environment (stop opencode → swap → verify).
-- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain (docs added in `schemas.md`), evaluate `schema_version: 2` if multi-source consumer emerges.
+- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain (docs added in schemas.md), evaluate `schema_version: 2` if multi-source consumer emerges.
 - 📋 **Nice-to-have**: Windows native (PowerShell), pre-commit hooks for tests, complete `help` for subcommands.
