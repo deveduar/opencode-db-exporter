@@ -15,9 +15,11 @@ Two explicit axes (they are independent):
     --keep-history        keep the previous state as <stamp>~<YYYY-MM-DD_HH-MM>
                           (a hardlink copy, so it costs no extra space)
 
-`--include-excluded all` and `--mode accumulative` land on the SAME set
-(`in_scope == still ∪ new ∪ ex_live`), so they are interchangeable for "bring the
-whole gap back"; the menu folds them into one row, while both forms stay here.
+`--mode accumulative` is the ONE way to bring the whole gap back: it lands on
+`in_scope` (`still ∪ new ∪ ex_live`), and it also drops whatever left the scope
+(a `--last N` window rolling forward). `--include-excluded` therefore takes
+SPECIFIC ids only — the one thing accumulative cannot express — and refuses the
+redundant `all` form with a pointer to accumulative.
 
 The plan is always computed first (`--dry-run` prints it and writes nothing);
 the write itself renders the target set into a temp dir and swaps it over the run
@@ -158,9 +160,7 @@ def build_plan(args) -> dict:
         revived = set(ex_live)
         excluded_out = set()
     else:
-        if args.include_excluded == "all":
-            revived = set(ex_live)
-        elif args.include_excluded:
+        if args.include_excluded:
             revived = ex_live & set(args.include_excluded)
         elif args.sticky == "always":
             revived = set(ex_live)
@@ -185,8 +185,7 @@ def build_plan(args) -> dict:
         "stamp": args.stamp,
         "mode": mode,
         "sticky": args.sticky,
-        "include_excluded": (args.include_excluded
-                             if isinstance(args.include_excluded, list) else None),
+        "include_excluded": (args.include_excluded or None),
         "keep_history": bool(args.keep_history),
         "scope": scope,
         "scope_label": selection_phrase({"selection": scope}),
@@ -431,8 +430,10 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--sticky", choices=STICKY, default="stale",
                     help="when an excluded session is pulled back in: only if it "
                          "changed (stale, default), always, or never")
-    ap.add_argument("--include-excluded", default=None, metavar="all|ID,ID",
-                    help="re-include excluded sessions regardless of --sticky")
+    ap.add_argument("--include-excluded", default=None, metavar="ID,ID",
+                    help="re-include specific excluded sessions (ids), "
+                         "regardless of --sticky; to reopen EVERY excluded "
+                         "session use --mode accumulative")
     ap.add_argument("--keep-history", action="store_true",
                     help="keep the previous state as <stamp>~<date> (hardlinks)")
     ap.add_argument("--dry-run", action="store_true",
@@ -446,7 +447,15 @@ def main(argv=None) -> int:
     args = build_argparser().parse_args(argv)
     args.out_base = default_out()
 
-    if args.include_excluded and args.include_excluded != "all":
+    if args.include_excluded:
+        if args.include_excluded.strip() == "all":
+            # `--include-excluded all` was the exact twin of `--mode accumulative`
+            # (both land on `in_scope`), so it is refused here with the one form
+            # that also SUPERSETS it (accumulative additionally drops what left
+            # the scope). Specific ids stay supported: that is the one thing
+            # accumulative cannot express.
+            die("--include-excluded all is redundant: use --mode accumulative "
+                "(it reopens every excluded), or list specific ids")
         args.include_excluded = [i.strip() for i in args.include_excluded.split(",")
                                  if i.strip()]
 

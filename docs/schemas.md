@@ -239,10 +239,12 @@ it (e.g. a preset pins `filter X`, the menu marks a subset → `--sessions`): th
 `scope_match − written` — the sessions that were reachable but deliberately left out — and
 is what `exports update` may revive: `--sticky stale` (default) revives an excluded session
 only once it was edited, `--sticky never` refuses even that (a dropped session stays
-dropped), and `--include-excluded all` reopens the gap unconditionally. `--include-excluded all`
-and `--mode accumulative` land on the **same** set — `in_scope == still ∪ new ∪ ex_live`, so
-"bring everything back" is one action — which is why the menu offers a single reopen row (the
-`all`/ids forms stay on the CLI). It is **not** folded
+dropped), and `--include-excluded ID,ID` reopens **specific** excluded sessions by id — the
+one thing the mode axis cannot express. `--include-excluded all` was the exact twin of
+`--mode accumulative` (both land on `in_scope == still ∪ new ∪ ex_live`), so it is **refused**
+pointing at `--mode accumulative`: "bring everything back" is one action, and the CLI no
+longer carries a redundant flag (the menu's single reopen row runs accumulative). It is **not**
+folded
 with a run's own `no_subagents`/orphan policy, because that policy is re-applied at write
 time; folding it would make a drop flag look like a hand-picked exclusion.
 

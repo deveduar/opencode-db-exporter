@@ -709,15 +709,20 @@ mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
     echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadata.json"
 done
-# `bbb` carries a preset so the row's LAST column can be asserted (a run with no
-# preset leaves that column empty — the column is the recipe the refresh replays).
+# `bbb` carries a preset so the row's preset column can be asserted. The order is
+# `size · preset · stale-tag · refresh-mark`: the preset rides right after the
+# size, and the tag (here `unverifiable`, the run has no session_records) comes
+# AFTER it — so the row must read `0B  notes (unverifiable)`, not end on `notes`.
 echo '{"profile":"transcript","preset":"notes","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/bbb/metadata.json"
-oc_exports_run_row bbb | grep -q 'notes$' \
-    && ok "the run row names the preset it came from as its last column" \
+oc_exports_run_row bbb | grep -qE 'notes \(unverifiable\)$' \
+    && ok "the run row names the preset, then the stale tag (size · preset · tag)" \
     || bad "preset column: $(oc_exports_run_row bbb)"
-oc_exports_run_row aaa | grep -q 'full$' \
-    && bad "a run with no preset leaked the product into the preset column" \
-    || ok "a run with no preset leaves the preset column empty"
+# `aaa` has profile `full` and NO preset: the preset column (right after the
+# size) must be empty — the product lives in its own column, never here. The row
+# ends `... 3 msg · 0B  (unverifiable)`, so no bare `full` may follow the size.
+oc_exports_run_row aaa | grep -qE '[0-9]B +\(unverifiable\)$' \
+    && ok "a run with no preset leaves the preset column empty" \
+    || bad "preset column not empty: $(oc_exports_run_row aaa)"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 qset "ccc"

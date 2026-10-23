@@ -557,10 +557,11 @@ printf '%s' "$SCOPEV" | grep -q "ses_B0001" \
     && ok "exports view names an excluded session" || bad "view excluded id"
 printf '%s' "$(run exports list)" | grep -qE "$SCOPER.*1/3 kept · 1 root 0 sub" \
     && ok "exports list spells the narrowed run as K/N kept" || bad "list kept/excluded: $(run exports list | grep "$SCOPER")"
-# The preset the run came from rides LAST on the row (the refresh replays it), so
-# the recipe is visible next to the product it produced.
-printf '%s' "$(run exports list | grep "$SCOPER")" | grep -qE "  notes$" \
-    && ok "exports list names the preset as the row's last column" || bad "list preset column: $(run exports list | grep "$SCOPER")"
+# The preset the run came from rides right after the size (`size · preset · tag ·
+# refresh`), so the recipe is visible next to the artifact it produced while the
+# freshness tag keeps the last word.
+printf '%s' "$(run exports list | grep "$SCOPER")" | grep -qE "notes($| )" \
+    && ok "exports list names the preset on the row (after the size)" || bad "list preset column: $(run exports list | grep "$SCOPER")"
 # A full run (scope == selection) shows no exclusion noise and names its
 # size as `N · R root S sub` (short root/sub breakdown).
 FULLV=$(run exports view "$BSTAMP")
@@ -1125,6 +1126,30 @@ printf '%s' "$NOSUBSESS" | grep -q "ses_A0002" \
 # ...but the gap IS shown, so a narrowed run is never mistaken for a full one.
 printf '%s' "$NOSUBV" | grep -q "== Excluded (" \
     && ok "exports view shows the excluded gap" || bad "exports view excluded block"
+# The per-session staleness marks: after the DB edits one recorded session, its
+# row in `== Sessions ==` wears the bare word `stale` (no symbol) and the block
+# gains a summary count — the same rule behind the run-level `freshness:` line.
+# Private DB/OUT: advancing a session's time would change which session the later
+# `shrink --keep 1` keeps (and its whole cascade), so it must not touch $FAKE.
+SDBC="$TMP/stale-view.db"; SOUT="$TMP/stale-view-out"; SDIR="$TMP/stale-view-bk"
+bash "$TESTS_DIR/make_fake_db.sh" "$SDBC" >/dev/null
+mkdir -p "$SOUT"
+runv() { OPENCODE_DB="$SDBC" OCED_OUT="$SOUT" OCED_BACKUP_DIR="$SDIR" run "$@"; }
+STALEOUT=$(runv export transcript --filter "%" --stamp "view-stale")
+STALESTAMP=$(stamp_of "$STALEOUT")
+STALEV0=$(runv exports view "$STALESTAMP")
+printf '%s' "$STALEV0" | grep -qE "^  [0-9]+ session\(s\) not current" \
+    && bad "a fresh run must not print the not-current summary" || ok "a fresh run carries no not-current summary"
+printf '%s' "$STALEV0" | sed -n '/== Sessions ==/,/^== /p' | grep -qE "  stale$" \
+    && bad "a fresh run must not mark any session stale" || ok "a fresh run marks no session stale"
+sqlite3 "$SDBC" "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0001';"
+STALEV=$(runv exports view "$STALESTAMP")
+printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep -qE "^  ses_A0001.*stale" \
+    && ok "exports view lists the affected session under Changed since export (bare word, no symbol)" \
+    || bad "session stale mark: $(printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep 'ses_A0001')"
+printf '%s' "$STALEV" | grep -qE "1 session\(s\) changed since export: 1 stale" \
+    && ok "exports view summarises the not-current sessions (stale count)" \
+    || bad "not-current summary: $(printf '%s' "$STALEV" | grep 'changed since export')"
 
 echo "== metadata.session_records (WHICH sessions the run actually contains) =="
 # NOTE: the UNFILTERED run is the meaningful one. A title filter like
@@ -1996,9 +2021,15 @@ printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "revived  : 
 printf '%s' "$(runu exports update "$NSTAMP" --dry-run --sticky never)" | grep -qE "revived  : 0" \
     && ok "--sticky never keeps a deliberate skip skipped" \
     || bad "sticky never: $(runu exports update "$NSTAMP" --dry-run --sticky never)"
-printf '%s' "$(runu exports update "$NSTAMP" --dry-run --include-excluded all)" | grep -qE "After the update : 6" \
-    && ok "--include-excluded all re-opens the whole gap" \
-    || bad "include-excluded: $(runu exports update "$NSTAMP" --dry-run --include-excluded all)"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run --include-excluded ses_B0001)" | grep -qE "revived  : 1" \
+    && ok "--include-excluded ID re-opens exactly the listed excluded session" \
+    || bad "include-excluded ID: $(runu exports update "$NSTAMP" --dry-run --include-excluded ses_B0001)"
+# `die()` exits non-zero, so capture first (pipefail would make `cmd | grep -q`
+# return the producer's rc even when grep matches).
+ALLREF=$(runu exports update "$NSTAMP" --dry-run --include-excluded all 2>&1 || true)
+printf '%s' "$ALLREF" | grep -q "mode accumulative" \
+    && ok "--include-excluded all is refused, pointing at --mode accumulative (no redundant twin)" \
+    || bad "include-excluded all not refused: $ALLREF"
 printf '%s' "$(runu exports update "$NSTAMP" --dry-run --mode accumulative)" | grep -qE "After the update : 6" \
     && ok "--mode accumulative re-syncs the run with its scope" \
     || bad "accumulative: $(runu exports update "$NSTAMP" --dry-run --mode accumulative)"

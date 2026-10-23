@@ -391,9 +391,10 @@ the run's own set (`+new`, `-gone`); `--mode accumulative` re-syncs it with the 
 `--sticky` controls whether a session the menu deliberately left out (`.excluded`) is pulled
 back in: `stale` (default) revives it **only once it was edited** ("the run no longer
 describes it"), `never` refuses even that — the user's "I dropped it, keep it dropped" — and
-`--include-excluded all` reopens the gap unconditionally. `--include-excluded all` and
-`--mode accumulative` land on the **same** set (`in_scope == still ∪ new ∪ ex_live`), so they are
-interchangeable for "bring everything back"; the menu folds them into one row.
+`--include-excluded ID,ID` reopens **specific** excluded sessions by id, the one thing the
+mode axis cannot express. `--include-excluded all` was the exact twin of `--mode accumulative`
+(both land on `in_scope`), so it is **refused** with a pointer at accumulative — there is no
+redundant flag left.
 
 **The refresh flow is three levels.** LEVEL 1 is the view/remove list; its `[>] update` opens
 LEVEL 2, the run list **in update mode**; picking a run opens LEVEL 3, the modes screen. LEVEL 3
@@ -415,8 +416,9 @@ something (the engine's `up_to_date` is false): a no-op mode is never offered, b
 would print a plan and then do nothing — this is what made a `sticky never` that changes nothing
 (a narrowed run whose delta revives nothing) stop appearing. `--include-excluded all` and
 `--mode accumulative` land on the **SAME** set (mathematically `in_scope == still ∪ new ∪
-ex_live`), so the menu offers **ONE** reopen row (accumulative); the `all`/ids forms stay on the
-CLI. And when exactly **one** real action remains — a full run with no gap (delta alone), or a
+ex_live`), so the CLI has **no** `all` form (`--include-excluded` takes ids only; `all` is
+refused pointing at accumulative) and the menu offers **ONE** reopen row (accumulative). And
+when exactly **one** real action remains — a full run with no gap (delta alone), or a
 narrowed run whose only useful move is reopening — the picker is **skipped** and the action runs
 straight into its plan+gate: a one-row `fzf` screen whose only job is to make the user press
 Enter is a step with no decision in it.
@@ -705,7 +707,8 @@ time (a root-only export is a different set, so it never clears the flag). The e
   a failed refresh leaves the original run intact. `--keep-history` keeps the previous state
   as a hardlinked `<stamp>~<date>` copy. A default (delta) refresh can never turn a run the
   menu deliberately narrowed into a full export — what it left out is recorded as
-  `.excluded` and stays out unless `--sticky`/`--include-excluded` re-opens it.
+  `.excluded` and stays out unless `--sticky`/`--include-excluded ID,ID` re-opens it (or
+  `--mode accumulative` reopens the whole gap).
 - Every export's `metadata.json` carries a `db_sha256`, so you can correlate a run with
   the exact snapshot that produced it.
 - **`--sanitize` is best-effort**: it redacts high-confidence secret prefixes

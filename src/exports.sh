@@ -84,6 +84,37 @@ o_export_stale() {
     return 1
 }
 
+# o_export_stale_ids <metadata.json> -> per-session staleness, one line per
+# RECORDED session that is no longer current: `id<TAB>stale` when the DB's
+# `time_updated` moved past the run's recorded `updated`, `id<TAB>missing` when
+# the session is gone. Sessions that are still current emit NOTHING. Same query
+# and same second-resolution rule as `o_export_stale`, so the per-session marks
+# of `exports view` can never disagree with the run-level verdict.
+o_export_stale_ids() {
+    local meta="$1"
+    [ -f "$meta" ] || return 0
+    local nrec
+    nrec=$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)
+    [ "${nrec:-0}" -gt 0 ] || return 0
+    local inlist id ts
+    inlist=$(jq -r '[.session_records[].id | @sh] | join(",")' "$meta" 2>/dev/null)
+    local -A osi_live=()
+    while IFS=$'\t' read -r id ts; do
+        [ -n "$id" ] && osi_live["$id"]="$ts"
+    done < <(o_q -separator $'\t' "SELECT id, time_updated FROM session WHERE id IN ($inlist)" 2>/dev/null)
+    local rec_iso rec_s cur_s
+    while IFS=$'\t' read -r id rec_iso; do
+        [ -n "$id" ] || continue
+        if [ -z "${osi_live[$id]+x}" ]; then
+            printf '%s\tmissing\n' "$id"; continue
+        fi
+        rec_s=$(date -u -d "$rec_iso" +%s 2>/dev/null) || continue
+        cur_s=$(( ${osi_live[$id]} / 1000 ))
+        [ "$cur_s" -gt "$rec_s" ] && printf '%s\tstale\n' "$id"
+    done < <(jq -r '.session_records[] | [.id, (.updated // "")] | @tsv' "$meta")
+    return 0
+}
+
 oced_exports() {
     local cmd="${1:-list}"
     case "$cmd" in
@@ -93,7 +124,7 @@ oced_exports() {
         view)   shift; oced_exports_view "$@" ;;
         verify) shift; oced_exports_verify "$@" ;;
         update) shift; oced_exports_update "$@" ;;
-        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]|verify [--tsv]|update <stamp> [--mode delta|accumulative] [--sticky stale|always|never] [--include-excluded all|ID,ID] [--keep-history] [--dry-run] [--json] [--yes]]"; return 1 ;;
+        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]|verify [--tsv]|update <stamp> [--mode delta|accumulative] [--sticky stale|always|never] [--include-excluded ID,ID] [--keep-history] [--dry-run] [--json] [--yes]]"; return 1 ;;
     esac
 }
 
@@ -177,8 +208,8 @@ oced_exports_list() {
         fi
         [ -n "$lrtag" ] && lrtag=" ($lrtag)"
         local lrsess_cell="${lrsess:-$roots roots ($subs subagent)}"
-        rows+=("$(printf '  %d.  %-16s  %-34s  %-38s  %s msgs · %s comp · %s%s%s  %s' \
-            "$((${#rows[@]} + 1))" "$human_date" "$profiles" "$lrsess_cell" "$msgs" "$comp" "$(o_human_size "$size")" "$lrtag" "$lrrefresh" "$lrpreset")")
+        rows+=("$(printf '  %d.  %-16s  %-34s  %-38s  %s msgs · %s comp · %s  %s%s%s' \
+            "$((${#rows[@]} + 1))" "$human_date" "$profiles" "$lrsess_cell" "$msgs" "$comp" "$(o_human_size "$size")" "$lrpreset" "$lrtag" "$lrrefresh")")
     done
     echo "== Exports (${#runs[@]}) =="
     if [ "${#rows[@]}" -eq 0 ]; then
@@ -478,10 +509,18 @@ oced_exports_view() {
     if [ -n "$rec_meta" ]; then
         echo ""
         echo "== Sessions =="
-        # The free-text title goes LAST and is never padded: bash printf counts
-        # BYTES in %-Ns, so a padded title column desynchronises the layout as
-        # soon as a title carries an accent or a CJK glyph.
-        local sid skind stitle screated supdated when
+        # The per-session staleness marks resolved once from the SAME rule the
+        # run-level `freshness:` line uses, so the dedicated section can never
+        # contradict the verdict above.
+        local -A ses_state=()
+        local _mk _st
+        while IFS=$'\t' read -r _mk _st; do
+            [ -n "$_mk" ] && ses_state["$_mk"]="$_st"
+        done < <(o_export_stale_ids "$rec_meta")
+        local -A ses_info=()
+        local sid skind stitle screated supdated when sflag
+        # Collect all session rows first so we can order stale/missing first
+        local -a all_rows=()
         while IFS=$'\t' read -r sid skind stitle screated supdated; do
             [ -n "$sid" ] || continue
             if [ "$screated" = "$supdated" ]; then
@@ -489,8 +528,50 @@ oced_exports_view() {
             else
                 when="${screated:0:16} -> ${supdated:0:16}"
             fi
-            printf '  %-22s %-8s  %-25s %s\n' "$sid" "$skind" "$when" "$stitle"
+            sflag="${ses_state[$sid]:-}"
+            ses_info["$sid"]="$skind"$'\t'"$when"$'\t'"$stitle"$'\t'"$sflag"
+            # store for sorting: stale/missing get priority
+            if [ -n "$sflag" ]; then
+                all_rows+=("1"$'\t'"$sid"$'\t'"$skind"$'\t'"$when"$'\t'"$stitle")
+            else
+                all_rows+=("0"$'\t'"$sid"$'\t'"$skind"$'\t'"$when"$'\t'"$stitle")
+            fi
         done < <(oced_export_session_rows "$rec_meta")
+        # Print with stale/missing first (by last use / updated time desc as they appear)
+        local pr pflag psid pskind pwhen pstitle
+        for pr in "${all_rows[@]}"; do
+            IFS=$'\t' read -r pflag psid pskind pwhen pstitle <<< "$pr"
+            printf '  %-22s %-8s  %-25s %s\n' "$psid" "$pskind" "$pwhen" "$pstitle"
+        done
+        # Summary counts
+        local n_stale=0 n_missing=0
+        local -a stale_list=() missing_list=()
+        for _mk in "${!ses_state[@]}"; do
+            case "${ses_state[$_mk]}" in
+                stale)   n_stale=$((n_stale + 1)); stale_list+=("$_mk") ;;
+                missing) n_missing=$((n_missing + 1)); missing_list+=("$_mk") ;;
+            esac
+        done
+        if [ "$n_stale" -gt 0 ] || [ "$n_missing" -gt 0 ]; then
+            local parts=""
+            [ "$n_stale" -gt 0 ] && parts="$n_stale stale"
+            [ "$n_missing" -gt 0 ] && parts="${parts:+$parts, }$n_missing missing"
+            printf '\n  %s session(s) changed since export: %s\n' \
+                "$((n_stale + n_missing))" "$parts"
+            echo ""
+            echo "== Changed since export =="
+            local asid askind aswhen astitle astat
+            # print stale first, then missing
+            local al
+            for al in "${stale_list[@]}"; do
+                IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
+                printf '  %-22s %-8s  %-25s  %-8s  %s\n' "$al" "$askind" "$aswhen" "stale" "$astitle"
+            done
+            for al in "${missing_list[@]}"; do
+                IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
+                printf '  %-22s %-8s  %-25s  %-8s  %s\n' "$al" "$askind" "$aswhen" "missing" "$astitle"
+            done
+        fi
     fi
 
     # WHICH sessions the run LEFT OUT (`.excluded`: in scope but deliberately not
