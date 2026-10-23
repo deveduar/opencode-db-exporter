@@ -106,7 +106,7 @@ Mode switching and bulk operations are their own rows.
 - **sessions** — details only; pick a row for `info` + digests.
 - **shrinks** — create (3-step wizard: sessions → recipe → plan) + manage; `swap` requires typing `confirm`, checks staleness first.
 - **export** — preset-only: (1) mark root sessions (subagents hidden by default, cascade included), (2) pick preset, (3) confirm with effective selection shown.
-- **export runs** — view/remove/prune past runs.
+- **export runs** — view/update/remove/prune past runs.
 
 ## Export
 
@@ -138,9 +138,10 @@ opencode-db export rag --cap 3000        # per-run override
 ## Managing export runs
 
 ```bash
-opencode-db exports list              # date / profile / counts / size per run
-opencode-db exports view <stamp>      # detail: banner, per-product summary, totals, one block per product
+opencode-db exports list              # date / profile / counts / size / preset / freshness / refresh
+opencode-db exports view <stamp>      # detail: banner, per-product summary, totals, sessions, "Changed since export" (stale/missing), excluded
 opencode-db exports view <stamp> --files   # + produced files with sizes
+opencode-db exports update <stamp>    # refresh in place (delta by default; --mode accumulative to reopen scope)
 opencode-db exports remove <stamp>    # delete one run (asks; --yes to skip)
 opencode-db exports prune 5           # keep only the 5 most recent runs
 ```

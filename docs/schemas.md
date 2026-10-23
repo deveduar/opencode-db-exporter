@@ -689,6 +689,13 @@ naming because the data shapes are not uniform:
   without the line the two are indistinguishable.
 - `freshness:` is the same `o_export_stale` verdict as `list`/`verify`, spelled out:
   `fresh (…)`, `STALE — <reason>` or `unverifiable (no session_records recorded)`.
+- `== Sessions ==` lists the run's `.session_records` (id, kind, created → updated,
+  title). The rows that are no longer current in the live DB are sorted FIRST, then a
+  summary line (`N session(s) changed since export: K stale[, M missing]`) and a
+  dedicated `== Changed since export ==` block naming each affected session (id, kind,
+  dates, the bare word `stale`/`missing`, title). The block and the run-level
+  `freshness:` line come from the same per-session rule (`o_export_stale_ids`), so they
+  cannot disagree; the main list carries no trailing mark.
 - A `== Excluded (N kept out of scope) ==` block follows `== Sessions ==` when
   `.excluded` is non-empty: `id + title` per left-out session, capped at 8 with `… N more`
   (like `shrinks view`). This is the run's own GAP — the reason a `--sessions` run is not
