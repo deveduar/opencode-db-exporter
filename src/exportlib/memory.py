@@ -3,10 +3,12 @@ import json
 from datetime import datetime, timezone
 
 from exportlib import TOOL_VERSION
+from exportlib.flags import effective_flags
 from exportlib.db import digests_for, load_messages, load_todos, touched_files
 from exportlib.sanitize import sanitize
 from exportlib.util import (
     model_str,
+    selection_label,
     selection_meta,
     session_record,
     sha256_file,
@@ -93,7 +95,8 @@ def memory_subagent_ref(sessions, sid: str) -> dict:
     }
 
 
-def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0) -> None:
+def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0,
+                  scope: dict | None = None, excluded: list | None = None) -> None:
     # Stream the corpus line by line: one root + its subagents = one JSON line,
     # written to disk immediately. The corpus is never accumulated in memory (it
     # can be larger than the DB itself when --cap is off), which keeps the peak
@@ -142,7 +145,14 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     # copy is metadata.json `.preset`); a plain product keyword has no preset.
     if getattr(args, "preset", None):
         idx_rows.insert(5, f"| Preset | `{args.preset}` |")
-    if args.sessions:
+    if getattr(args, "update_from", None):
+        # An updated run materializes its target set as --sessions, but the index
+        # must read like the base run it refreshes, not list hundreds of ids.
+        idx_rows.append(f"| Selection | {selection_label(args)} |")
+        idx_rows.append(
+            f"| Updated from | `{args.update_from}` ({args.update_mode or 'delta'}) |"
+        )
+    elif args.sessions:
         idx_rows.append(f"| Sessions | `{', '.join(args.sessions)}` |")
     elif args.filter:
         idx_rows.append(f"| Filter | `{args.filter}` |")
@@ -181,6 +191,11 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "filter": args.filter,
         "sessions_selected": args.sessions,
         "selection": selection_meta(args),
+        "scope": scope,
+        "excluded": excluded or [],
+        "flags": effective_flags(args),
+        **({"updated_from": args.update_from, "update_mode": args.update_mode or "delta"}
+           if getattr(args, "update_from", None) else {}),
         "profile": "memory",
         "preset": args.preset,
         "sub": args.sub,

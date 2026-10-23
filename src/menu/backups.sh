@@ -18,16 +18,20 @@ oc_backups_rows() {
         printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
     [ -f "$m" ] || { printf '__NONE__\t(no backups yet)\n'; return 0; }
-    local file dt sz szh ss ms sha orderjq
+    local file dt sz szh ss ms sha mu orderjq
+    local live_s live_m live_u
+    # One live query for every row; each row carries ` (stale)` when it differs
+    # from the live DB — the same tag `backups list` shows (o_backup_row_tag).
+    IFS=$'\t' read -r live_s live_m live_u < <(o_backup_live_counts)
     # Same sort the human list uses; `old` flips it. Bulk rows keep newest-first.
     orderjq='.backups | sort_by(.date)'
     [ "$order" = "newest" ] && orderjq="$orderjq | reverse"
-    jq -r "$orderjq"' | .[] | [.file, (.date|sub("T";" ")|sub("Z$";"")), (.size|tostring), (.sessions|tostring), ((.messages//0)|tostring), ((.sha256//"-")[:8])] | @tsv' "$m" \
-    | while IFS=$'\t' read -r file dt sz ss ms sha; do
+    jq -r "$orderjq"' | .[] | [.file, (.date|sub("T";" ")|sub("Z$";"")), (.size|tostring), (.sessions|tostring), ((.messages//0)|tostring), ((.sha256//"-")[:8]), ((.max_updated//0)|tostring)] | @tsv' "$m" \
+    | while IFS=$'\t' read -r file dt sz ss ms sha mu; do
         szh=$(o_human_size "$sz")
         # MENU ONLY: the manifest date is UTC; show it in local time here.
         dt=$(o_local_ts "$dt")
-        printf '%s\t%s\n' "$file" "$(printf '%s  %-9s  %5s sess  %6s msg  sha:%s' "$dt" "$szh" "$ss" "$ms" "$sha")"
+        printf '%s\t%s\n' "$file" "$(printf '%s  %-9s  %5s sess  %6s msg  sha:%s%s' "$dt" "$szh" "$ss" "$ms" "$sha" "$(o_backup_row_tag "$ss" "$ms" "$mu" "$live_s" "$live_m" "$live_u")")"
     done
 }
 

@@ -6,11 +6,13 @@ import json
 from datetime import datetime, timezone
 
 from exportlib import TOOL_VERSION
+from exportlib.flags import effective_flags
 from exportlib.db import load_faithful
 from exportlib.sanitize import sanitize_json
 from exportlib.util import (
     model_str,
     safe_filename,
+    selection_label,
     selection_meta,
     session_record,
     sha256_file,
@@ -70,7 +72,8 @@ def _write_session_json(con, s: dict, json_path, sanitize_on: bool) -> dict:
     return data
 
 
-def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0) -> None:
+def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0,
+                    scope: dict | None = None, excluded: list | None = None) -> None:
     """The `faithful` product: one `.json` per root session, with its subagents
     under `subagents/`. The session hierarchy mirrors `transcript` (numbered
     session folders) so the two products correlate, but only JSON is written."""
@@ -123,7 +126,14 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     ]
     if getattr(args, "preset", None):
         idx_rows.insert(5, f"| Preset | `{args.preset}` |")
-    if args.sessions:
+    if getattr(args, "update_from", None):
+        # An updated run materializes its target set as --sessions, but the index
+        # must read like the base run it refreshes, not list hundreds of ids.
+        idx_rows.append(f"| Selection | {selection_label(args)} |")
+        idx_rows.append(
+            f"| Updated from | `{args.update_from}` ({args.update_mode or 'delta'}) |"
+        )
+    elif args.sessions:
         idx_rows.append(f"| Sessions | `{', '.join(args.sessions)}` |")
     elif args.filter:
         idx_rows.append(f"| Filter | `{args.filter}` |")
@@ -155,6 +165,11 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
         "filter": args.filter,
         "sessions_selected": args.sessions,
         "selection": selection_meta(args),
+        "scope": scope,
+        "excluded": excluded or [],
+        "flags": effective_flags(args),
+        **({"updated_from": args.update_from, "update_mode": args.update_mode or "delta"}
+           if getattr(args, "update_from", None) else {}),
         "profile": "faithful",
         "preset": args.preset,
         "no_subagents": bool(args.no_subagents),

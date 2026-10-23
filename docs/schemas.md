@@ -41,6 +41,7 @@ in sync by construction.
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
 | `snapshot` | string | `"fresh"` | **single preset only** (never per-product/bundle): coordinate the export + the reference backup — CLI warns, menu offers a fresh backup, when no backup exists or the last one diverged from the live DB |
 | `out` | string | — | CLI-only (never a preset key) |
+| `last` / `since` | int / date | — | CLI-only selection rules (never preset keys): a recency rule is recomputed every run |
 
 Unknown keys fail (`additionalProperties: false`). Flags that a product ignores are
 harmless. CLI overrides win: an explicit `--filter`/`--sessions` voids the whole
@@ -144,6 +145,15 @@ the same conditional `Preset` row.
      "parent_id": "ses_a", "created": "…Z", "updated": "…Z"}
   ],
   "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
+  "scope": {"rule": "all"},             // the BROADER selection the run was DRAWN FROM (same rule shapes); differs from
+                                        // `selection` exactly when the CLI/menu narrowed it. `exports update` re-opens it.
+  "excluded": [                         // `scope_match - written`: what was in scope but deliberately left out (the menu's
+    {"id": "ses_x", "title": "…"}       // marks, or a drop flag). The gap `exports update` can revive; never folded with the
+  ],                                    // no_subagents/orphan policy (re-applied at write time). Always present.
+  "flags": {"sub": "full", "…": "…"},   // the EFFECTIVE content flags of the run (the recipe `exports update` replays), from
+                                        // flags.effective_flags(args): every FLAGS key with its resolved value. Always present.
+  "updated_from": "2026-10-19_13-36",   // R?: present only on a REFRESHED run — the stamp it was refreshed from (== its own)
+  "update_mode": "delta",               // R?: present only on a refreshed run — delta | accumulative
   "profile": "transcript",              // product keyword: transcript | memory | digest | faithful (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
   "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
@@ -220,13 +230,43 @@ subagent flag) nothing in `metadata.json` recorded the resulting set, so
   counts use. `parent_id` is `null` when there is none, never `""`.
 - Dates are ISO-8601 UTC (`ts_iso`), like every other date in the machine artifacts.
 
+### `scope`, `excluded`, `flags` (and how `exports update` reads them)
+
+`selection` says what the run **contains**; `scope` says the **broader set it was drawn
+from**. They are identical for a plain run and differ exactly when the CLI/menu narrowed
+it (e.g. a preset pins `filter X`, the menu marks a subset → `--sessions`): then
+`selection` is the subset and `scope` is the whole rule. `excluded` is the pure fact
+`scope_match − written` — the sessions that were reachable but deliberately left out — and
+is what `exports update` may revive: `--sticky stale` (default) revives an excluded session
+only once it was edited, `--sticky never` refuses even that (a dropped session stays
+dropped), and `--include-excluded all` reopens the gap unconditionally. `--include-excluded all`
+and `--mode accumulative` land on the **same** set — `in_scope == still ∪ new ∪ ex_live`, so
+"bring everything back" is one action — which is why the menu offers a single reopen row (the
+`all`/ids forms stay on the CLI). It is **not** folded
+with a run's own `no_subagents`/orphan policy, because that policy is re-applied at write
+time; folding it would make a drop flag look like a hand-picked exclusion.
+
+`flags` is the run's **effective** content flags (`flags.effective_flags(args)`), i.e. the
+recipe `exports update` replays. All three keys are always written.
+
+```jsonc
+// A refreshed run additionally carries its provenance (absent on a fresh run):
+"updated_from": "2026-10-19_13-36",   // the stamp refreshed (== its own — the stamp never moves)
+"update_mode": "delta"                // delta | accumulative
+```
+
+The run **keeps its stamp** across a refresh (its place in `exports list`), so the surfaces
+that show the stamp also show the refresh next to it (`refreshed <time> (<mode>)` in
+`exports list`, `updated: <mode> mode (refreshed in place)` in `exports view`) — a legacy
+run without `.session_records` cannot be refreshed at all (there is no record of what it
+holds) and is reported `unverifiable`, never silently called fresh.
+
 A **subagent** is a session with a non-empty `parent_id` **whose parent row still
 exists**; a session whose parent is gone is an *orphan* and counts as a root
 everywhere (it has no parent to hide behind, and its parent can never be
 exported). The two inclusion flags are applied to the selected set BEFORE the
 hierarchy is resolved, so `sessions`, the index and the printed counts always
 describe the same set:
-
 | Flag | Effect |
 |---|---|
 | `--no-subagents` | every subagent is dropped (all products); orphans stay |
@@ -394,16 +434,38 @@ corpus indexes the same run — see *Consuming `corpus.jsonl`* under §3.
 `$OCED_BACKUP_DIR/manifest.json` — atomic `jq` update after each backup:
 
 ```json
-{"backups": [ { "date": "YYYY-MM-DD_HH-MM-SS", "file": "opencode-<stamp>.db[.gz]",
+{"backups": [ { "date": "YYYY-MM-DDTHH:MM:SSZ", "file": "opencode-<stamp>.db[.gz]",
                 "sha256_raw": "…", "sha256": "…",
                 "size_raw": 123456, "size": 45678,
                 "sessions": 6, "messages": 21, "parts": 140,
-                "max_updated": "…",              // newest message time_created (UTC)
+                "max_updated": "…",              // newest session time_updated (UTC)
                 "source": "/…/opencode.db" } ]}
 ```
 
 `sha256_raw`/`size_raw` refer to the un-gzipped snapshot; `sha256`/`size` to the
 stored file (identical when `OCED_COMPRESS=0`).
+
+The **pre-shrink safety copy** `shrink --swap` takes before replacing the live DB
+is a special, always-refreshed backup stored as a SINGLETON under `.pre_shrink`
+(never inside `.backups`, so `prune`/`[delete all]` can never drop it by count):
+
+```json
+{"backups": [ … ],
+ "pre_shrink": { "date": "YYYY-MM-DDTHH:MM:SSZ", "file": "pre-shrink/opencode.pre-shrink-<epoch>.db",
+                 "kind": "pre-shrink", "sha256": "…", "sha256_raw": "…",
+                 "size": 123456, "size_raw": 123456,
+                 "sessions": 6, "messages": 21, "parts": 140,
+                 "max_updated": "…", "source": "/…/opencode.db" }}
+```
+
+It is refreshed on every successful `--swap` (the previous `.pre_shrink` entry is
+replaced; the old file is removed), so exactly one exists while it exists. It
+belongs to the **shrink domain**: `shrinks preshrink` shows its details + sha256
+check + freshness, `shrinks preshrink remove` deletes the file and clears the
+singleton, and `--from-backup pre-shrink/<file>` resolves it read-only. It does
+NOT appear in `backups list`/`view`/`verify`/`remove` nor in the backups picker;
+`prune` ignores it. A `.pre_shrink` with no matching file on disk is reported by
+`shrinks preshrink` as `MISSING`.
 
 ---
 
@@ -564,12 +626,37 @@ which would count the same broken dir twice).
 `exports list` aggregates every `metadata.json` under a stamp directory:
 
 ```
-  N.  <YYY-MM-DD HH:MM UTC>  <profiles joined '+' +, order = dir sort>  <roots> roots (<subagents> subagent) · <msgs> msgs · <comp> comp · <size>
+  N.  <YYY-MM-DD HH:MM UTC>  <profiles joined '+' +, order = dir sort>  <K/N kept | N> · <R root S sub> · <msgs> msgs · <comp> comp · <size>[(<tag>)][ refreshed <date> (<mode>)]
 ```
 
 roots/subagents = max across metadata files, msgs/comp = sum (comp = the
 `compactions` **markers**), size = du of the stamp dir; a run with no readable
 metadata renders `profiles="?"`.
+
+The SIZE cell replaces the old bare `<roots> roots (<subagents> subagent)`, which
+alone hid how big the run really was (3 roots can be 3 sessions or 22). A **full** run
+prints just `N · R root S sub`; a **narrowed** run (`.excluded` non-empty) prints
+`K/N kept · R root S sub`, where `K` = `.session_records` length (or
+`roots+subagents` when there are none) and `N` = `K + len(.excluded)` — the excluded
+count is the difference `N - K`, so it is not repeated — so a `--sessions`
+run can never be mistaken for a full one. The short root/sub breakdown always rides
+along; the menu picker row uses the same cell, and marks a refreshed run
+with ` ⟳` instead of the `<mode>` sentence the CLI keeps.
+
+The two trailing decoration fields are both optional and answer two different
+questions:
+
+- `(<tag>)` is the **freshness** verdict from `o_export_stale … --tag`: `stale` (a
+  recorded session was edited since the run), `missing` (a recorded session is gone
+  from the live DB) or `unverifiable` (no `.session_records` — a legacy run). Absent =
+  fresh.
+- `refreshed <date> (<mode>)` names the refresh, read from `.update_mode`/`.date`. It
+  exists because a refresh keeps the stamp, so without it a real update would read as
+  "same run, same date".
+
+`exports verify [--tsv]` audits every run against the SAME verdict (`--tsv` emits
+`stamp<TAB>tag` rows). `exports update <stamp>` refreshes in place (see §5 of
+`architecture.md` and the metadata subsection above).
 
 `exports view <stamp>` is a **detail screen**, so it leads with a banner
 (`== Export run: <stamp> ==`), then one summary line per product, the aggregate
@@ -591,6 +678,19 @@ naming because the data shapes are not uniform:
   the keys its metadata actually has (`cap: 0`/`touched_files: false` were rendered
   for every transcript before), and the sessions a run contains come from
   `.session_records`.
+- `scope:` (when `.scope` is present) is the wider set the run was drawn from, rendered
+  by the **same** `util.selection_phrase()` that names `.selection` (a legacy run has no
+  `.scope`, so the line is absent). It differs from `selection:` exactly when the run was
+  narrowed — printing both is what makes the gap legible.
+- `updated:` appears only on a refreshed run (`<mode> mode (refreshed in place)`),
+  read from `.update_mode`; the `date:` above it is already the refresh time, so
+  without the line the two are indistinguishable.
+- `freshness:` is the same `o_export_stale` verdict as `list`/`verify`, spelled out:
+  `fresh (…)`, `STALE — <reason>` or `unverifiable (no session_records recorded)`.
+- A `== Excluded (N kept out of scope) ==` block follows `== Sessions ==` when
+  `.excluded` is non-empty: `id + title` per left-out session, capped at 8 with `… N more`
+  (like `shrinks view`). This is the run's own GAP — the reason a `--sessions` run is not
+  a full export — and it is deliberately separate from the content.
 
 `--json` returns one metadata record per product as a JSON array (the raw
 `metadata.json` contents, no banner, no aggregation). Only the

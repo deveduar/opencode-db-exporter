@@ -631,6 +631,17 @@ def _cli() -> int:
                 return 1
             print(selection_phrase(meta))
             return 0
+        if cmd == "selection-phrase":
+            # selection-phrase < {"selection": {...}} -> the human phrase for an
+            # arbitrary stored selection object already lifted onto stdin. Used
+            # by `exports view` to render `.scope` with the SAME rules that name
+            # `.selection`, so scope and selection can never disagree.
+            try:
+                meta = json.load(sys.stdin)
+            except ValueError:
+                return 1
+            print(selection_phrase(meta))
+            return 0
         if cmd == "subagents":
             if len(args) < 2:
                 return 1

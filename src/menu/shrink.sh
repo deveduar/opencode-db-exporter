@@ -299,6 +299,16 @@ oc_shrinks_rows() {
     printf '__CREATE__\t[>] create shrink copy\n'
     printf '__SWAP__\t[>] swap a copy into the LIVE DB\n'
     printf '__VERIFY__\t[?] verify\n'
+    # The pre-shrink safety copy of the last --swap belongs to the SHRINK domain:
+    # it gets its own removal flow (never a backups row). Shown only when one is
+    # registered, so it never appears on a machine that never swapped.
+    local prec psz
+    prec=$(preshrink_manifest_record)
+    if [ -n "$prec" ]; then
+        psz=$(printf '%s' "$prec" | jq -r '.size // 0')
+        printf '%s\t%s\n' "__PRESHRINK__" \
+            "$(printf '[>] remove pre-shrink safety copy  (%s)' "$(o_human_size "$psz")")"
+    fi
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$order" = "newest" ]; then
         oc_toggle_row "newest first" "old first" "__TOGGLE_ORDER__"
@@ -415,7 +425,17 @@ oc_shrinks_picker() {
                     menu_pause "Shrink copy" || return 0
                     continue
                     ;;
-            __SWAP__)       oc_shrinks_swap_pick; [ $? -eq 2 ] && return 0; continue ;;
+                __SWAP__)       oc_shrinks_swap_pick; [ $? -eq 2 ] && return 0; continue ;;
+            __PRESHRINK__)
+                # Destructive: show the details (file/sha/freshness), then a
+                # plain y/N. The row only exists when a pre-shrink was recorded.
+                run_oced_tool shrinks preshrink
+                if confirm_action "Remove this pre-shrink safety copy (your rollback of the last swap)?"; then
+                    run_oced_tool shrinks preshrink remove --yes
+                fi
+                menu_pause "Shrinks" || return 0
+                continue
+                ;;
             __VERIFY__)     run_oced_tool shrinks verify; menu_pause "Shrinks Verify" || return 0; continue ;;
             __REPORT_ALL__)
                 # One header, then one `shrinks view` per copy and a SINGLE pause:

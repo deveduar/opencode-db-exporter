@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from exportlib.config import default_presets
-from exportlib.util import die
+from exportlib.util import die, selection_meta
 from exportlib.flags import (
     FLAGS,
     PRODUCTS,
@@ -63,6 +63,40 @@ def _flag(k: str) -> str:
 
 def flag_in_argv(flag: str) -> bool:
     return any(a == flag or a.startswith(flag + "=") for a in sys.argv)
+
+
+def preset_selection(name) -> dict | None:
+    """The selection a named preset CARRIES, as a metadata-shaped rule.
+
+    `_apply_selection` returns early the moment the CLI narrows a preset with
+    `--sessions`, so the preset's own `filter`/`sessions` never reaches `args`;
+    to record what the run was DRAWN FROM (metadata `.scope`) the selection has
+    to be read back from the file. None = the preset carries no selection of its
+    own (or the name is unknown / no file)."""
+    if not name:
+        return None
+    pdata = load_presets().get(name) or {}
+    if pdata.get("filter") is not None:
+        return {"rule": "filter", "value": pdata["filter"]}
+    if pdata.get("sessions") is not None:
+        return {"rule": "sessions", "ids": list(pdata["sessions"])}
+    return None
+
+
+def scope_meta(args) -> dict:
+    """metadata `.scope`: the BROAD selection the run was drawn FROM, as opposed
+    to `.selection`, which is what it contains. They differ exactly when the CLI
+    narrowed a preset (`--sessions` marks a subset of the scope), and that gap is
+    what `exports update` re-opens (the gap itself is recorded as `.excluded`).
+
+    The rules are the same four as `.selection`, so `selection_phrase()` reads a
+    `.scope` too without any new vocabulary."""
+    if getattr(args, "scope_json", None):
+        return selection_meta(args)  # explicit hand-off from `exports update`
+    if flag_in_argv("--sessions"):
+        name = getattr(args, "preset_name", None) or getattr(args, "preset", None)
+        return preset_selection(name) or {"rule": "all"}
+    return selection_meta(args)
 
 
 def _validate_value(name: str, k: str, v) -> None:

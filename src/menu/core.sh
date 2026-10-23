@@ -83,6 +83,16 @@ run_oced_tool() {
     return 0
 }
 
+# run_oced_tool_json <command...> -> capture the dispatcher's stdout WITHOUT
+# echoing it (the planner calls that must stay off the screen). It is the ONE
+# deliberate exception to the "streams, never captures" rule above, so it is
+# SAFE ONLY for read-only subcommands that NEVER ask anything on stdin — a
+# `--dry-run`/`--json` plan, never a create/swap. A prompt behind a capture
+# would re-introduce the frozen-menu bug the streaming contract exists to stop.
+run_oced_tool_json() {
+    bash "$OC_DISPATCHER" "$@" 2>/dev/null
+}
+
 #-----------------------------------------------------------------------
 # Light spinner for the heavy commands that stay QUIET for a while before
 # their one-line result (backup create, shrink create / --swap). It is:

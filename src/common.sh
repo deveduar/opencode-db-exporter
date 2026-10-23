@@ -10,6 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 OCED_HOME_CONF_DIR="$HOME/.config/opencode-db"
 OCED_REPO_ROOT="${SCRIPT_DIR%/src}"
 OCED_PORTABLE=0
+# Install markers (both overridable so tests never touch the real HOME): the
+# symlink install.sh creates is what "already installed" means. Additive, not
+# per-file; a home conf alone is not an install.
+OCED_BIN="${OCED_BIN:-$HOME/.local/bin/opencode-db}"
+OCED_PREFIX="${OCED_PREFIX:-$HOME/.local/share/opencode-db-exporter}"
+
+# oc_is_installed -> 0 when the tool is installed (the shim exists).
+oc_is_installed() { [ -e "$OCED_BIN" ]; }
 
 o_cfg_default() { # <file> -> path; home file wins, repo shipped fallback.
     [ -f "$OCED_HOME_CONF_DIR/$1" ] && { printf '%s/%s' "$OCED_HOME_CONF_DIR" "$1"; return 0; }
@@ -210,6 +218,33 @@ o_backup_aligned() {
             printf 'out of sync\n'
         fi
         return 1
+    fi
+}
+
+# o_backup_live_counts -> "sessions<TAB>messages<TAB>max_updated" of the LIVE DB.
+# One place for the three numbers every per-row freshness check compares, so a
+# list of N backups runs ONE live query instead of 3N (o_backup_aligned queries
+# for one entry; a list must not call it per row).
+o_backup_live_counts() {
+    local ts tm tu
+    ts=$(o_q "SELECT count(*) FROM session" 2>/dev/null || echo 0)
+    tm=$(o_q "SELECT count(*) FROM message" 2>/dev/null || echo 0)
+    tu=$(o_q "SELECT max(time_updated) FROM session" 2>/dev/null || echo 0)
+    printf '%s\t%s\t%s' "$ts" "$tm" "$tu"
+}
+
+# o_backup_row_tag <sess> <msg> <max_updated> <live_sess> <live_msg> <live_max>
+# -> " (stale)" when the entry differs from the live DB, empty when aligned. The
+# SAME comparison `o_backup_aligned` makes, but pure: `backups list` and the menu
+# picker pass their precomputed live counts, so the two rows cannot disagree.
+# Only the anomaly is tagged (like `shrinks list`): a backup older than the last
+# activity is stale, which is the normal state of history, so the aligned copy is
+# the one worth seeing clean.
+o_backup_row_tag() {
+    if [ "$1" = "$4" ] && [ "$2" = "$5" ] && [ "$3" = "$6" ]; then
+        printf ''
+    else
+        printf ' (stale)'
     fi
 }
 

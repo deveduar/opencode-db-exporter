@@ -411,8 +411,27 @@ SINGLE_ONLY_KEYS: tuple[str, ...] = ("snapshot",)
 # Selection rules that exist ONLY on the CLI. They are deliberately not preset
 # keys: `out` is an environment/output concern a plan must never pin, and
 # `last`/`since` are recency rules, whose set changes every time they run (a plan
-# is a repeatable recipe). Mirrors shrink's KEEP_RULE_KEYS split.
+# is a repeatable recipe). Mirrors shrink's KEEP_RULE_KEYS split. (Refresh-in-place
+# is not a flag at all: it is the run-level `opencode-db exports update`.)
 CLI_ONLY_KEYS: tuple[str, ...] = ("out", "last", "since")
+
+
+def effective_flags(args) -> dict:
+    """The content-shaping flags this run actually used, as a plain dict.
+
+    Recorded in metadata `.flags` because a run must be REPRODUCIBLE: the preset
+    name alone loses CLI overrides, and the top-level metadata only names a few of
+    them. `.flags` is what `exports update` feeds back into the pipeline, so a
+    delta never silently changes how a session is rendered. Excludes the selection
+    (it is `.scope`/`.selection`) and `out`/`snapshot` (workflow, not content)."""
+    skip = {"filter", "sessions", "snapshot"} | set(CLI_ONLY_KEYS)
+    out: dict = {}
+    for f in FLAGS:
+        if f.name in skip:
+            continue
+        v = getattr(args, f.name, None)
+        out[f.name] = bool(v) if f.flag_type == "bool" else v
+    return out
 
 PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
     p: [

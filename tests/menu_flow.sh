@@ -36,6 +36,7 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 . "$MOD/common.sh"
 . "$MOD/export.sh"
 . "$MOD/exports.sh"
+. "$MOD/backup.sh"
 . "$MOD/shrink.sh"
 
 pass=0; fail=0
@@ -125,7 +126,7 @@ printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked int
 echo "== help exports block stays in sync with FLAGS (flags.py --help-exports) =="
 HELPEXPORTS=$(python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports) || bad "flags.py --help-exports exited non-zero"
 printf '%s' "$HELPEXPORTS" | grep -q "^export products (default: transcript):" && ok "help block: products header" || bad "help block missing products header"
-for cli in filter sessions out sub tool-output patch mark-compactions no-reasoning summary-diffs role sanitize cap; do
+for cli in filter sessions out last since sub tool-output patch mark-compactions no-reasoning summary-diffs role sanitize cap; do
     printf '%s' "$HELPEXPORTS" | grep -q -- "--$cli" && ok "help block covers --$cli" || bad "help block missing --$cli"
 done
 
@@ -152,6 +153,40 @@ printf '%s' "$RUNOC" | grep -q 'menu_require_fzf' \
 printf '%s' "$RUNOC" | grep -q 'o_check_deps' \
     && ok "run_oc_menu checks the core deps (sqlite3/python3/jq/gzip) before drawing" \
     || bad "run_oc_menu missing the core deps check"
+printf '%s' "$RUNOC" | grep -q 'oc_root_extra_rows' \
+    && ok "run_oc_menu appends the extra rows (install/uninstall) per run" \
+    || bad "run_oc_menu ignores the extra rows"
+
+echo "== root extra rows: Install when NOT installed, Uninstall when installed =="
+# "Installed" is the shim install.sh creates (oc_is_installed -> OCED_BIN). Tests
+# point OCED_BIN at temp paths so no real HOME install is touched.
+NOSCRIPTS="$TMP/no-scripts"; mkdir -p "$NOSCRIPTS"
+ABSENT="$TMP/bin-absent"                       # never created -> not installed
+INSTALLED_BIN="$TMP/bin-installed"; : > "$INSTALLED_BIN"   # exists -> installed
+FAKEREPO="$TMP/fake-repo"; mkdir -p "$FAKEREPO"
+[ -z "$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)" ] \
+    && ok "no rows when not installed and the checkout ships neither script" \
+    || bad "extra rows leaked: $(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
+: > "$FAKEREPO/install.sh"
+EXTRA1=$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$FAKEREPO" oc_root_extra_rows)
+printf '%s\n' "$EXTRA1" | grep -qxF 'install|Install|fn:oc_menu_install' \
+    && ok "not installed offers Install" || bad "install row: [$EXTRA1]"
+printf '%s\n' "$EXTRA1" | grep -q '^uninstall' && bad "Uninstall shown while not installed" \
+    || ok "not installed does NOT offer Uninstall"
+: > "$FAKEREPO/uninstall.sh"
+EXTRA2=$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$FAKEREPO" oc_root_extra_rows)
+printf '%s\n' "$EXTRA2" | grep -qxF 'install|Install|fn:oc_menu_install' \
+    && ok "not installed + both scripts still offers Install only" || bad "install-only rows: [$EXTRA2]"
+printf '%s\n' "$EXTRA2" | grep -q '^uninstall' && bad "Uninstall shown while not installed (both scripts)" \
+    || ok "not installed + both scripts does NOT offer Uninstall"
+EXTRA3=$(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$FAKEREPO" oc_root_extra_rows)
+printf '%s\n' "$EXTRA3" | grep -qxF 'uninstall|Uninstall|fn:oc_menu_uninstall' \
+    && ok "installed offers Uninstall" || bad "uninstall row: [$EXTRA3]"
+printf '%s\n' "$EXTRA3" | grep -q '^install' && bad "Install shown while installed" \
+    || ok "installed does NOT offer Install"
+[ -z "$(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)" ] \
+    && ok "installed + no uninstall.sh offers nothing" \
+    || bad "rows leaked when installed without uninstall.sh: $(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
 
 echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
 reset
@@ -227,7 +262,52 @@ WANT=$(printf 'newer.db\nolder.db'); GOT=$(oc_backups_rows view | grep -oE '^(ol
 [ "$GOT" = "$WANT" ] && ok "backups rows default to newest first" || bad "backups newest-first: [$(printf '%s' "$GOT" | tr '\n' ' ')]"
 WANTOLD=$(printf 'older.db\nnewer.db'); GOTOLD=$(oc_backups_rows view old | grep -oE '^(older|newer)\.db')
 [ "$GOTOLD" = "$WANTOLD" ] && ok "backups rows flip to old first on --old" || bad "backups old-first: [$(printf '%s' "$GOTOLD" | tr '\n' ' ')]"
+
+# Per-row freshness tag (same fact `backups list` shows): an entry matching the
+# live DB is left clean, one that diverged carries ` (stale)`.
+LIVE_S=$(sqlite3 "$FAKE" "SELECT count(*) FROM session")
+LIVE_M=$(sqlite3 "$FAKE" "SELECT count(*) FROM message")
+LIVE_U=$(sqlite3 "$FAKE" "SELECT max(time_updated) FROM session")
+jq -n --argjson s "$LIVE_S" --argjson m "$LIVE_M" --argjson u "$LIVE_U" \
+    '{backups:[{file:"aligned.db", date:"2026-02-01T00:00:00Z", size:100, sessions:$s, messages:$m, max_updated:$u}]}' \
+    > "$OCED_BACKUP_DIR/manifest.json"
+oc_backups_rows view | grep -q '(stale)' && bad "picker tags an aligned copy as stale" \
+    || ok "picker leaves an aligned copy untagged"
+jq -n --argjson s "$LIVE_S" --argjson m "$LIVE_M" --argjson u "$LIVE_U" \
+    '{backups:[{file:"behind.db", date:"2026-02-01T00:00:00Z", size:100, sessions:($s+1), messages:$m, max_updated:$u}]}' \
+    > "$OCED_BACKUP_DIR/manifest.json"
+oc_backups_rows view | grep -qE 'behind\.db[[:space:]].*\(stale\)' && ok "picker tags a diverged copy (stale)" \
+    || bad "picker stale tag: $(oc_backups_rows view)"
 mv "$TMP/bk-manifest.orig.json" "$OCED_BACKUP_DIR/manifest.json"
+
+# The pre-shrink safety copy belongs to the SHRINK domain: `backups` never lists
+# or accepts it, and the shrinks picker owns the `__PRESHRINK__` flow row.
+cp "$OCED_BACKUP_DIR/manifest.json" "$TMP/bk-manifest.for-ps.json"
+jq -n '{backups:[{file:"fake-0.db", date:"2026-01-01T00:00:00Z", size:100, sessions:1, messages:2, sha256:"aaa"}],
+        pre_shrink:{date:"2026-01-09T00:00:00Z", file:"pre-shrink/opencode.pre-shrink-1.db",
+                    kind:"pre-shrink", sha256:"fff", size:2048, sessions:1, messages:0}}' \
+    > "$OCED_BACKUP_DIR/manifest.json"
+PSROWS=$(oc_backups_rows view)
+printf '%s\n' "$PSROWS" | grep -q 'pre-shrink' \
+    && bad "backups picker leaked the pre-shrink" || ok "backups picker never shows the pre-shrink"
+printf '%s\n' "$PSROWS" | grep -q 'fake-0.db' && ok "the pre-shrink singleton does not hide the regular backups" \
+    || bad "regular rows lost next to the singleton"
+: > "$CALLS"; call_log; confirm_action() { return 0; }
+qset "__TOGGLE__" "__DELETE_ALL__"
+oc_backups_picker >/dev/null
+grep -q 'pre-shrink' "$CALLS" && bad "delete-all tried to delete the pre-shrink" \
+    || ok "delete-all never targets the pre-shrink"
+SROWS=$(oc_shrinks_rows view)
+printf '%s\n' "$SROWS" | grep -q "^__PRESHRINK__${TAB}\[>\] remove pre-shrink safety copy" \
+    && ok "shrinks picker shows the __PRESHRINK__ flow row" || bad "preshrink row: [$SROWS]"
+: > "$CALLS"; call_log; confirm_action() { return 0; }
+qset "__PRESHRINK__"
+oc_shrinks_picker >/dev/null
+[ "$(sed -n 1p "$CALLS")" = "shrinks preshrink" ] \
+    && [ "$(sed -n 2p "$CALLS")" = "shrinks preshrink remove --yes" ] \
+    && ok "shrinks picker shows the pre-shrink details then removes it behind the gate" \
+    || bad "pre-shrink remove flow: $(cat "$CALLS")"
+cp "$TMP/bk-manifest.for-ps.json" "$OCED_BACKUP_DIR/manifest.json"
 
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
@@ -629,6 +709,15 @@ mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
     echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadata.json"
 done
+# `bbb` carries a preset so the row's LAST column can be asserted (a run with no
+# preset leaves that column empty — the column is the recipe the refresh replays).
+echo '{"profile":"transcript","preset":"notes","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/bbb/metadata.json"
+oc_exports_run_row bbb | grep -q 'notes$' \
+    && ok "the run row names the preset it came from as its last column" \
+    || bad "preset column: $(oc_exports_run_row bbb)"
+oc_exports_run_row aaa | grep -q 'full$' \
+    && bad "a run with no preset leaked the product into the preset column" \
+    || ok "a run with no preset leaves the preset column empty"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 qset "ccc"
@@ -673,6 +762,252 @@ qset "__TOGGLE__" "__DELETE_ALL__"
 oc_exports_picker >/dev/null
 [ ! -s "$CALLS" ] && ok "exports delete-all cancelled on 'n'" || bad "exports delete-all ran on 'n'"
 confirm_action() { return 0; }
+
+echo "== exports update: fila-run wizard (plan uncovered -> gate -> run) =="
+reset
+confirm_action() { return 0; }
+# Each ROW is a concrete update, and the engine's plan is printed BEFORE the
+# y/N gate (fzf is closed by then), never behind a re-run toggle. What is tested
+# is the dispatch: the row exists in view mode only, the plan probe runs, each
+# row carries its own flags into the run, and the gate guards the write.
+printf '%s\n' "$ER_VIEW" | grep -qxF "__UPDATE__${TAB}[>] update" \
+    && ok "exports view has the [>] update row" || bad "update row: $(printf '%s\n' "$ER_VIEW" | grep __UPDATE__)"
+# `update all runs` is NOT in LEVEL 1: it is the first row of LEVEL 2 (the update
+# run list), next to the runs it refreshes.
+printf '%s\n' "$ER_VIEW" | grep -q '^__UPDATE_ALL__' \
+    && bad "exports view renders the update all row (it belongs to LEVEL 2)" \
+    || ok "exports view has no update all row (it lives in the update list)"
+printf '%s\n' "$ER_REM" | grep -q '^__UPDATE_ALL__' \
+    && bad "exports remove mode renders the update all row" || ok "exports remove mode has no update all row"
+printf '%s\n' "$ER_REM" | grep -q '^__UPDATE__' \
+    && bad "exports remove mode renders the update row" || ok "exports remove mode has no update row"
+
+: > "$CALLS"
+# The wizard probes the plan (delta / accumulative) through the SILENT capture
+# helper and logs every other call; `UPDATE_PLAN_FN` shapes each probe so the row
+# labels (delta target, scope target, excluded, revived) can differ. delta carries
+# `revived` on purpose: it is the ONLY fact that tells whether `keep excluded out`
+# would differ from delta (it does exactly when delta would revive something).
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--mode accumulative"*) printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":22,"before":15,"new":0,"revived":7}}' ;;
+        *"--sticky never"*)      printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":14,"before":15,"new":0,"changed":1,"revived":0}}' ;;
+        *)                       printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":15,"before":15,"new":2,"changed":1,"revived":1}}' ;;
+    esac
+}
+call_log_update() {
+    run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }
+    run_oced_tool_json() {
+        printf '%s\n' "$*" >> "$CALLS"
+        UPDATE_PLAN_FN "$@"
+    }
+}
+call_log_update
+# LEVEL 3 receives the stamp already chosen by LEVEL 2, so it is called directly.
+oc_exports_update_modes ccc >/dev/null 2>&1
+grep -q "exports update ccc --dry-run --json" "$CALLS" \
+    && ok "the update modes screen probes the read-only plan first" || bad "update plan call: $(cat "$CALLS")"
+
+# The default row is delta: the run keeps its own set, no extra flag.
+: > "$CALLS"
+qset "__UPD_DELTA__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+grep -qx "exports update ccc --yes" "$CALLS" \
+    && ok "the default row runs update --yes (delta)" || bad "delta run: $(cat "$CALLS")"
+# The plan has to be printed BEFORE the gate: the row's own --dry-run must
+# precede the --yes run in the call log, or the user confirms blind.
+: > "$CALLS"
+qset "__UPD_DELTA__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+pdry=$(grep -n "exports update ccc --dry-run$" "$CALLS" | head -1 | cut -d: -f1)
+pyes=$(grep -n "exports update ccc --yes$" "$CALLS" | head -1 | cut -d: -f1)
+[ -n "$pdry" ] && [ -n "$pyes" ] && [ "$pdry" -lt "$pyes" ] \
+    && ok "the plan is printed before the update gate" || bad "plan/gate order: $(cat "$CALLS")"
+
+# A declined gate must not write; the accepted `__UPD_DELTA__` above already ran.
+: > "$CALLS"
+confirm_action() { return 1; }
+qset "__UPD_DELTA__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+printf '%s' "$(cat "$CALLS")" | grep -q "exports update ccc --yes" \
+    && bad "a declined update gate still ran" || ok "a declined update gate writes nothing"
+confirm_action() { return 0; }
+
+# The "no revive" row carries --sticky never, and it is offered ONLY when delta
+# would revive an excluded session (its `revived`) — otherwise it is the same
+# action as delta and two rows would say one thing.
+: > "$CALLS"
+qset "__UPD_NEVER__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+grep -qx "exports update ccc --yes --sticky never" "$CALLS" \
+    && ok "the no-revive row runs --sticky never" || bad "never run: $(cat "$CALLS")"
+: > "$CALLS"
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--mode accumulative"*) printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":22,"before":15,"new":0,"revived":7}}' ;;
+        *"--sticky never"*)      printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":14,"before":15,"new":0,"changed":1,"revived":0}}' ;;
+        *)                       printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":15,"before":15,"new":0,"changed":1,"revived":0}}' ;;
+    esac
+}
+# Capture the ROWS the modes screen renders (the fzf stub does not filter by key,
+# so the only honest way to assert a row is ABSENT is to look at what was piped).
+# LEVEL 3 opens ONE picker now (the run is already chosen by LEVEL 2).
+OCED_PLAN_ROWS="$TMP/upd-rows.txt"
+OCED_SEL_PRISTINE="$TMP/ocsel.pristine"
+declare -f oc_fzf_sel > "$OCED_SEL_PRISTINE"
+oc_fzf_sel() { tee "$OCED_PLAN_ROWS" >/dev/null; return 130; }
+: > "$OCED_PLAN_ROWS"
+oc_exports_update_modes ccc >/dev/null 2>&1
+. "$OCED_SEL_PRISTINE"
+grep -q '^__UPD_NEVER__' "$OCED_PLAN_ROWS" \
+    && bad "the no-revive row was offered although delta would not revive" \
+    || ok "the no-revive row is hidden when it would equal delta"
+grep -q '^__UPD_DELTA__' "$OCED_PLAN_ROWS" \
+    && ok "the delta row is still rendered" || bad "delta row missing: $(cat "$OCED_PLAN_ROWS")"
+
+# Each row's arrow carries its OWN target: delta revives (target 15), `never`
+# does not (target 14), and the two must NOT be swapped — the bug this guards
+# printed delta's target on the never row.
+: > "$OCED_PLAN_ROWS"
+oc_fzf_sel() { tee "$OCED_PLAN_ROWS" >/dev/null; return 130; }
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--mode accumulative"*) printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":22,"before":15,"new":0,"revived":7}}' ;;
+        *"--sticky never"*)      printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":14,"before":15,"new":0,"revived":0}}' ;;
+        *)                       printf '{"up_to_date":false,"counts":{"excluded_total":7,"target":15,"before":15,"new":0,"revived":1}}' ;;
+    esac
+}
+oc_exports_update_modes ccc >/dev/null 2>&1
+. "$OCED_SEL_PRISTINE"
+grep -q '^__UPD_DELTA__	.*revive 1 edited → 15' "$OCED_PLAN_ROWS" \
+    && ok "the delta row names the revived edited session and lands on its own target" \
+    || bad "delta row label: $(grep '^__UPD_DELTA__' "$OCED_PLAN_ROWS")"
+grep -q '^__UPD_NEVER__	.*excluded stay out → 14' "$OCED_PLAN_ROWS" \
+    && ok "the never row lands on ITS target, not delta's" \
+    || bad "never row label: $(grep '^__UPD_NEVER__' "$OCED_PLAN_ROWS")"
+
+# The single reopen row carries --mode accumulative. `--include-excluded all`
+# lands on the SAME set (`in_scope == still ∪ new ∪ ex_live`), so the menu offers
+# ONE reopen action, never two rows for one effect.
+: > "$CALLS"
+qset "__UPD_SCOPE__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+grep -qx "exports update ccc --yes --mode accumulative" "$CALLS" \
+    && ok "the reopen row runs --mode accumulative (the one reopen action)" || bad "scope run: $(cat "$CALLS")"
+printf '%s\n' "$(cat "$CALLS")" | grep -q "include-excluded" \
+    && bad "the menu still offers --include-excluded (folded into accumulative)" \
+    || ok "no separate include-excluded row (one reopen action)"
+
+# A mode whose plan is a no-op (`up_to_date`) must NOT be offered: picking it
+# would print a plan and then do nothing. Here delta is a no-op with a gap and
+# `never` is a no-op too — only the scope row really moves, so it is the ONLY row.
+: > "$OCED_PLAN_ROWS"
+oc_fzf_sel() { tee "$OCED_PLAN_ROWS" >/dev/null; return 130; }
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--mode accumulative"*) printf '{"up_to_date":false,"counts":{"excluded_total":4,"target":6,"before":2,"new":0,"revived":4}}' ;;
+        *"--sticky never"*)      printf '{"up_to_date":true,"counts":{"excluded_total":4,"target":2,"before":2,"new":0,"revived":0}}' ;;
+        *)                       printf '{"up_to_date":true,"counts":{"excluded_total":4,"target":2,"before":2,"new":0,"revived":0}}' ;;
+    esac
+}
+oc_exports_update_modes ccc >/dev/null 2>&1
+. "$OCED_SEL_PRISTINE"
+grep -q '^__UPD_DELTA__' "$OCED_PLAN_ROWS" \
+    && bad "a no-op delta row was offered (it would do nothing)" \
+    || ok "a no-op delta row is not offered (no row that does nothing)"
+grep -q '^__UPD_NEVER__' "$OCED_PLAN_ROWS" \
+    && bad "a no-op never row was offered (it would do nothing)" \
+    || ok "a no-op never row is not offered"
+
+# ONE real action (here a full run with no gap: delta alone) SKIPS the picker
+# entirely: a one-row fzf screen only asks the user to press Enter. The action
+# runs straight through the plan+gate path.
+: > "$CALLS"
+call_log_update
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--sticky never"*|*"--mode accumulative"*)
+            printf '{"up_to_date":false,"counts":{"excluded_total":0,"target":3,"before":3,"new":0,"revived":0}}' ;;
+        *) printf '{"up_to_date":false,"counts":{"excluded_total":0,"target":3,"before":3,"new":0,"changed":1,"revived":0}}' ;;
+    esac
+}
+qset "__NONE__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+printf '%s' "$(cat "$CALLS")" | grep -q "exports update ccc --yes" \
+    && ok "a single-action run skips the picker and runs the update directly" \
+    || bad "single-action skip: $(cat "$CALLS")"
+# And it never opened the LEVEL 3 picker (no `oc_fzf_sel` with its prompt).
+printf '%s' "$(cat "$CALLS")" | grep -q "exports update ccc --dry-run$" \
+    && ok "the single action still prints the plan before the gate" \
+    || bad "single-action plan missing: $(cat "$CALLS")"
+
+# LEVEL 2 (the update run list): `[>] update all runs` is the FIRST row when there
+# is more than one run, and picking it refreshes every run behind ONE gate.
+: > "$CALLS"
+call_log_update
+UPD_ROWS=$( { mapfile -t _r < <(exports_runs_find); \
+              printf '__UPDATE_ALL__\n'; \
+              for _x in "${_r[@]}"; do oc_exports_run_row "${_x##*/}"; done; } 2>/dev/null )
+printf '%s\n' "$UPD_ROWS" | head -1 | grep -qx '__UPDATE_ALL__' \
+    && ok "update list leads with update all runs" || bad "update list first row: $(printf '%s\n' "$UPD_ROWS" | head -1)"
+qset "__UPDATE_ALL__"
+oc_exports_update_runs >/dev/null 2>&1
+n_all=$(grep -c "exports update .* --yes" "$CALLS")
+printf '%s' "$(cat "$CALLS")" | grep -q "exports update ccc --yes" \
+    && [ "$n_all" -ge 1 ] \
+    && ok "the update list dispatches update all runs behind one gate" \
+    || bad "update-all dispatch: $(cat "$CALLS")"
+
+# LEVEL 2 loops: after LEVEL 3 returns (run / decline / ESC) it REDRAWS the run
+# list instead of dropping to LEVEL 1. Two "exports (update)" prompts in a row
+# with a mode picked in between prove the loop; only ESC at LEVEL 2 leaves.
+: > "$CALLS"
+: > "$FZF_HIST"
+call_log_update
+# The run list is fed `ccc` first (run pick), then LEVEL 3 is fed a mode, then the
+# run list is redrawn and fed `ccc` again, then a second mode, then the run list is
+# redrawn a third time and ESC'd (empty queue -> 130). Two+ "exports (update)"
+# prompts with modes in between prove LEVEL 3 returns to LEVEL 2, not to LEVEL 1.
+qset "ccc" "__UPD_DELTA__" "ccc" "__UPD_SCOPE__"
+oc_exports_update_runs >/dev/null 2>&1
+n_upd=$(grep -cF 'exports (update)' "$FZF_HIST")
+[ "$n_upd" -ge 2 ] \
+    && ok "the update run list redraws after each modes screen (LEVEL 3 -> LEVEL 2)" \
+    || bad "update run list prompts: $n_upd ($(cat "$FZF_HIST"))"
+
+# A narrowed run whose own set did NOT move (up_to_date) but which still has a gap
+# must NOT be dismissed: "all in scope" is exactly the choice that would add the
+# sessions it left out, so the rows are still offered (regression guard: this
+# used to hit the "Nothing has moved" bail and hide the option entirely).
+: > "$CALLS"
+UPDATE_PLAN_FN() {
+    case "$*" in
+        *"--mode accumulative"*) printf '{"up_to_date":false,"counts":{"excluded_total":4,"target":6,"before":2,"new":0,"revived":4}}' ;;
+        *"--sticky never"*)      printf '{"up_to_date":true,"counts":{"excluded_total":4,"target":2,"before":2,"new":0,"revived":0}}' ;;
+        *)                       printf '{"up_to_date":true,"counts":{"excluded_total":4,"target":2,"before":2,"new":0,"revived":0}}' ;;
+    esac
+}
+qset "__UPD_SCOPE__"
+oc_exports_update_modes ccc >/dev/null 2>&1
+grep -qx "exports update ccc --yes --mode accumulative" "$CALLS" \
+    && ok "a narrowed-but-current run still offers all in scope" \
+    || bad "narrowed-current run: $(cat "$CALLS")"
+
+# A current run with NO gap has genuinely nothing to do: it says so, writes
+# nothing, and returns to LEVEL 2 (the caller `continue`s) — so the navigation
+# never drops the user back to LEVEL 1 mid-refresh.
+: > "$CALLS"
+UPDATE_PLAN_FN() { printf '{"up_to_date":true,"counts":{"excluded_total":0,"target":2,"before":2,"new":0,"revived":0}}'; }
+qset "ccc"
+oc_exports_update_modes ccc >/dev/null 2>&1
+rc_nm=$?
+printf '%s' "$(cat "$CALLS")" | grep -q "exports update ccc --yes" \
+    && bad "an up-to-date run with no gap still ran" \
+    || ok "an up-to-date run with no gap writes nothing"
+[ "$rc_nm" -eq 0 ] \
+    && ok "the nothing-moved path returns 0 (LEVEL 2 redraws, no navigation signal)" \
+    || bad "nothing-moved rc: $rc_nm"
+call_log
 
 echo "== export flow: preset + session/ALL selection -> runner =="
 reset
@@ -1242,6 +1577,14 @@ done
 echo "== symbol system: [>] flow · [?] inspect · [*] toggle · [word] bulk =="
 reset
 : > "$TMP/symbols.txt"
+reset
+# Sample every flow row: a `.pre_shrink` singleton makes the shrinks picker emit
+# its `__PRESHRINK__` row, so the `[>]` guard below really sees it.
+cp "$OCED_BACKUP_DIR/manifest.json" "$TMP/bk-manifest.sym.json"
+jq -n '{backups:[{file:"fake-0.db", date:"2026-01-01T00:00:00Z", size:100, sessions:1, messages:2, sha256:"aaa"}],
+        pre_shrink:{date:"2026-01-09T00:00:00Z", file:"pre-shrink/opencode.pre-shrink-1.db",
+                    kind:"pre-shrink", sha256:"fff", size:2048, sessions:1, messages:0}}' \
+    > "$OCED_BACKUP_DIR/manifest.json"
 ( oc_fzf_sel() { tee -a "$TMP/symbols.txt" | fzf "$@"; }
   qempty
   # the *pickers* pipe their rows through oc_fzf_sel (captured by the stub);
@@ -1250,6 +1593,9 @@ reset
     oc_exports_rows view; oc_exports_rows remove;
     oc_export_rows;   # the preset picker's own rows (its [?] explain row)
     oc_shrinks_rows view; oc_shrinks_rows remove; } >> "$TMP/symbols.txt" 2>/dev/null
+  # LEVEL 2 of the refresh flow is its own row producer now, and it is the ONLY
+  # place `__UPDATE_ALL__` lives — sample it or the [>] guard cannot see it.
+  oc_exports_update_runs >> "$TMP/symbols.txt" 2>/dev/null
   # The sessions BROWSE is in the sample on purpose: its __REPORT_ALL__ row is
   # the same vocabulary as the exports/shrinks ones, and until now nothing
   # sampled it, so a [>]/[*] leak there could not fail this guard.
@@ -1257,6 +1603,7 @@ reset
   oc_export_sessions_pick >/dev/null 2>&1
   oc_shrink_sessions_pick >/dev/null 2>&1 )
 reset
+cp "$TMP/bk-manifest.sym.json" "$OCED_BACKUP_DIR/manifest.json"
 ALLOWED='\[>\]|\[\?\]|\[\*\]|\[delete all\]|\[delete olds\]|\[mark all\]|\[unmark all\]|\[x\]|\[ \]'
 SEEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' ')
 for tok in '[>]' '[?]' '[*]' '[delete all]' '[delete olds]' '[mark all]' '[x]'; do
@@ -1266,11 +1613,11 @@ ok "the symbol sample covers $SEEN"
 BADTOKEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | grep -vxE "$ALLOWED")
 [ -z "$BADTOKEN" ] && ok "no invented bracket tokens ($(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' '))" \
     || bad "unknown bracket tokens: $BADTOKEN"
-BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__|__REPORT_ALL__')
-[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report)" || bad "[>] leaked onto: $BADFLOW"
+BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__|__REPORT_ALL__|__PRESHRINK__|__UPDATE__|__UPDATE_ALL__|__UPDATE_GO__')
+[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report/update/pre-shrink)" || bad "[>] leaked onto: $BADFLOW"
 BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__|__EXPLAIN__')
 [ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify/explain)" || bad "[?] leaked onto: $BADINSPECT"
-NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__|^__TOGGLE_ORDER__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
+NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__|^__TOGGLE_ORDER__|^__TOGGLE_MODE__|^__TOGGLE_INC__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
 [ "$NOTOGGLE" = "0" ] && ok "every toggle row carries [*]" || bad "toggle rows without [*]: $NOTOGGLE"
 
 : > "$CALLS"

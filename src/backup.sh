@@ -55,7 +55,7 @@ oced_backups_view() {
     local f="${1:-}" json_mode=0 rec
     [ -n "$f" ] || { echo "Usage: opencode-db backups view <backup-file> [--json]"; return 1; }
     [ "${2:-}" = "--json" ] && json_mode=1
-    rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$(manifest_path)")
+    rec=$(oc_backup_record "$f")
     [ -n "$rec" ] || { echo "Not in the manifest: $f"; echo "Try: opencode-db backups list"; return 1; }
 
     if [ "$json_mode" -eq 1 ]; then
@@ -206,15 +206,65 @@ oced_backup() {
     echo "   Alignment: check with: opencode-db status"
 }
 
+# The pre-shrink safety copy `shrink --swap` takes before replacing the live DB
+# is stored as the manifest's `.pre_shrink` singleton (NOT a member of `.backups`,
+# so `list`/`prune` can never delete it by count). It is refreshed on every swap
+# (only one exists, ever). It belongs to the SHRINK domain: it is shown, checked
+# and removed by `shrinks preshrink [remove]` (never by `backups list/view/
+# remove`, and never in the backups picker). `--from-backup pre-shrink/<file>`
+# still resolves it (a plain path under `$OCED_BACKUP_DIR`).
+#
+# preshrink_manifest_record -> the `.pre_shrink` object (compact JSON) or empty.
+preshrink_manifest_record() {
+    local m; m=$(manifest_path)
+    [ -f "$m" ] || return 0
+    jq -c '.pre_shrink // empty' "$m" 2>/dev/null
+}
+
+# preshrink_manifest_set <record-json> -> store/replace the singleton, keeping
+# `.backups` untouched.
+preshrink_manifest_set() {
+    manifest_write "$(manifest_read | jq --argjson r "$1" '.pre_shrink = $r')"
+}
+
+# preshrink_manifest_clear -> drop the singleton (keeps `.backups`).
+preshrink_manifest_clear() {
+    manifest_write "$(manifest_read | jq 'del(.pre_shrink)')"
+}
+
+# oc_backup_record <file> -> the manifest record of a REGULAR backup whose
+# `.file` matches <file> exactly, or empty (the record is looked up by the same
+# string `list` prints and `view`/`verify`/`remove` accept). The pre-shrink
+# safety copy is NOT a backup here: it is managed by `shrinks preshrink`
+# (shrink domain).
+oc_backup_record() {
+    local f="$1"
+    jq -rc --arg f "$f" '.backups[]? | select(.file == $f)' "$(manifest_path)" 2>/dev/null
+}
+
 oced_backups() {
     local manifest; manifest=$(manifest_path)
-    [ -f "$manifest" ] || { echo "No backups recorded yet."; return 0; }
+    local cmd="${1:-list}"
+    if [ ! -f "$manifest" ]; then
+        echo "No backups recorded yet."
+        return 0
+    fi
     local n
     n=$(jq -r '.backups | length' "$manifest")
-    case "${1:-list}" in
+    case "$cmd" in
         list)
             echo "== Backups ($n) =="
-            jq -r '.backups | sort_by(.date) | reverse | to_entries[] | "  \(.key + 1). " + (.value.date | sub("T"; "_") | sub("Z$"; "")) + "  " + .value.file + "  (" + (.value.size|tostring) + " bytes, " + (.value.sessions|tostring) + " sessions)"' "$manifest"
+            # One live query for the whole list; each row is tagged `(stale)`
+            # when it differs from the live DB (see o_backup_row_tag). Same tag
+            # the menu picker shows, so both surfaces tell the same story.
+            local ls lm lu i=0 bdate bfile bsize bsess bmsg bmax tag
+            IFS=$'\t' read -r ls lm lu < <(o_backup_live_counts)
+            while IFS=$'\t' read -r bdate bfile bsize bsess bmsg bmax; do
+                i=$((i + 1))
+                tag=$(o_backup_row_tag "$bsess" "$bmsg" "$bmax" "$ls" "$lm" "$lu")
+                printf '  %d. %s  %s  (%s bytes, %s sessions)%s\n' \
+                    "$i" "$bdate" "$bfile" "$bsize" "$bsess" "$tag"
+            done < <(jq -r '.backups | sort_by(.date) | reverse | .[] | [ (.date | sub("T"; "_") | sub("Z$"; "")), .file, ((.size // 0)|tostring), ((.sessions // 0)|tostring), ((.messages // 0)|tostring), ((.max_updated // 0)|tostring) ] | @tsv' "$manifest")
             echo ""
             echo "  view <file> [--json]  ·  verify <file>  ·  prune <N>"
             ;;
@@ -223,7 +273,7 @@ oced_backups() {
             shift
             local f="${1:-}" rec state expect actual
             [ -n "$f" ] || { echo "Usage: opencode-db backups verify <backup-file>"; return 1; }
-            rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$manifest")
+            rec=$(oc_backup_record "$f")
             [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
             IFS=$'\t' read -r state expect actual < <(oc_backup_sha_state "$rec")
             case "$state" in
@@ -239,21 +289,22 @@ oced_backups() {
             local f="${1:-}" yes=0
             [ -n "$f" ] || { echo "Usage: opencode-db backups remove <backup-file> [--yes]"; return 1; }
             [ "${2:-}" = "--yes" ] && yes=1
-            local rec
-            rec=$(jq -r --arg f "$f" '.backups[]? | select(.file == $f)' "$manifest")
+            local rec rfile
+            rec=$(oc_backup_record "$f")
             [ -n "$rec" ] || { echo "Not in the manifest: $f"; return 1; }
+            rfile=$(printf '%s' "$rec" | jq -r '.file // ""')
             if [ "$yes" -eq 0 ]; then
                 local ans
-                printf 'Remove backup %s? [y/N] ' "$f"
+                printf 'Remove backup %s? [y/N] ' "$rfile"
                 read -r ans || return 1
                 [[ "$ans" =~ ^[yYsS]$ ]] || { echo "   cancelled."; return 0; }
             fi
-            if [ -f "$OCED_BACKUP_DIR/$f" ]; then
-                rm -f "$OCED_BACKUP_DIR/$f"
+            if [ -f "$OCED_BACKUP_DIR/$rfile" ]; then
+                rm -f "$OCED_BACKUP_DIR/$rfile"
             fi
-            manifest_write "$(jq --arg f "$f" '.backups |= map(select(.file != $f))' "$manifest")"
-            o_log "backups remove file=$f"
-            echo "Removed: $f"
+            manifest_write "$(manifest_read | jq --arg f "$rfile" '.backups |= map(select(.file != $f))')"
+            o_log "backups remove file=$rfile"
+            echo "Removed: $rfile"
             ;;
         prune)
             shift
@@ -275,7 +326,7 @@ oced_backups() {
                     rm -f "$OCED_BACKUP_DIR/$f" && removed=$((removed+1))
                 fi
             done <<<"$to_delete"
-            manifest_write "$(jq --argjson k "$keep" '.backups |= (sort_by(.date) | .[-$k:])' "$manifest")"
+            manifest_write "$(manifest_read | jq --argjson k "$keep" '.backups |= (sort_by(.date) | .[-$k:])')"
             o_log "backups prune keep=$keep removed=$removed"
             echo "Prune: removed $removed file(s); keeping $keep."
             ;;

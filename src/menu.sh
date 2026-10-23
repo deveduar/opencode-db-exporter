@@ -17,6 +17,31 @@ oc_root=(
     "help|Help|tool:help|pause"
 )
 
+# Roots extra rows: INSTALL when the tool is not installed yet (and the running
+# checkout ships install.sh); UNINSTALL once it is installed (and the running
+# tree ships uninstall.sh). The two are mutually exclusive: an installed tool
+# offers Uninstall only, a portable checkout not yet installed offers Install
+# only. "Installed" is the shim install.sh creates (oc_is_installed).
+oc_root_extra_rows() {
+    if oc_is_installed; then
+        [ -f "$OCED_REPO_ROOT/uninstall.sh" ] && printf 'uninstall|Uninstall|fn:oc_menu_uninstall\n'
+    else
+        [ -f "$OCED_REPO_ROOT/install.sh" ] && printf 'install|Install|fn:oc_menu_install\n'
+    fi
+    return 0
+}
+
+# oc_repo_script <label> <script> — run a repo script (install/uninstall) with
+# the menu's streaming contract (direct tty, never captured) and pause after.
+oc_repo_script() {
+    local label="$1" script="$2"
+    [ -f "$script" ] || { echo "   not found: $script"; return 1; }
+    bash "$script"
+    menu_pause "$label" || return 0
+}
+oc_menu_install()   { oc_repo_script "Install"   "$OCED_REPO_ROOT/install.sh"; }
+oc_menu_uninstall() { oc_repo_script "Uninstall" "$OCED_REPO_ROOT/uninstall.sh"; }
+
 # oc_root_status -> builds ACTION_STATUS for the root menu header
 # Shows: DB path/size, sessions count, WAL state, last backup alignment, export runs count
 oc_root_status() {
@@ -65,7 +90,16 @@ run_oc_menu() {
     menu_require_fzf
     o_check_deps
     oc_root_status
+    # Build the entry list per run (never mutate the global oc_root): the
+    # install/uninstall row is appended only when the state calls for it. The name
+    # must differ from run_menu's own `entries` local or the nameref would bind to
+    # the wrong variable (run_menu stores the NAME in a local called `entries`).
+    local -a oc_root_entries=( "${oc_root[@]}" )
+    local _r
+    while IFS= read -r _r; do
+        [ -n "$_r" ] && oc_root_entries+=("$_r")
+    done < <(oc_root_extra_rows)
     # --refresh-cb recomputes ACTION_STATUS at the top of every root loop so the
     # header never shows stale info after an action (backup, shrink, export…).
-    run_menu --cat "opencode-db" --prompt "actions" --entries oc_root --refresh-cb oc_root_status
+    run_menu --cat "opencode-db" --prompt "actions" --entries oc_root_entries --refresh-cb oc_root_status
 }

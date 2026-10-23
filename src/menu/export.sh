@@ -18,10 +18,11 @@ oc_preset_rows() {
     oc_plan_py rows
 }
 
-# oc_export_rows -> the preset rows plus the one inspection row. `[?]` = what
-# each preset produces (its description, flags and an example file tree), a
-# static catalog: the CLI `export --explain` does the work (no DB), nothing is
-# formatted here.
+# oc_export_rows -> the preset rows plus the `[?]` catalog row. `[?]` = what each
+# preset produces (its description, flags and an example file tree), a static
+# catalog: the CLI `export --explain` does the work (no DB), nothing is formatted
+# here. Refresh-in-place (the old incremental switch) now lives on the run, not
+# on the recipe: see `[>] update` in the exports manager.
 oc_export_rows() {
     [ -f "${OCED_PRESETS:-}" ] || return 1
     printf '__EXPLAIN__\t[?] what each preset produces\n'
@@ -33,7 +34,6 @@ oc_export_presets_picker() {
     local sel key header name
     while true; do
         header=$'Export — pick a plan (preset): products + config from the presets file'
-        [ "$hide" = "1" ] && header+=$'\n'"(subagents hidden: roots only)"
         header+=$'\n'"(ESC: back)"
         sel=$(oc_export_rows | oc_fzf_sel "export (presets)" "$header") || return $?
         key=$(oc_sel_key "$sel")

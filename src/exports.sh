@@ -8,7 +8,80 @@ exports_runs_find() {
     [ -d "$OCED_OUT" ] || return 0
     local cmp="-r"
     [ "${1:-desc}" = "asc" ] && cmp=""
-    find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d | sort $cmp
+    find "$OCED_OUT" -mindepth 1 -maxdepth 1 -type d \
+        ! -name '.*' ! -name '*~*' | sort $cmp
+}
+
+# oced_export_rec_meta <metadata.json...> -> the FIRST file that actually carries
+# `.session_records` (a bundle sorts its products, and `memory` sorts before
+# `transcript`, so assuming the first file found is not safe). Empty when the run
+# has none (a legacy run written before `.session_records` existed).
+oced_export_rec_meta() {
+    local m
+    for m in "$@"; do
+        [ -f "$m" ] || continue
+        if jq -e '(.session_records // []) | length > 0' "$m" >/dev/null 2>&1; then
+            printf '%s' "$m"; return 0
+        fi
+    done
+}
+
+# o_export_stale <metadata.json> [--tag] -> compares the sessions a run recorded
+# against the effective DB (read-only). Echoes a reason (human) or the compact
+# token `stale` / `missing` / `unverifiable` (with --tag) and returns 1 when
+# flagged, 0 when fresh. This is the ONE stale-check for `exports list`, `view`
+# and `verify`, the sibling of `o_shrink_stale`/`o_preshrink_stale` for the
+# shrink domain.
+#
+# Unlike a backup/shrink (one `max_updated`), an export records each session's
+# own `updated`, so staleness is per-session: an export is stale when a recorded
+# session was edited since, missing when a recorded session no longer exists.
+# The comparison is at SECOND resolution because `ts_iso` truncates to seconds
+# while `session.time_updated` is epoch ms — comparing raw ms would flag every
+# session as changed the instant it was exported.
+o_export_stale() {
+    local meta="$1" tag=0
+    [ "${2:-}" = "--tag" ] && tag=1
+    [ -f "$meta" ] || { [ "$tag" -eq 1 ] && printf 'unverifiable' || echo "metadata.json missing: $meta"; return 1; }
+    local nrec
+    nrec=$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)
+    if [ "${nrec:-0}" -eq 0 ]; then
+        [ "$tag" -eq 1 ] && printf 'unverifiable' \
+            || echo "cannot verify freshness (this export has no session_records — legacy format)."
+        return 1
+    fi
+    # One read for every recorded session's live time_updated.
+    local inlist id ts
+    inlist=$(jq -r '[.session_records[].id | @sh] | join(",")' "$meta" 2>/dev/null)
+    local -A oes_live=()
+    while IFS=$'\t' read -r id ts; do
+        [ -n "$id" ] && oes_live["$id"]="$ts"
+    done < <(o_q -separator $'\t' "SELECT id, time_updated FROM session WHERE id IN ($inlist)" 2>/dev/null)
+    local rec_iso rec_s cur_s changed=0 missing=0
+    while IFS=$'\t' read -r id rec_iso; do
+        [ -n "$id" ] || continue
+        if [ -z "${oes_live[$id]+x}" ]; then
+            missing=$((missing + 1)); continue
+        fi
+        rec_s=$(date -u -d "$rec_iso" +%s 2>/dev/null) || rec_s=""
+        [ -n "$rec_s" ] || continue
+        cur_s=$(( ${oes_live[$id]} / 1000 ))
+        [ "$cur_s" -gt "$rec_s" ] && changed=$((changed + 1))
+    done < <(jq -r '.session_records[] | [.id, (.updated // "")] | @tsv' "$meta")
+    if [ "$changed" -eq 0 ] && [ "$missing" -eq 0 ]; then
+        [ "$tag" -eq 1 ] && printf ''
+        return 0
+    fi
+    if [ "$tag" -eq 1 ]; then
+        if [ "$changed" -gt 0 ]; then printf 'stale'; else printf 'missing'; fi
+    elif [ "$changed" -gt 0 ] && [ "$missing" -gt 0 ]; then
+        echo "$changed session(s) changed and $missing deleted from the live DB since this export."
+    elif [ "$changed" -gt 0 ]; then
+        echo "$changed session(s) changed in the live DB since this export."
+    else
+        echo "$missing session(s) recorded by this export no longer exist in the live DB."
+    fi
+    return 1
 }
 
 oced_exports() {
@@ -18,13 +91,27 @@ oced_exports() {
         remove) shift; oced_exports_remove "$@" ;;
         prune)  shift; oced_exports_prune "$@" ;;
         view)   shift; oced_exports_view "$@" ;;
-        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]]"; return 1 ;;
+        verify) shift; oced_exports_verify "$@" ;;
+        update) shift; oced_exports_update "$@" ;;
+        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]|verify [--tsv]|update <stamp> [--mode delta|accumulative] [--sticky stale|always|never] [--include-excluded all|ID,ID] [--keep-history] [--dry-run] [--json] [--yes]]"; return 1 ;;
     esac
+}
+
+# oced_exports_update <stamp> [flags] -> the run-refresh engine
+# (exportlib/update.py is the SSoT: it reads the run's own metadata + the live DB,
+# decides the target set, re-renders it into a temp dir and swaps it in; bash only
+# pins the config vars, exactly like oced_export_one does for the export CLI).
+oced_exports_update() {
+    OPENCODE_DB="$(o_effective_db)" \
+    OCED_OUT="$OCED_OUT" \
+    OCED_BACKUP_DIR="$OCED_BACKUP_DIR" \
+    OCED_PRESETS="$OCED_PRESETS" \
+        python3 "$SCRIPT_DIR/exportlib/update.py" "$@"
 }
 
 oced_exports_list() {
     local -a runs metas rows=()
-    local run meta profiles roots subs msgs comp size m found p r s stamp human_date
+    local run meta profiles roots subs msgs comp size m found p r s stamp human_date lrmeta lrtag lrmode lrdate lrrefresh lrsess lrpreset lrn_rec lrn_ex lrkept
     mapfile -t runs < <(exports_runs_find)
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
@@ -36,6 +123,8 @@ oced_exports_list() {
         esac
         mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
         profiles="" roots=0 subs=0 msgs=0 comp=0 found=0
+        lrsess=""
+        lrpreset=""
         for m in "${metas[@]}"; do
             [ -f "$m" ] || continue
             found=1
@@ -47,12 +136,49 @@ oced_exports_list() {
             [ "$s" -gt "$subs" ] && subs="$s"
             msgs=$((msgs + $(jq -r '.messages // 0' "$m")))
             comp=$((comp + $(jq -r '.compactions // 0' "$m")))
+            # The preset the run came from (the refresh replays it) rides LAST on
+            # the row, so the recipe is visible next to the product it produced.
+            [ -z "$lrpreset" ] && lrpreset=$(jq -r '.preset // empty' "$m" 2>/dev/null)
+            # The `roots (subagent)` cell alone hides the run's SIZE: 3 roots can be
+            # 3 sessions or 22. `K/N kept` is the fact that says whether this run is a
+            # subset — the `total` is `session_records` plus the `.excluded` it left
+            # out (the difference carries the excluded count). A full run shows just
+            # `N`. The short root/sub breakdown (`3 root 19 sub`) always rides along,
+            # so a narrowed run never looks full and a full run still shows its shape.
+            lrn_rec=$(jq -r '(.session_records // []) | length' "$m" 2>/dev/null || echo 0)
+            lrn_ex=$(jq -r '(.excluded // []) | length' "$m" 2>/dev/null || echo 0)
+            lrkept=$(( lrn_rec > 0 ? lrn_rec : (r + s) ))
+            if [ "${lrn_ex:-0}" -gt 0 ]; then
+                lrsess=$(printf '%s/%s kept · %s root %s sub' "$lrkept" "$((lrkept + lrn_ex))" "$r" "$s")
+            else
+                lrsess=$(printf '%s · %s root %s sub' "$lrkept" "$r" "$s")
+            fi
         done
         [ "$found" -eq 1 ] || profiles="?"
         size=$(du -sb "$run" 2>/dev/null | cut -f1)
         size=${size:-0}
-        rows+=("$(printf '  %d.  %-16s  %-34s  %s roots (%s subagent) · %s msgs · %s comp · %s' \
-            "$((${#rows[@]} + 1))" "$human_date" "$profiles" "$roots" "$subs" "$msgs" "$comp" "$(o_human_size "$size")")")
+        lrmeta=$(oced_export_rec_meta "${metas[@]}")
+        lrtag=""
+        lrrefresh=""
+        if [ -n "$lrmeta" ]; then
+            lrtag=$(o_export_stale "$lrmeta" --tag 2>/dev/null || true)
+            # A run refreshed in place keeps its stamp (its place in this list),
+            # so the ONLY visible proof it moved is the `.update_mode`/`date`
+            # pair the engine records. Without it a successful refresh reads as
+            # "nothing happened". Rendering the refresh time NEXT TO the stamp
+            # makes the two facts distinguishable.
+            lrmode=$(jq -r '.update_mode // empty' "$lrmeta" 2>/dev/null)
+            lrdate=$(jq -r '.date // empty' "$lrmeta" 2>/dev/null)
+            [ -n "$lrmode" ] && [ -n "$lrdate" ] && lrrefresh=" $(printf 'refreshed %s (%s)' "${lrdate%Z}" "$lrmode")"
+        elif [ "$found" -eq 1 ]; then
+            # Legacy run: metadata exists but records WHICH sessions it holds do
+            # not, so freshness is undecidable — the same verdict `verify` gives.
+            lrtag="unverifiable"
+        fi
+        [ -n "$lrtag" ] && lrtag=" ($lrtag)"
+        local lrsess_cell="${lrsess:-$roots roots ($subs subagent)}"
+        rows+=("$(printf '  %d.  %-16s  %-34s  %-38s  %s msgs · %s comp · %s%s%s  %s' \
+            "$((${#rows[@]} + 1))" "$human_date" "$profiles" "$lrsess_cell" "$msgs" "$comp" "$(o_human_size "$size")" "$lrtag" "$lrrefresh" "$lrpreset")")
     done
     echo "== Exports (${#runs[@]}) =="
     if [ "${#rows[@]}" -eq 0 ]; then
@@ -105,6 +231,61 @@ oced_exports_prune() {
     o_log "exports prune keep=$keep removed=$n"
     echo "Prune: removed $n run(s); keeping $keep."
 }
+
+# oced_exports_verify [--tsv] -> audit EVERY run's freshness vs the effective DB
+# (one `o_export_stale` per run, not only the newest), the sibling of
+# `shrinks verify`. A stale/missing run is not broken — it is history — but the
+# tool must be able to say which runs no longer describe the live DB, and
+# `exports update` is the fix. `--tsv` emits `stamp<TAB>tag<TAB>reason` rows.
+oced_exports_verify() {
+    local tsv=0
+    for a in "$@"; do [ "$a" = "--tsv" ] && tsv=1; done
+    local -a runs
+    mapfile -t runs < <(exports_runs_find)
+    local n=${#runs[@]}
+    local -a flagged=()   # each entry: stamp<TAB>tag<TAB>reason
+    local run stamp mtag mreason rmeta
+    local -a mlist
+    for run in "${runs[@]}"; do
+        stamp="${run##*/}"
+        mapfile -t mlist < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        rmeta=$(oced_export_rec_meta "${mlist[@]}")
+        if [ -z "$rmeta" ]; then
+            flagged+=("$stamp"$'\t'"unverifiable"$'\t'"no metadata.json with session_records")
+            continue
+        fi
+        if mreason=$(o_export_stale "$rmeta"); then
+            continue
+        fi
+        mtag=$(o_export_stale "$rmeta" --tag 2>/dev/null || true)
+        flagged+=("$stamp"$'\t'"${mtag:-stale}"$'\t'"$mreason")
+    done
+    if [ "$tsv" -eq 1 ]; then
+        local f
+        for f in "${flagged[@]}"; do
+            printf '%s\t%s\t%s\n' "${f%%$'\t'*}" "$(printf '%s' "$f" | cut -f2)" "$(printf '%s' "$f" | cut -f3)"
+        done
+        return 0
+    fi
+    echo "== Export runs verification =="
+    echo ""
+    if [ "$n" -eq 0 ]; then
+        echo "   (no export runs yet)"
+        return 0
+    fi
+    if [ ${#flagged[@]} -eq 0 ]; then
+        echo "All clean ($n run(s) match the live DB)."
+        return 0
+    fi
+    echo "⚠️  Runs that no longer match the live DB (${#flagged[@]} of $n):"
+    local f
+    for f in "${flagged[@]}"; do
+        printf '  %-18s [%s]  %s\n' "${f%%$'\t'*}" "$(printf '%s' "$f" | cut -f2)" "$(printf '%s' "$f" | cut -f3)"
+    done
+    echo ""
+    echo "   Refresh one in place with: opencode-db exports update <stamp>"
+    echo "   (or re-export it; these runs are history, not errors)."
+}
 # The human phrase for a stored run's selection. It asks PYTHON, because the
 # rules live in util.selection_phrase() (the inverse of selection_meta()) and
 # bash must not grow a second copy: reading `.filter`/`.sessions_selected` here
@@ -114,6 +295,19 @@ oced_export_selection_phrase() {   # $1 = metadata.json
     local meta="${1:-}" phrase=""
     if [ -f "$meta" ]; then
         phrase=$(python3 "$SCRIPT_DIR/exportlib/plan.py" selection-meta "$meta" 2>/dev/null) || phrase=""
+    fi
+    printf '%s' "${phrase:--}"
+}
+
+# oced_export_scope_phrase <metadata.json> -> the human phrase of `.scope`, the
+# WIDER set the run was drawn from (identical to `.selection` for a plain run,
+# different exactly when the run was narrowed). Same `selection_phrase` source,
+# so `scope` and `selection` can never be described by two different rules.
+oced_export_scope_phrase() {   # $1 = metadata.json
+    local meta="${1:-}" phrase=""
+    if [ -f "$meta" ]; then
+        phrase=$(jq -c '{selection: .scope}' "$meta" 2>/dev/null \
+                 | python3 "$SCRIPT_DIR/exportlib/plan.py" selection-phrase 2>/dev/null) || phrase=""
     fi
     printf '%s' "${phrase:--}"
 }
@@ -187,6 +381,9 @@ oced_exports_view() {
     local -a metas
     mapfile -t metas < <(find "$target" -type f -name metadata.json 2>/dev/null | sort)
     [ "${#metas[@]}" -gt 0 ] || { echo "No metadata.json found in $target"; return 1; }
+    # The metadata file that carries `.session_records` (see oced_export_rec_meta).
+    local rec_meta
+    rec_meta=$(oced_export_rec_meta "${metas[@]}")
 
     if [ "$json_mode" -eq 1 ]; then
         printf '['
@@ -235,9 +432,31 @@ oced_exports_view() {
         # The selection is a RUN-level fact (shared by a bundle), so it is
         # printed once here and not repeated in every product block.
         printf '  %-11s %s\n' "selection:" "$(oced_export_selection_phrase "$first_meta")"
+        # The scope is the WIDER set the run was drawn from; it differs from
+        # `selection` exactly when the run was narrowed, so the gap between the
+        # two is the whole point of printing it. Legacy runs have none (`-`).
+        local scope_phrase
+        scope_phrase=$(oced_export_scope_phrase "$first_meta")
+        [ "$scope_phrase" != "-" ] && printf '  %-11s %s\n' "scope:" "$scope_phrase"
         printf '  %-11s %s\n' "date:" "$(jq -r '.date // "-"' "$first_meta")"
+        # A refresh keeps the stamp, so name it explicitly: the `date` above IS
+        # the refresh time, and without this line the reader has no way to tell
+        # a refreshed run from one never touched. Absent on a fresh run.
+        local upmode
+        upmode=$(jq -r '.update_mode // empty' "$first_meta" 2>/dev/null)
+        [ -n "$upmode" ] && printf '  %-11s %s mode (refreshed in place)\n' "updated:" "$upmode"
         printf '  %-11s %s\n' "db:" "$(jq -r '.db // "-"' "$first_meta")"
         printf '  %-11s %s\n' "sha256:" "$(jq -r '.db_sha256 // "-"' "$first_meta")"
+        if [ -n "$rec_meta" ]; then
+            local freason
+            if freason=$(o_export_stale "$rec_meta"); then
+                printf '  %-11s %s\n' "freshness:" "fresh (the live DB has no newer content for these sessions)"
+            else
+                printf '  %-11s %s\n' "freshness:" "STALE — $freason"
+            fi
+        else
+            printf '  %-11s %s\n' "freshness:" "unverifiable (no session_records recorded)"
+        fi
     fi
 
     echo ""
@@ -254,17 +473,8 @@ oced_exports_view() {
     done
 
     # WHICH sessions the run contains (identity only, straight from metadata).
-    # Any product of the run can carry the records, so look for the FIRST one
-    # that has them instead of assuming the first file found: in a bundle the
-    # products are sorted, and `memory` sorts before `transcript`.
-    local rec_meta=""
-    for meta in "${metas[@]}"; do
-        [ -f "$meta" ] || continue
-        if [ "$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)" != "0" ]; then
-            rec_meta="$meta"
-            break
-        fi
-    done
+    # `rec_meta` (the product that carries `.session_records`) was resolved once
+    # above.
     if [ -n "$rec_meta" ]; then
         echo ""
         echo "== Sessions =="
@@ -281,6 +491,29 @@ oced_exports_view() {
             fi
             printf '  %-22s %-8s  %-25s %s\n' "$sid" "$skind" "$when" "$stitle"
         done < <(oced_export_session_rows "$rec_meta")
+    fi
+
+    # WHICH sessions the run LEFT OUT (`.excluded`: in scope but deliberately not
+    # exported). Without this block a narrowed run is indistinguishable from a
+    # full one. Capped like `shrinks view`: past the cap the title alone would
+    # push the screen off, and the count is what the reader needs.
+    if [ -n "$rec_meta" ]; then
+        local n_ex
+        n_ex=$(jq -r '(.excluded // []) | length' "$rec_meta" 2>/dev/null || echo 0)
+        if [ "${n_ex:-0}" -gt 0 ]; then
+            echo ""
+            echo "== Excluded ($n_ex kept out of scope) =="
+            local esid etitle en=0
+            local EX_CAP=8
+            while IFS=$'\t' read -r esid etitle; do
+                [ -n "$esid" ] || continue
+                en=$((en + 1))
+                [ "$en" -le "$EX_CAP" ] || continue
+                printf '  %-22s  %s\n' "$esid" "$etitle"
+            done < <(jq -r '.excluded[] | [ (.id // "-"),
+                        ((.title // "") | if . == "" then "(no title)" else .[0:60] end) ] | @tsv' "$rec_meta")
+            [ "$en" -gt "$EX_CAP" ] && printf '  … %s more\n' "$((en - EX_CAP))"
+        fi
     fi
 
     if [ "$show_files" -eq 1 ]; then

@@ -213,10 +213,13 @@ def flags_table() -> str:
         else:
             applies = _flag_applies(f)
         rows.append(f"| {name} | {typ} | {allowed} | {applies} |")
-    for name, typ in (("out", "string"), ("last", "int ≥ 1"), ("since", "date YYYY-MM-DD")):
+    for name, typ, reason in (
+        ("out", "string", "output root"),
+        ("last", "int ≥ 1", "a recency rule, recomputed at run time"),
+        ("since", "date YYYY-MM-DD", "a recency rule, recomputed at run time"),
+    ):
         rows.append(
-            f"| `{name}` | {typ} | — | any — CLI-only (never a preset key: "
-            f"{'output root' if name == 'out' else 'a recency rule, recomputed at run time'}) |"
+            f"| `{name}` | {typ} | — | any — CLI-only (never a preset key: {reason}) |"
         )
     return "\n".join(rows)
 

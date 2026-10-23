@@ -270,6 +270,91 @@ printf '%s' "$M" | grep -q "MISSING" && ok "backups view reports a deleted file 
 OCED_BACKUP_DIR="$TDIR" grep_run "File not found" backups verify "$FNAME" && ok "verify agrees with view on the missing file" || bad "verify missing"
 grep_run "Aligned" status && ok "status aligned after backup" || bad "alignment"
 
+# Per-row freshness: `backups list` tags the copy `(stale)` once the live DB has
+# moved on — one tag PER ROW, not only for the newest. Isolated DB so the shared
+# $FAKE (read by every other test) is never mutated by the UPDATE below.
+SDB="$TMP/stale.db"; SBK="$TMP/stale-bk"
+bash "$TESTS_DIR/make_fake_db.sh" "$SDB" >/dev/null
+OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$SBK" run backup --yes >/dev/null
+SL=$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$SBK" run backups list)
+printf '%s' "$SL" | grep -q "(stale)" && bad "backups list tags an aligned copy as stale" \
+    || ok "backups list leaves an aligned copy untagged"
+sqlite3 "$SDB" "UPDATE session SET time_updated = time_updated + 1000000;"
+OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$SBK" grep_run "(stale)" backups list \
+    && ok "backups list tags a diverged copy as (stale)" || bad "backups list stale tag"
+
+# Pre-shrink safety copy (what --swap snapshots before replacing the live DB):
+# registered as the manifest's `.pre_shrink` SINGLETON, but it belongs to the
+# SHRINK domain — `backups` never lists or accepts it, `shrinks preshrink`
+# shows/checks/removes it, `status` reports it, and `prune` never drops it.
+PSBK="$TMP/ps-bk"; mkdir -p "$PSBK/pre-shrink"
+PSNAME="opencode.pre-shrink-1789002100.db"
+head -c 2048 /dev/zero > "$PSBK/pre-shrink/$PSNAME"
+PSSHA=$(sha256sum "$PSBK/pre-shrink/$PSNAME" | cut -d' ' -f1)
+LIVE_MAX=$(sqlite3 "$SDB" "SELECT coalesce(max(time_updated),0) FROM session")
+jq -n --arg f "pre-shrink/$PSNAME" --arg sha "$PSSHA" --argjson mu "$LIVE_MAX" \
+    '{backups: [], pre_shrink: {date:"2026-09-09T00:00:00Z", file:$f, kind:"pre-shrink",
+       sha256:$sha, sha256_raw:$sha, size:2048, size_raw:2048,
+       sessions:1, messages:0, parts:0, max_updated:$mu, source:"/tmp/x.db"}}' > "$PSBK/manifest.json"
+# `backups` NEVER list or accept it (it belongs to the shrink domain); `status`
+# still reports it, because it is the rollback of the LIVE DB.
+PSL=$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run backups list)
+printf '%s' "$PSL" | grep -q "$PSNAME" && bad "backups list leaked the pre-shrink" \
+    || ok "backups list never shows the pre-shrink"
+PSB=$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run backups view "pre-shrink/$PSNAME" 2>&1)
+printf '%s' "$PSB" | grep -q "Not in the manifest" \
+    && ok "backups view refuses the pre-shrink (not a backup)" || bad "backups view: [$PSB]"
+PST=$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run status)
+printf '%s' "$PST" | grep -q "Safety:.*$PSNAME" && ok "status surfaces the pre-shrink as Safety" \
+    || bad "status safety: $(printf '%s' "$PST" | sed -n '/Shrinks/,/Version/p')"
+printf '%s' "$PST" | grep -q "fresh — the live DB has not moved past it" \
+    && ok "status reports a fresh pre-shrink" || bad "status fresh verdict: [$PST]"
+# `shrinks preshrink` is its screen: details + sha check + freshness verdict.
+PSS=$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run shrinks preshrink)
+printf '%s' "$PSS" | grep -q "== Pre-shrink safety copy ==" && ok "shrinks preshrink leads with its banner" || bad "preshrink view: [$PSS]"
+printf '%s' "$PSS" | grep -q "$PSNAME" && ok "shrinks preshrink names the file" || bad "preshrink name"
+printf '%s' "$PSS" | grep -q "the file matches the manifest" && ok "shrinks preshrink sha-checks the copy" || bad "preshrink sha"
+printf '%s' "$PSS" | grep -q "has not moved past it" && ok "shrinks preshrink: fresh verdict" || bad "preshrink fresh: [$PSS]"
+printf '%s' "$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run shrinks preshrink --json)" \
+    | jq -e --arg f "pre-shrink/$PSNAME" '.file == $f' >/dev/null \
+    && ok "shrinks preshrink --json returns the raw record" || bad "preshrink json"
+# prune rewrites .backups and must leave .pre_shrink alone.
+jq -n --arg f "pre-shrink/$PSNAME" --arg sha "$PSSHA" \
+    '{backups: [
+       {date:"2026-09-01T00:00:00Z", file:"opencode-old.db",  sha256:"x", sha256_raw:"x", size:1, size_raw:1, sessions:0, messages:0, parts:0, max_updated:"0", source:"/tmp/x.db"},
+       {date:"2026-09-02T00:00:00Z", file:"opencode-new.db",  sha256:"y", sha256_raw:"y", size:1, size_raw:1, sessions:0, messages:0, parts:0, max_updated:"0", source:"/tmp/x.db"}],
+       pre_shrink: {date:"2026-09-09T00:00:00Z", file:$f, kind:"pre-shrink",
+         sha256:$sha, sha256_raw:$sha, size:2048, size_raw:2048,
+         sessions:1, messages:0, parts:0, max_updated:"0", source:"/tmp/x.db"}}' > "$PSBK/manifest.json"
+: > "$PSBK/opencode-old.db"; : > "$PSBK/opencode-new.db"
+OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run backups prune 1 >/dev/null
+jq -e '.pre_shrink.file' "$PSBK/manifest.json" >/dev/null \
+    && ok "backups prune keeps the .pre_shrink singleton" || bad "prune dropped .pre_shrink"
+# A copy with no usable max_updated is flagged as unverifiable; one the live DB
+# has moved past is flagged stale. Same helper behind status and the CLI screen.
+printf '%s' "$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run shrinks preshrink)" \
+    | grep -q "cannot verify freshness" && ok "shrinks preshrink flags an unverifiable copy" || bad "preshrink unverifiable"
+jq '.pre_shrink.max_updated = "1"' "$PSBK/manifest.json" > "$TMP/ps-stale.json" && mv "$TMP/ps-stale.json" "$PSBK/manifest.json"
+printf '%s' "$(OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run status)" \
+    | grep -q "newer than this rollback copy" && ok "status flags a stale pre-shrink" || bad "status stale verdict"
+# `shrinks preshrink remove` clears the singleton and deletes the file; `backups`
+# is never touched.
+OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run shrinks preshrink remove --yes >/dev/null
+[ -f "$PSBK/pre-shrink/$PSNAME" ] && bad "pre-shrink file not removed" || ok "shrinks preshrink remove deletes the file"
+jq -e 'has("pre_shrink") | not' "$PSBK/manifest.json" >/dev/null \
+    && ok "shrinks preshrink remove clears .pre_shrink" || bad "pre_shrink still in manifest"
+OPENCODE_DB="$SDB" OCED_BACKUP_DIR="$PSBK" run shrinks preshrink 2>&1 | grep -q "No pre-shrink safety copy" \
+    && ok "shrinks preshrink says when there is none" || bad "preshrink empty message"
+
+# status carries a Shrinks section (the other snapshot family). It is empty
+# before any shrink copy exists; the populated case is asserted in the shrink
+# section below, right after the first copy is made.
+STAT=$(run status)
+printf '%s' "$STAT" | grep -q "Shrinks:" && ok "status has a Shrinks section" || bad "status Shrinks section"
+printf '%s' "$STAT" | grep -q "No shrink copies yet" && ok "status says when there are no shrink copies" \
+    || bad "status shrink empty"
+
+
 echo "== activity log (opt-in OCED_LOG) =="
 LOGFILE="$TMP/activity.log"
 OCED_LOG=1 OCED_ACTIVITY_LOG="$LOGFILE" run backup --yes >/dev/null
@@ -448,6 +533,41 @@ printf '%s' "$NOSS" | grep -qE "^  totals: +1 roots \(0 subagent\)" \
     && ok "exports view derives totals from roots + subagents" || bad "noshape totals: $(printf '%s' "$NOSS" | grep -i 'totals:')"
 printf '%s' "$NOSS" | grep -q "legacy record" \
     && ok "exports view labels a pre-session_records run's selection" || bad "noshape selection label"
+
+# A NARROWED run records `.scope` (the wider set) + `.excluded` (what it left
+# out). `exports view` must name the scope and list the excluded gap, and
+# `exports list` must spell out `K/N kept (E excl)` — otherwise a narrowed run
+# reads as a full one. Both come straight from metadata (no DB read), so a
+# synthetic run proves the rendering deterministically.
+SCOPER="scoper-$(date -u +%s)"
+mkdir -p "$OUT/$SCOPER/transcript"
+jq -n '{profile:"transcript",preset:"notes",date:"2026-01-02T03:04:05Z",db:"/db",db_sha256:"x",
+        selection:{rule:"sessions",ids:["ses_A0001"]},scope:{rule:"all"},
+        excluded:[{id:"ses_B0001",title:"Left out one",updated:"2026-01-01T00:00:00Z"},
+                  {id:"ses_B0002",title:"Left out two",updated:"2026-01-01T00:00:00Z"}],
+        session_records:[{id:"ses_A0001",title:"Kept",kind:"root",parent_id:null,created:"2026-01-01T00:00:00Z",updated:"2026-01-01T00:00:00Z"}],
+        sessions:{total:1,roots:1,subagents:0},messages:2,compactions:0,files:["index.md"]}' \
+    > "$OUT/$SCOPER/transcript/metadata.json"
+SCOPEV=$(run exports view "$SCOPER")
+printf '%s' "$SCOPEV" | grep -qE "^  scope: +ALL sessions" \
+    && ok "exports view names the run's scope" || bad "view scope: $(printf '%s' "$SCOPEV" | grep -i 'scope')"
+printf '%s' "$SCOPEV" | grep -q "== Excluded (2 kept out of scope) ==" \
+    && ok "exports view lists the excluded gap" || bad "view excluded: $(printf '%s' "$SCOPEV" | grep -i excluded)"
+printf '%s' "$SCOPEV" | grep -q "ses_B0001" \
+    && ok "exports view names an excluded session" || bad "view excluded id"
+printf '%s' "$(run exports list)" | grep -qE "$SCOPER.*1/3 kept · 1 root 0 sub" \
+    && ok "exports list spells the narrowed run as K/N kept" || bad "list kept/excluded: $(run exports list | grep "$SCOPER")"
+# The preset the run came from rides LAST on the row (the refresh replays it), so
+# the recipe is visible next to the product it produced.
+printf '%s' "$(run exports list | grep "$SCOPER")" | grep -qE "  notes$" \
+    && ok "exports list names the preset as the row's last column" || bad "list preset column: $(run exports list | grep "$SCOPER")"
+# A full run (scope == selection) shows no exclusion noise and names its
+# size as `N · R root S sub` (short root/sub breakdown).
+FULLV=$(run exports view "$BSTAMP")
+printf '%s' "$FULLV" | grep -q "== Excluded" && printf '%s' "$(run exports list | grep "$BSTAMP")" | grep -q "excluded" \
+    && bad "a full run is tagged with an excluded count" || ok "a full run carries no excluded count"
+printf '%s' "$(run exports list | grep "$BSTAMP")" | grep -qE "[0-9]+ · [0-9]+ root [0-9]+ sub" \
+    && ok "exports list names a full run as N · R root S sub" || bad "list full shape: $(run exports list | grep "$BSTAMP")"
 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null
@@ -638,6 +758,11 @@ echo "== shrink (pruned + VACUUMed copy, never touches the live DB) =="
 GD=$(run shrink --keep 1 --dry-run)
 printf '%s' "$GD" | grep -Eq "Would delete:[[:space:]]+5" && ok "shrink dry-run plan" || bad "shrink dry-run"
 run shrink --keep 1 >/dev/null || bad "shrink run"
+# status now reports the copy: newest stamp + kept/total + the freshness verdict.
+ST2=$(run status)
+printf '%s' "$ST2" | grep -qE "Newest:.*kept" && ok "status reports the newest shrink copy" \
+    || bad "status shrink newest: $(printf '%s' "$ST2" | sed -n '/Shrinks/,/Version/p')"
+printf '%s' "$ST2" | grep -q "\[OK\].*fresh" && ok "status flags a fresh shrink copy" || bad "status shrink fresh"
 SHR=$(find "$BK/shrink" -name opencode.shrunk.db 2>/dev/null | sort | tail -1)
 [ -n "$SHR" ] && ok "shrink produced a copy" || bad "shrink output"
 GCK=$(sqlite3 "$SHR" "SELECT count(*) FROM session WHERE id IN (SELECT DISTINCT session_id FROM part);")
@@ -990,11 +1115,16 @@ SESSROW=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep
 SESSCOL=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep -E "^  ses_" | awk '{print index($0,"2026-")}' | sort -u | wc -l)
 [ "$SESSROW" -gt 0 ] && [ "$SESSCOL" -eq 1 ] \
     && ok "exports view session rows share one column ($SESSROW rows)" || bad "exports view session alignment ($SESSCOL distinct columns)"
-# A run that dropped a subagent must NOT list it.
+# A run that dropped a subagent must NOT list it in `== Sessions ==` (it now
+# appears under `== Excluded ==` — that block is the run's own gap, not content).
 NOSUBOUT=$(run export transcript --no-subagents --filter "%" --stamp "view-nosub")
 NOSUBV=$(run exports view "$(stamp_of "$NOSUBOUT")")
-printf '%s' "$NOSUBV" | grep -q "ses_A0002" \
+NOSUBSESS=$(printf '%s' "$NOSUBV" | sed -n '/== Sessions ==/,/^== /p' | grep -E '^  ses_')
+printf '%s' "$NOSUBSESS" | grep -q "ses_A0002" \
     && bad "exports view lists a subagent that was not exported" || ok "exports view session list matches the run"
+# ...but the gap IS shown, so a narrowed run is never mistaken for a full one.
+printf '%s' "$NOSUBV" | grep -q "== Excluded (" \
+    && ok "exports view shows the excluded gap" || bad "exports view excluded block"
 
 echo "== metadata.session_records (WHICH sessions the run actually contains) =="
 # NOTE: the UNFILTERED run is the meaningful one. A title filter like
@@ -1406,6 +1536,25 @@ PRE=$(ls "$BK/pre-shrink"/opencode.pre-shrink-*.db 2>/dev/null | head -1)
 [ -n "$PRE" ] && ok "--swap wrote a pre-shrink safety copy in pre-shrink/" || bad "--swap safety copy missing"
 [ "$(sqlite3 "file:$PRE?mode=ro" "SELECT count(*) FROM session;")" -eq 6 ] \
     && ok "pre-shrink holds the original 6 sessions" || bad "pre-shrink sessions"
+# The safety copy is registered as the manifest's `.pre_shrink` singleton: the
+# SHRINK domain shows/removes it (`shrinks preshrink`), `backups` never does, and
+# `--from-backup` still resolves it.
+PSREG=$(jq -r '.pre_shrink.file // ""' "$BK/manifest.json" 2>/dev/null)
+[ -n "$PSREG" ] && ok "--swap registers the safety copy as .pre_shrink" || bad "pre_shrink not registered"
+[ "$PSREG" = "pre-shrink/${PRE##*/}" ] && ok ".pre_shrink points at the kept pre-shrink file" \
+    || bad ".pre_shrink file mismatch: [$PSREG] vs ${PRE##*/}"
+[ "$(jq -r '.pre_shrink.sessions // 0' "$BK/manifest.json")" -eq 6 ] \
+    && ok ".pre_shrink records the pre-swap session count" || bad ".pre_shrink sessions"
+PSB2=$(OPENCODE_DB="$FAKE" OCED_BACKUP_DIR="$BK" run backups view "$PSREG" 2>&1)
+printf '%s' "$PSB2" | grep -q "Not in the manifest" \
+    && ok "backups view refuses the .pre_shrink registration (shrink domain)" || bad "backups view still accepts the pre-shrink"
+PSP=$(OPENCODE_DB="$FAKE" OCED_BACKUP_DIR="$BK" run shrinks preshrink)
+printf '%s' "$PSP" | grep -q "== Pre-shrink safety copy ==" \
+    && ok "shrinks preshrink shows the .pre_shrink registration" || bad "shrinks preshrink missing the registration"
+# `--from-backup` resolves it read-only, so the pre-swap DB is still readable.
+printf '%s' "$(OPENCODE_DB="$FAKE" run --from-backup "$PSREG" list --tsv)" \
+    | grep -q '^ses_' && ok "--from-backup pre-shrink resolves the rollback copy" \
+    || bad "--from-backup pre-shrink failed"
 
 # shrink.json now records sessions.max_updated so the stale check can run.
 LASTSJ=$(find "$BK/shrink" -name shrink.json 2>/dev/null | sort | tail -1)
@@ -1710,6 +1859,191 @@ UVT5=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
     && printf '%s\n' "$UVT5" | grep -q "^unexported	$USTAMP" \
     && ok "verify never flags a non-discard copy (discard-only scope)" \
     || bad "keep copy flagged: [$(printf '%s\n' "$UVT5" | grep '^unexported')]"
+
+echo "== exports verify + exports update (own DB so the run set is known) =="
+# A run can be refreshed in place: `exports verify` decides freshness PER
+# SESSION (the run recorded each one's `updated`), and `exports update` re-renders
+# the run's own set (+new, -gone) or re-syncs its whole scope. Everything here
+# runs against a private DB/OUT so no earlier section can move the ground.
+UPDB="$TMP/upd-fake.db"
+bash "$TESTS_DIR/make_fake_db.sh" "$UPDB" >/dev/null
+UPD="$TMP/upd"; UPBK="$TMP/upd-bk"
+mkdir -p "$UPD"
+runu() { OPENCODE_DB="$UPDB" OCED_OUT="$UPD" OCED_BACKUP_DIR="$UPBK" \
+         OCED_PRESETS="$UPRESETS" run "$@"; }
+usql() { sqlite3 "$UPDB" "$@"; }
+cat > "$TMP/presets-upd.json" <<'EOF'
+{"presets": {
+  "narrow": {"product": "transcript", "filter": "ses_%"},
+  "pair":   {"products": {"transcript": {}, "memory": {}}}
+}}
+EOF
+UPRESETS="$TMP/presets-upd.json"
+
+# 1) creation records WHAT it was drawn from (the rule) and the gap it left.
+UOUT=$(runu export transcript)
+USTAMP=$(stamp_of "$UOUT")
+UMETA="$UPD/$USTAMP/transcript/metadata.json"
+jq -e '.scope == {"rule":"all"} and (.excluded|length) == 0' "$UMETA" >/dev/null \
+    && ok "a run records .scope (the rule it was drawn from)" \
+    || bad "scope/excluded: $(jq -c '.scope,.excluded' "$UMETA")"
+jq -e '.flags.no_reasoning == false and .flags.sub == "separate" and .flags.tool_output == "truncated"' "$UMETA" >/dev/null \
+    && ok "a run records .flags (the recipe exports update replays)" \
+    || bad "flags: $(jq -c .flags "$UMETA")"
+
+# 2) freshness is per session, and a stale run says WHY (not just that it is).
+printf '%s' "$(runu exports verify)" | grep -q "All clean" \
+    && ok "verify: a run written just now is clean" \
+    || bad "verify fresh: $(runu exports verify | tail -2)"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_B0001';"
+UVTSV=$(runu exports verify --tsv)
+printf '%s\n' "$UVTSV" | awk -F'\t' -v s="$USTAMP" '$1==s && $2=="stale"' | grep -q . \
+    && ok "verify --tsv tags a run whose session was edited (stale)" \
+    || bad "verify tsv: [$(printf '%s\n' "$UVTSV" | grep -F "$USTAMP")]"
+printf '%s' "$(runu exports verify)" | grep -q "1 session(s) changed in the live DB" \
+    && ok "verify names WHY a run is stale (a non-empty reason)" \
+    || bad "verify reason: [$(runu exports verify | grep 'stale')]"
+printf '%s' "$(runu exports list)" | grep -q "(stale)" \
+    && ok "exports list tags the stale run" \
+    || bad "list tag: $(runu exports list)"
+usql "DELETE FROM session WHERE id='ses_A0003';"
+printf '%s' "$(runu exports verify --tsv)" | grep -qE "deleted from the live DB" \
+    && ok "verify reports a session deleted from the live DB" \
+    || bad "verify missing: [$(runu exports verify --tsv)]"
+
+# 3) --dry-run is a plan: it counts and writes NOTHING.
+RUNS0=$(ls -1 "$UPD" | wc -l)
+UPLAN=$(runu exports update "$USTAMP" --dry-run)
+printf '%s' "$UPLAN" | grep -q "nothing written" \
+    && ok "update --dry-run is labelled a read-only plan" || bad "plan header: $UPLAN"
+printf '%s' "$UPLAN" | grep -qE "changed  : 1" \
+    && ok "update --dry-run counts the edited session" || bad "plan counts: $UPLAN"
+[ "$(ls -1 "$UPD" | wc -l)" -eq "$RUNS0" ] \
+    && ok "update --dry-run creates no directory" || bad "dry-run debris: $(ls -1 "$UPD")"
+UPLANJ=$(runu exports update "$USTAMP" --dry-run --json)
+printf '%s' "$UPLANJ" | jq -e '.up_to_date == false and .mode == "delta" and (.target|length) == 5' >/dev/null \
+    && ok "update --dry-run --json is machine-readable" || bad "plan json: $UPLANJ"
+printf '%s' "$(runu exports list)" | grep -q "(stale)" \
+    && ok "update --dry-run leaves the run stale" || bad "dry-run changed the run"
+
+# 4) a real update: the run matches the live set again (+new, -gone, re-render).
+usql "INSERT INTO session (id,project_id,slug,directory,title,version,parent_id,agent,model,cost,time_created,time_updated) VALUES ('ses_NEW01','p','n','/tmp','Fresh subagent (@build subagent)','v1','ses_A0001','build','m',0,1789003000000,1789003100000);"
+UPDOUT=$(runu exports update "$USTAMP" --yes)
+printf '%s' "$UPDOUT" | grep -q "^\[OK\] Updated export run: $USTAMP" \
+    && ok "update rewrites the run in place (same stamp)" || bad "update: $UPDOUT"
+# `--yes` means "the caller owns the gate AND already showed the plan" (the menu
+# wizard prints it before its confirm), so the plan must NOT be re-printed here.
+printf '%s' "$UPDOUT" | grep -q "Export update plan" \
+    && bad "--yes re-printed the plan (the caller already showed it)" \
+    || ok "--yes suppresses the plan (the caller owns the gate)"
+jq -e '[.session_records[].id] | sort == ["ses_A0001","ses_A0002","ses_B0001","ses_B0002","ses_NEW01","ses_ORPHAN01"]' "$UMETA" >/dev/null \
+    && ok "the refreshed run holds the live set (new in, gone out)" \
+    || bad "records: $(jq -c '[.session_records[].id]' "$UMETA")"
+jq -e --arg s "$USTAMP" '.updated_from == $s and .update_mode == "delta" and (.excluded|length) == 0' "$UMETA" >/dev/null \
+    && ok "metadata records the refresh provenance (+ no leftover gap)" \
+    || bad "provenance: $(jq -c '.updated_from,.update_mode,.excluded' "$UMETA")"
+# A refresh keeps the stamp, so the surfaces that show the stamp must ALSO show
+# that it moved — otherwise a real update reads as "same run, same date".
+printf '%s' "$(runu exports list)" | grep -q "refreshed .* (delta)" \
+    && ok "exports list shows the refresh next to the (unchanged) stamp" \
+    || bad "list refresh marker: $(runu exports list | grep "$USTAMP")"
+printf '%s' "$(runu exports view "$USTAMP")" | grep -q "delta mode (refreshed in place)" \
+    && ok "exports view names the refresh mode" \
+    || bad "view refresh line: $(runu exports view "$USTAMP" | grep -iE 'updated|date')"
+grep -q '^| Updated from |' "$UPD/$USTAMP/transcript/index.md" \
+    && ok "index.md gains the Updated from row" || bad "index row"
+find "$UPD/$USTAMP" -name '*Find false bugs*' | grep -q . \
+    && bad "a gone session's file survived the update" \
+    || ok "the gone session's files are gone"
+find "$UPD/$USTAMP" -name '*Fresh subagent*' | grep -q . \
+    && ok "the new session's files were written" || bad "the new session is missing"
+printf '%s' "$(runu exports verify)" | grep -q "All clean" \
+    && ok "a refreshed run matches the live DB again (verify clean)" \
+    || bad "post-update verify: $(runu exports verify)"
+
+# 5) a refresh is re-runnable: nothing moved -> it says so and exits 0.
+printf '%s' "$(runu exports update "$USTAMP" --yes)" | grep -q "Nothing to do" \
+    && ok "update is idempotent (already up to date)" \
+    || bad "idempotent: $(runu exports update "$USTAMP" --yes)"
+
+# 6) --keep-history keeps the previous state OUT of the run list (a run that is
+#    already up to date writes nothing, so give it something to refresh first).
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_ORPHAN01';"
+HOUT=$(runu exports update "$USTAMP" --keep-history --yes)
+UHIST=$(ls -1d "$UPD"/*~* 2>/dev/null | head -1)
+[ -n "$UHIST" ] && [ -f "$UHIST/transcript/metadata.json" ] \
+    && ok "update --keep-history keeps the previous state as <stamp>~<date>" \
+    || bad "history dir: [$(ls -1 "$UPD")]"
+printf '%s' "$(runu exports list)" | grep -q "~" \
+    && bad "the history copy leaked into exports list" \
+    || ok "history copies are not listed as runs (never pruned by accident)"
+
+# 7) a narrowed run keeps its gap: the base scope is remembered, the run stays
+#    as narrow as the menu left it, and --sticky decides revivals.
+NRUN=$(runu export narrow --sessions ses_A0001,ses_A0002)
+NSTAMP=$(stamp_of "$NRUN")
+NMETA="$UPD/$NSTAMP/transcript/metadata.json"
+jq -e '.scope == {"rule":"filter","value":"ses_%"} and ([.excluded[].id]|sort) == ["ses_B0001","ses_B0002","ses_NEW01","ses_ORPHAN01"]' "$NMETA" >/dev/null \
+    && ok "a narrowed run records the SCOPE it was drawn from and the ids it left out" \
+    || bad "narrow: $(jq -c '.scope,[.excluded[].id]' "$NMETA")"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "After the update : 2" \
+    && ok "update keeps a narrowed run narrow (no silent widening)" \
+    || bad "narrow update: $(runu exports update "$NSTAMP" --dry-run)"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_NEW01';"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "revived  : 1" \
+    && ok "an edited excluded session is revived (--sticky stale, the default)" \
+    || bad "sticky stale: $(runu exports update "$NSTAMP" --dry-run)"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run --sticky never)" | grep -qE "revived  : 0" \
+    && ok "--sticky never keeps a deliberate skip skipped" \
+    || bad "sticky never: $(runu exports update "$NSTAMP" --dry-run --sticky never)"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run --include-excluded all)" | grep -qE "After the update : 6" \
+    && ok "--include-excluded all re-opens the whole gap" \
+    || bad "include-excluded: $(runu exports update "$NSTAMP" --dry-run --include-excluded all)"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run --mode accumulative)" | grep -qE "After the update : 6" \
+    && ok "--mode accumulative re-syncs the run with its scope" \
+    || bad "accumulative: $(runu exports update "$NSTAMP" --dry-run --mode accumulative)"
+
+# 8) a legacy run (no .scope/.flags, but .session_records) still refreshes.
+LRUN=$(runu export transcript)
+LSTAMP=$(stamp_of "$LRUN")
+LMETA="$UPD/$LSTAMP/transcript/metadata.json"
+jq 'del(.flags,.scope,.excluded)' "$LMETA" > "$LMETA.tmp" && mv "$LMETA.tmp" "$LMETA"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
+printf '%s' "$(runu exports update "$LSTAMP" --dry-run)" | grep -qE "changed  : 1" \
+    && ok "an update falls back to the legacy top-level keys" \
+    || bad "legacy update: $(runu exports update "$LSTAMP" --dry-run)"
+runu exports update "$LSTAMP" --yes >/dev/null
+jq -e '.flags.tool_output == "truncated" and .scope.rule == "all"' "$LMETA" >/dev/null \
+    && ok "a legacy run gains .flags/.scope from the refresh" \
+    || bad "legacy meta: $(jq -c '.flags,.scope' "$LMETA")"
+
+# 9) bundles: one shared stamp, per-product provenance, one bundle index.
+BOUT=$(runu export pair)
+BSTAMP2=$(stamp_of "$BOUT")
+jq -e --arg s "$BSTAMP2" '.updated_from == null' "$UPD/$BSTAMP2/transcript/metadata.json" >/dev/null \
+    && ok "a fresh bundle carries no update provenance" || bad "bundle fresh"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_B0002';"
+runu exports update "$BSTAMP2" --yes >/dev/null
+for p in transcript memory; do
+    jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/$p/metadata.json" >/dev/null \
+        || bad "bundle $p did not record updated_from"
+done
+jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/transcript/metadata.json" >/dev/null \
+    && ok "an updated bundle records the provenance in EVERY product" \
+    || bad "bundle provenance"
+grep -q '^| Updated from |' "$UPD/$BSTAMP2/index.md" \
+    && ok "the bundle index gains the Updated from row" || bad "bundle index row"
+
+# 10) refusals: unknown stamp, a run with no records, a bad mode.
+printf '%s' "$(runu exports update nope-stamp 2>&1)" | grep -q "Not found" \
+    && ok "update refuses an unknown stamp" || bad "unknown stamp"
+LEGRUN="$UPD/$LSTAMP"
+jq 'del(.session_records)' "$LEGRUN/transcript/metadata.json" > "$LEGRUN/transcript/metadata.json.t" \
+    && mv "$LEGRUN/transcript/metadata.json.t" "$LEGRUN/transcript/metadata.json"
+printf '%s' "$(runu exports update "$LSTAMP" --dry-run 2>&1)" | grep -q "re-export it instead" \
+    && ok "update refuses a run that cannot say what it contains" || bad "legacy refusal"
+runu exports update "$USTAMP" --mode nope >/dev/null 2>&1 \
+    && bad "update accepted a bad --mode" || ok "update refuses a bad --mode"
 
 echo ""
 echo "RESULT: $pass OK / $fail FAIL"

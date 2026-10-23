@@ -28,7 +28,7 @@ from exportlib.config import default_bkp_dir, default_db, default_out, default_p
 from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions, since_ms
 from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
-from exportlib.presets import bundle_child_argv, resolve_profile
+from exportlib.presets import bundle_child_argv, resolve_profile, scope_meta
 from exportlib.render import Renderer
 from exportlib.transcript import append_transcript_inline, write_transcript
 from exportlib.util import (
@@ -40,7 +40,7 @@ from exportlib.util import (
     sha256_file,
 )
 from exportlib.writers import last_backup_info, make_outdir_final, write_index
-from exportlib.flags import FLAGS
+from exportlib.flags import FLAGS, effective_flags
 
 
 def _pos_int(v: str) -> int:
@@ -64,23 +64,6 @@ def _iso_date(v: str) -> str:
     return s
 
 
-def selection_label(args) -> str:
-    """One human phrase for the SELECTION that produced this run (the filter /
-    sessions / last / since rule, or 'ALL sessions'). Single source for the
-    bundle index and the metadata, so they can never describe a run differently.
-    A recency rule is named explicitly because its set is recomputed at run time.
-    """
-    if args.sessions:
-        return f"{len(args.sessions)} session(s): " + ", ".join(args.sessions)
-    if args.filter:
-        return f"filter: {args.filter}"
-    if getattr(args, "last", None):
-        return f"last {args.last} session(s) by last update"
-    if getattr(args, "since", None):
-        return f"updated on or after {args.since}"
-    return "ALL sessions"
-
-
 def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
     sel = selection_label(args)
     lines = [
@@ -92,6 +75,11 @@ def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
         f"| Date | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} |",
         f"| Source DB | `{db_path}` |",
         f"| Selection | {sel} |",
+        # Same provenance row the per-product index.md writes for a refreshed
+        # run (exports update): the base run and the axis it used.
+        *([f"| Updated from | `{args.update_from}` "
+           f"({getattr(args, 'update_mode', None) or 'delta'}) |"]
+          if getattr(args, "update_from", None) else []),
         f"| Products | {' + '.join(products)} |",
         "",
         "Each product ran in its own subdirectory (own index.md + metadata.json):",
@@ -173,6 +161,12 @@ def build_argparser() -> argparse.ArgumentParser:
     # Hidden/internal args
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
+    # `exports update` hand-off: the target set is materialized as --sessions, but
+    # the run's provenance stays the base run's scope; the update itself is named
+    # so the index/metadata can say where it came from. Never preset keys.
+    ap.add_argument("--scope-json", help=argparse.SUPPRESS)
+    ap.add_argument("--update-from", help=argparse.SUPPRESS)
+    ap.add_argument("--update-mode", help=argparse.SUPPRESS)
 
     # CLI-only workflow controls (never preset keys, like --stamp). They do not
     # enter FLAGS: they act on the run itself, not on its content.
@@ -204,6 +198,36 @@ def _session_records(written: list, sessions: dict) -> list[dict]:
         for sid in subs:
             out.append(session_record(sessions[sid], "subagent"))
     return out
+
+
+def _scope_excluded(con, args, written_ids: set, db_ids: set):
+    """metadata `.scope` + `.excluded`: what the run was DRAWN FROM versus what
+    it actually WRITES. `.excluded` is the pure fact `scope_match - written` —
+    sessions that were in scope and deliberately left out (the menu's marks), plus
+    sessions a drop flag removed. `exports update` re-opens that gap; a run's own
+    no_subagents/orphan policy is re-applied at write time, so it is not folded in
+    here. Recorded once at creation, because a run's scope cannot be re-derived
+    later (a preset's file, and the DB, both move on)."""
+    scope = scope_meta(args)
+    rule = scope.get("rule")
+    scope_sessions = load_sessions(
+        con,
+        scope.get("value") if rule == "filter" else None,
+        scope.get("ids") if rule == "sessions" else None,
+        scope.get("value") if rule == "last" else None,
+        scope.get("value") if rule == "since" else None,
+    )
+
+    def _sub(v: dict) -> bool:
+        p = v.get("parent_id") or ""
+        return bool(p) and p in db_ids
+
+    excluded = [
+        session_record(v, "subagent" if _sub(v) else "root")
+        for sid, v in scope_sessions.items()
+        if sid not in written_ids
+    ]
+    return scope, excluded
 
 
 def _backup_aligned(db_path: Path) -> str:
@@ -399,6 +423,7 @@ def main() -> None:
     # Preview short-circuits before the write pipeline (`--show` never reads the DB).
     if args.show:
         sys.exit(_show_plan(profile_arg))
+
     if args.dry_run:
         sys.exit(_dry_run(args, profile_arg))
 
@@ -511,12 +536,22 @@ def main() -> None:
     if args.sub == "omit":
         children_of = {}
 
+    # The written set is predictable here (the same roots + children_of every
+    # product writes), so `.scope`/`.excluded` can be computed ONCE, before the
+    # product branches, and handed to a product that writes its own metadata.
+    written_ids = set(roots)
+    for rid in roots:
+        written_ids.update(children_of.get(rid, []))
+    scope, excluded = _scope_excluded(con, args, written_ids, db_ids)
+
     if args.profile == "memory":
-        memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden=n_hidden)
+        memory_export(con, sessions, roots, children_of, out_dir, args, db_path,
+                      hidden=n_hidden, scope=scope, excluded=excluded)
         return
 
     if args.profile == "faithful":
-        faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden=n_hidden)
+        faithful_export(con, sessions, roots, children_of, out_dir, args, db_path,
+                        hidden=n_hidden, scope=scope, excluded=excluded)
         return
 
     # ------- write sessions -------
@@ -576,6 +611,11 @@ def main() -> None:
         "sessions_selected": args.sessions,
         "session_records": _session_records(written, sessions),
         "selection": selection_meta(args),
+        "scope": scope,
+        "excluded": excluded,
+        "flags": effective_flags(args),
+        **({"updated_from": args.update_from, "update_mode": args.update_mode or "delta"}
+           if getattr(args, "update_from", None) else {}),
         "profile": args.profile,
         "preset": args.preset,
         "sub": args.sub,

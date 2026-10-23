@@ -170,6 +170,52 @@ oced_status() {
     fi
 
     echo ""
+    echo "   Shrinks:"
+    # The shrink copies are the other "snapshot" family: report the newest one
+    # and whether the live DB has moved on (the SAME o_shrink_stale that
+    # list/view/verify/swap use). One live max(time_updated): cheap enough for a
+    # status screen, and it is the one fact that says "this copy is behind".
+    local -a sh_runs=()
+    local shdir shrun shj shkeep shtot shsize shstamp shfresh
+    shdir="$(shrinks_dir)"
+    mapfile -t sh_runs < <(shrinks_runs_find)
+    if [ "${#sh_runs[@]}" -eq 0 ]; then
+        echo "      No shrink copies yet (run: opencode-db shrink)."
+    else
+        shrun="${sh_runs[0]}"
+        shj="$shrun/shrink.json"
+        shstamp=$(shrinks_stamp_human "${shrun##*/}")
+        shkeep=$(jq -r '.sessions.kept // "?"' "$shj" 2>/dev/null || echo "?")
+        shtot=$(jq -r '.sessions.total // "?"' "$shj" 2>/dev/null || echo "?")
+        shsize=$(o_human_size "$(stat -c %s "$shrun/opencode.shrunk.db" 2>/dev/null || echo 0)")
+        echo "      Copies: ${#sh_runs[@]} (in $shdir)"
+        printf '      %-18s %s\n' "Newest:" "$shstamp — $shkeep/$shtot kept — $shsize"
+        if shfresh=$(o_shrink_stale "$shj" 2>&1); then
+            echo "      [OK]  fresh — nothing in the live DB is newer than it."
+        else
+            echo "      [!]  $shfresh"
+        fi
+        echo "      Verify every copy: opencode-db shrinks verify"
+    fi
+    # The pre-shrink safety copy of the last --swap: the manifest's `.pre_shrink`
+    # singleton. It belongs to the shrink domain (shown/removed by
+    # `shrinks preshrink`), but status reports it because it is the rollback of
+    # the LIVE DB — plus whether the live DB has moved past it.
+    local psrec psdate psfile pssize psfresh
+    psrec=$(preshrink_manifest_record)
+    if [ -n "$psrec" ]; then
+        psfile=$(printf '%s' "$psrec" | jq -r '.file // "-"')
+        psdate=$(printf '%s' "$psrec" | jq -r '.date // "-"')
+        pssize=$(o_human_size "$(printf '%s' "$psrec" | jq -r '.size // 0')")
+        printf '      %-18s %s\n' "Safety:" "$psfile ($pssize, $(o_human_iso "$psdate"))"
+        if psfresh=$(o_preshrink_stale "$psrec" 2>&1); then
+            echo "      [OK]  fresh — the live DB has not moved past it (a valid rollback of the last swap)."
+        else
+            echo "      [!]  $psfresh"
+        fi
+    fi
+
+    echo ""
     echo "   Version / schema:"
     o_version_block
     echo "   Schema probe:"

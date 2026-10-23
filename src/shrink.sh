@@ -175,12 +175,36 @@ oced_shrink_swap() {
         return 1
     fi
 
+    # 6) register the safety snapshot as the manifest's `.pre_shrink` singleton:
+    # a special, always-refreshed backup (the rollback of THIS swap, and what
+    # `--from-backup pre-shrink/<file>` resolves). Only on success — a rollback
+    # consumes the safety file with `mv`, so there is nothing to register.
+    local ps_rel ps_sha ps_size ps_sess ps_msgs ps_parts ps_max ps_rec
+    ps_rel="pre-shrink/${safety##*/}"
+    ps_sha=$(sha256sum "$safety" | cut -d' ' -f1)
+    ps_size=$(stat -c %s "$safety")
+    ps_sess=$(o_q_file "$safety" "SELECT count(*) FROM session")
+    ps_msgs=$(o_q_file "$safety" "SELECT count(*) FROM message")
+    ps_parts=$(o_q_file "$safety" "SELECT count(*) FROM part")
+    ps_max=$(o_q_file "$safety" "SELECT coalesce(max(time_updated),0) FROM session")
+    ps_rec=$(jq -n \
+        --arg date "$(o_now_utc)" --arg file "$ps_rel" \
+        --arg sha "$ps_sha" --argjson size "${ps_size:-0}" \
+        --argjson sess "${ps_sess:-0}" --argjson msgs "${ps_msgs:-0}" \
+        --argjson parts "${ps_parts:-0}" --arg maxu "$ps_max" --arg src "$live" \
+        '{date:$date, file:$file, kind:"pre-shrink",
+          sha256:$sha, sha256_raw:$sha, size:$size, size_raw:$size,
+          sessions:$sess, messages:$msgs, parts:$parts,
+          max_updated:$maxu, source:$src}')
+    preshrink_manifest_set "$ps_rec"
+    o_log "pre-shrink registered: $ps_rel (sessions=$ps_sess messages=$ps_msgs parts=$ps_parts)"
+
     echo ""
     echo "   [OK] Swap complete."
     echo "   New live DB: $live ($(o_human_size "$(stat -c %s "$live")"))"
     echo "   Safety copy (pre-shrink): $safety"
     echo "   Keep this safety copy until opencode has opened the new DB without problems."
-    echo "   Older pre-shrink copies are auto-cleaned; list with: opencode-db shrinks verify"
+    echo "   It is managed by the shrink domain: view/remove with: opencode-db shrinks preshrink"
     return 0
 }
 
@@ -737,7 +761,8 @@ oced_shrinks() {
         remove) shift; oced_shrinks_remove "$@" ;;
         prune)  shift; oced_shrinks_prune "$@" ;;
         verify) shift; oced_shrinks_verify "$@" ;;
-        *) echo "Usage: opencode-db shrinks [list [--tsv]|view <stamp> [--json]|remove <stamp> [--yes]|prune <N>|verify [--tsv] [--yes]]"; return 1 ;;
+        preshrink) shift; oced_shrinks_preshrink "$@" ;;
+        *) echo "Usage: opencode-db shrinks [list [--tsv]|view <stamp> [--json]|remove <stamp> [--yes]|prune <N>|verify [--tsv] [--yes]|preshrink [--json|remove [--yes]]]"; return 1 ;;
     esac
 }
 
@@ -945,6 +970,97 @@ o_shrink_stale() {
         return 1
     fi
     return 0
+}
+
+# o_preshrink_stale <record-json> [live_max] — the SAME freshness rule as
+# o_shrink_stale, applied to the `.pre_shrink` manifest record (the rollback
+# snapshot of the last --swap). Echoes a warning (or nothing) and returns
+# 0 = fresh, 1 = stale/unverifiable. The pre-shrink holds the PRE-swap DB, so
+# "fresh" means the live DB has not moved past it (nothing newer to lose when
+# you keep it as a rollback). `live_max` skips the query (one read for `status`).
+o_preshrink_stale() {
+    local rec="$1" live_max=0 pre_max=0
+    [ -n "$rec" ] || return 0
+    if [ -n "${2:-}" ]; then
+        live_max="$2"
+    else
+        live_max=$(o_q "SELECT coalesce(max(time_updated),0) FROM session" 2>/dev/null || echo 0)
+    fi
+    pre_max=$(printf '%s' "$rec" | jq -r '.max_updated // 0' 2>/dev/null || echo 0)
+    if [ -z "$pre_max" ] || [ "$pre_max" -eq 0 ] 2>/dev/null; then
+        echo "cannot verify freshness (the pre-shrink record has no max_updated)."
+        return 1
+    fi
+    if [ "$live_max" -gt "$pre_max" ]; then
+        echo "the live DB has content newer than this rollback copy (max_updated=$live_max > copy $pre_max) — restoring it would lose recent work."
+        return 1
+    fi
+    return 0
+}
+
+# oced_shrinks_preshrink [remove [--yes]] — show or delete the pre-shrink safety
+# copy the last --swap recorded (the manifest's `.pre_shrink` singleton). This is
+# the SHRINK-side home of that copy: it is never listed by `backups` nor shown in
+# the backups picker. `--json` returns the raw manifest record. `remove` deletes
+# the file and clears the singleton (the REGULAR .backups list is untouched).
+oced_shrinks_preshrink() {
+    local cmd="${1:-show}"
+    local rec; rec=$(preshrink_manifest_record)
+    if [ -z "$rec" ]; then
+        echo "No pre-shrink safety copy (only a successful `shrink --swap` records one)."
+        [ "$cmd" = "remove" ] && return 1
+        return 0
+    fi
+    if [ "$cmd" = "--json" ]; then
+        printf '%s' "$rec" | jq .
+        return 0
+    fi
+    local file date size sess msgs parts src live_max state expect actual fresh
+    file=$(printf '%s' "$rec" | jq -r '.file // "-"')
+    if [ "$cmd" = "remove" ]; then
+        local yes=0
+        [ "${2:-}" = "--yes" ] && yes=1
+        if [ "$yes" -eq 0 ]; then
+            printf 'Remove the pre-shrink safety copy %s (your rollback of the last swap)? [y/N] ' "$file"
+            local ans
+            read -r ans || return 1
+            [[ "$ans" =~ ^[yYsS]$ ]] || { echo "   cancelled."; return 0; }
+        fi
+        [ -f "$OCED_BACKUP_DIR/$file" ] && rm -f "$OCED_BACKUP_DIR/$file"
+        preshrink_manifest_clear
+        o_log "pre-shrink removed: $file"
+        echo "Removed: $file"
+        return 0
+    fi
+
+    date=$(printf '%s' "$rec" | jq -r '.date // "-"')
+    size=$(printf '%s' "$rec" | jq -r '.size // 0')
+    sess=$(printf '%s' "$rec" | jq -r '.sessions // 0')
+    msgs=$(printf '%s' "$rec" | jq -r '.messages // 0')
+    parts=$(printf '%s' "$rec" | jq -r '.parts // 0')
+    src=$(printf '%s' "$rec" | jq -r '.source // "-"')
+
+    echo "== Pre-shrink safety copy =="
+    echo ""
+    printf '  %-11s %s\n' "file:" "$file"
+    printf '  %-11s %s\n' "created:" "$(o_human_iso "$date")"
+    printf '  %-11s %s\n' "size:" "$(o_human_size "$size")"
+    printf '  %-11s %s sessions · %s messages · %s parts\n' "content:" "$sess" "$msgs" "$parts"
+    printf '  %-11s %s\n' "source:" "$src"
+    IFS=$'\t' read -r state expect actual < <(oc_backup_sha_state "$rec")
+    printf '  %-11s %s…%s\n' "sha256:" "${expect:0:12}" "${expect: -4}"
+    case "$state" in
+        OK)       echo "  [OK]        the file matches the manifest" ;;
+        MISMATCH) echo "  [FAIL]      sha256 MISMATCH (manifest $expect / file $actual)" ;;
+        *)        echo "  [MISSING]   $OCED_BACKUP_DIR/$file" ;;
+    esac
+    if fresh=$(o_preshrink_stale "$rec" 2>&1); then
+        echo "  [OK]        the live DB has not moved past it (a valid rollback of the last swap)"
+    else
+        echo "  [!]         $fresh"
+    fi
+    echo "  Restore:    opencode-db --from-backup $file <command>"
+    echo "  Remove:     opencode-db shrinks preshrink remove"
 }
 
 # o_shrink_unexported <shrink.json> — is THIS copy's discarded cascade covered by

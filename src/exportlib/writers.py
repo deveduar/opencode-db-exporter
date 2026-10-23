@@ -37,6 +37,10 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         # (filter / ids / last N / since DATE / all) — the same phrase as
         # metadata.json's `selection` and the "matched nothing" error.
         f.write(f"| Selection | {selection_label(args)} |\n")
+        # Provenance of a refreshed run (exports update): the base run it came
+        # from and the axis it used, next to the selection it still follows.
+        if getattr(args, "update_from", None):
+            f.write(f"| Updated from | `{args.update_from}` ({args.update_mode or 'delta'}) |\n")
         f.write(f"| Sessions (roots/subagents/total) | {len(written)} / {sum(len(s[1]) for s in written)} / {len(sessions)} |\n")
         # Subagent inclusion: only surfaced when a flag narrowed the set (the
         # default run keeps the historical rows untouched).

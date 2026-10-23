@@ -377,6 +377,92 @@ hand-written block. There are **no
 variant tables or custom checklists**: tuning and "bundle everything in one stamp" live
 in the presets file (`OCED_PRESETS`) or the CLI.
 
+**The run manager is where a run is refreshed, not the recipe.** "What changed since last
+time" is a property of a *run*, so `exports update <stamp>` lives in the exports manager
+(the picker's `[>] update` row), never as a switch on the export/enable
+picker. The engine is `exportlib/update.py` (the run manager's Python counterpart of a
+fresh export): it reads the run's own `metadata.json` (`.session_records`, `.scope`,
+`.flags`, `.preset`), compares them against the LIVE DB read-only, and re-renders the
+target set into a temp dir that is swapped over the run in two `rename`s — a failed refresh
+never leaves a half-updated export. The run keeps its STAMP (and its place in
+`exports list`); only its content moves. `--keep-history` keeps the previous state as
+`<stamp>~<date>` (hardlinks) without ever listing it as a run. `--mode delta` (default) keeps
+the run's own set (`+new`, `-gone`); `--mode accumulative` re-syncs it with the whole scope.
+`--sticky` controls whether a session the menu deliberately left out (`.excluded`) is pulled
+back in: `stale` (default) revives it **only once it was edited** ("the run no longer
+describes it"), `never` refuses even that — the user's "I dropped it, keep it dropped" — and
+`--include-excluded all` reopens the gap unconditionally. `--include-excluded all` and
+`--mode accumulative` land on the **same** set (`in_scope == still ∪ new ∪ ex_live`), so they are
+interchangeable for "bring everything back"; the menu folds them into one row.
+
+**The refresh flow is three levels.** LEVEL 1 is the view/remove list; its `[>] update` opens
+LEVEL 2, the run list **in update mode**; picking a run opens LEVEL 3, the modes screen. LEVEL 3
+is **fila-run, not toggles**: the plan is the engine's own `--dry-run`, so what the gate confirms
+is literally what the run will do; the failure the old toggle screen caused was that changing a
+modifier **re-ran and re-printed the plan** and then opened `fzf` over it, so the user could never
+read what was about to happen. Now each ROW is a concrete update — its own mode and excluded
+policy, its label carrying the live counts — and picking one prints the plan **uncovered** (fzf is
+closed by then, so it scrolls) BEFORE the y/N gate:
+
+| Row | Flags | Meaning |
+|---|---|---|
+| `sticky stale (default) — re-render N[ · +M new][ · revive K edited] → T_delta` | (none) | keep the run's own set, `--sticky stale`; it revives the excluded sessions the DB edited |
+| `sticky never — 0 revived, E excluded stay out → T_never` | `--sticky never` | keep the run's own set, an edited excluded session stays out — offered ONLY when delta would revive one (`revived > 0`), and it lands on ITS OWN target |
+| `bring the whole scope back — revive R → T_scope` | `--mode accumulative` | re-open the whole gap: every excluded session comes back and the run follows its scope |
+
+**Three rules keep the screen honest.** A row is rendered only when its plan really **moves**
+something (the engine's `up_to_date` is false): a no-op mode is never offered, because picking it
+would print a plan and then do nothing — this is what made a `sticky never` that changes nothing
+(a narrowed run whose delta revives nothing) stop appearing. `--include-excluded all` and
+`--mode accumulative` land on the **SAME** set (mathematically `in_scope == still ∪ new ∪
+ex_live`), so the menu offers **ONE** reopen row (accumulative); the `all`/ids forms stay on the
+CLI. And when exactly **one** real action remains — a full run with no gap (delta alone), or a
+narrowed run whose only useful move is reopening — the picker is **skipped** and the action runs
+straight into its plan+gate: a one-row `fzf` screen whose only job is to make the user press
+Enter is a step with no decision in it.
+
+Each row carries the set it LANDS ON (`→ target`, each policy's OWN target), so the user sees
+where each option ends up BEFORE the plan prints (the `never` row used to print delta's target).
+The labels use the CLI's own terms (`sticky`, `accumulative`), glossed on a three-line header.
+That header also explains why delta and `never` can differ (the edited excluded session delta
+revives).
+
+`update all runs` is deliberately **not** in this table: it is the FIRST row of LEVEL 2
+(`[>] update all runs`, `__UPDATE_ALL__`, only with more than one run), next to the runs it
+refreshes, because refreshing the whole shelf is a property of the LIST, not of one run's modes
+screen. It collects the runs with `exports_runs_find` and runs them behind ONE global gate.
+
+**Each level owns its own loop** (this is the navigation contract, guarded by tests): LEVEL 3
+ALWAYS returns to LEVEL 2 — running, declining or ESC'ing an update redraw the run list, so the
+user can refresh another run without landing back in the view/remove list; only ESC at LEVEL 2
+leaves to LEVEL 1. The nothing-moved path therefore carries no navigation signal (it just says so
+and LEVEL 2 redraws) — the old shape paused inside the wizard AND returned 0 to a caller that
+paused again, so Enter re-showed the same screen.
+
+The scope row is rendered only when `.excluded` is non-empty (there is a gap to reopen), the
+"sticky never" row only when delta would revive an excluded session (otherwise it is the same
+action as delta) AND it moves, and every row only when its plan is not `up_to_date`. A
+**narrowed** run is never dismissed just because its own set did not move: if it still has a gap,
+the scope row is offered so the gap can be closed. Only when **no** row would move anything does
+it say "nothing has moved" and stop.
+
+**Freshness is per-session, not one clock.** A backup or a shrink records a single
+`max_updated`; an export records each session's own `updated` in `.session_records`, so
+`o_export_stale <meta> [--tag]` is the ONE verdict (the `exports list` row, `exports view`,
+`exports verify [--tsv]` **and the menu's run feed `oc_exports_run_row`** all call it) and it
+flags two different things: **stale** when
+a recorded session was edited since (the live `time_updated` moved past the run's), and
+**missing** when a recorded session no longer exists. Both comparisons are at second
+resolution because `ts_iso` truncates. A run written before `.session_records` existed is
+`unverifiable` — a legacy run cannot be judged, so it is never silently called fresh. A
+refresh keeps the stamp, so the list, view **and menu row** render the refresh **next to** it
+(`refreshed <time> (<mode>)` / `updated: <mode> mode (refreshed in place)` / `· refreshed
+(mode)`), which is the only visible proof a real update moved; the menu row also shows the
+refresh's **own date** (`metadata.date`, in the display TZ) instead of the stamp date, since a
+refresh keeps the stamp and the old date would read as "same run, same date";
+`exports update --yes` suppresses the plan (the caller owns the gate and already showed it),
+exactly like `backup --yes`.
+
 The root menu recomputes its header on every loop: `run_menu --refresh-cb oc_root_status`
 rebuilds `ACTION_STATUS` (DB/sessions/WAL/backup/exports counts) after each action, so a
 pickered deletion is reflected immediately.
@@ -559,11 +645,17 @@ while opencode is running can lose the WAL tail. `opencode-db shrink
 2. **Re-verification** of the copy in `mode=ro` (`integrity_check` + `foreign_key_check`).
 3. **Safety copy** of the live DB with `sqlite3 .backup` →
    `$OCED_BACKUP_DIR/pre-shrink/opencode.pre-shrink-<ts>.db` (WAL-safe; never `cp`),
-   auto-keeping only the most recent copy. The swap safety copy is **not** a
-   `backups`/manifest run — `shrinks verify` lists/cleans it.
+   auto-keeping only the most recent copy. On a successful swap it is registered as
+   the manifest's **`.pre_shrink` singleton** — the rollback of the last swap
+   (always refreshed, never pruned). It belongs to the **shrink domain**:
+   `shrinks preshrink` shows/checks it and `shrinks preshrink remove` deletes it
+   (never a `backups` surface), while `--from-backup pre-shrink/<file>` still
+   resolves it read-only. `status` reports it with a freshness verdict. Old,
+   unregistered pre-shrink files are cleaned by `shrinks verify`.
 4. **Atomic swap** with `mv -f` + cleaning of the old DB's `-wal`/`-shm`.
 5. **Rollback**: if the new DB does not open/verify in `mode=ro`, the safety copy is
-   restored.
+   restored (a rollback consumes the file, so nothing is registered — only a
+   successful swap records `.pre_shrink`).
 
 `--dry-run` never writes; combining it with `--swap` is rejected. Confirmation `[y/N]`
 can be skipped with `--yes`.
@@ -597,6 +689,9 @@ time (a root-only export is a different set, so it never clears the flag). The e
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
 | export from a stored backup instead of the live DB | `--from-backup <file>` | every read command honors it |
+| refresh an existing run after the DB moved on | `exports update <stamp>` (menu: `[>] update`) | keeps the stamp; `--mode delta` (+new/−gone) or `--mode accumulative` (all in scope — re-sync the whole scope); `--sticky never` keeps a dropped session dropped; `--dry-run` shows the plan, `--keep-history` keeps the old state; the menu offers each as its own row, plan printed before the gate |
+| check whether a run is still current | `exports verify` (or the tag on `exports list`) | per-session: `stale` (a recorded session was edited) / `missing` (a recorded session is gone) / `unverifiable` (a legacy run); a narrowed run's size reads `K/N kept · R root S sub` (the excluded count is the difference) |
+| see what a run left out | `exports view <stamp>` | `scope:` (the wider set) + an `== Excluded (N kept out of scope) ==` block (id + title, capped at 8) |
 
 ## 8. Precedence and safety
 
@@ -605,6 +700,12 @@ time (a root-only export is a different set, so it never clears the flag). The e
   explicit flag overrides the plan's value).
 - The DB is always opened **read-only**; exports never mutate opencode data. The only
   path that writes the live DB is the opt-in `shrink --swap`.
+- `exports update` refreshes an existing run **from** the live DB (read-only) and rewrites
+  only the stored run: it re-renders into a temp dir and swaps it in with two `rename`s, so
+  a failed refresh leaves the original run intact. `--keep-history` keeps the previous state
+  as a hardlinked `<stamp>~<date>` copy. A default (delta) refresh can never turn a run the
+  menu deliberately narrowed into a full export — what it left out is recorded as
+  `.excluded` and stays out unless `--sticky`/`--include-excluded` re-opens it.
 - Every export's `metadata.json` carries a `db_sha256`, so you can correlate a run with
   the exact snapshot that produced it.
 - **`--sanitize` is best-effort**: it redacts high-confidence secret prefixes

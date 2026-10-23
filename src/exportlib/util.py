@@ -54,7 +54,20 @@ SELECTION_LABELS = {
 
 def selection_rule(args) -> tuple[str, object]:
     """(rule, value) for the effective selection of this run, in the fixed
-    precedence the CLI mutex already enforces."""
+    precedence the CLI mutex already enforces.
+
+    `scope_json` is the internal hand-off `exports update` uses: the child run is
+    invoked with an explicit `--sessions` target set, but its PROVENANCE is the
+    base run's scope, so metadata `.selection` / the index phrase keep describing
+    the rule the run still follows (not the hundreds of ids the update happened
+    to materialize). It is hidden, never a preset key."""
+    override = getattr(args, "scope_json", None)
+    if override:
+        meta = override if isinstance(override, dict) else json.loads(override)
+        rule = meta.get("rule")
+        if rule == "sessions":
+            return "sessions", list(meta.get("ids") or [])
+        return rule, meta.get("value")
     if getattr(args, "filter", None) is not None:
         return "filter", args.filter
     if getattr(args, "sessions", None):

@@ -51,9 +51,10 @@ shrink [preset] [--keep N | --older-than DAYS | --since DATE | --keep-all |
                       (a big DB only grows: deleting sessions does NOT shrink
                       the file). The copy replaces the live DB manually; this
                       tool never writes it. --swap automates the replacement
-                      safely: aborts if opencode is running, snapshots a
-                      safety copy to $OCED_BACKUP_DIR/pre-shrink/ (WAL-safe)
-                       and rolls back if the new DB does not open. Exactly ONE
+                       safely: aborts if opencode is running, snapshots a
+                       safety copy to $OCED_BACKUP_DIR/pre-shrink/ (WAL-safe,
+                       managed with 'shrinks preshrink') and rolls back if the new
+                       DB does not open. Exactly ONE
                        keep rule applies (last one wins); a recipe is a named
                        combination of OPERATIONS only (lean/quiet, see below) —
                        the session selection is the keep rule above, or the menu
@@ -65,6 +66,11 @@ exports list         list past export runs (date/profile/counts/size);
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
   exports view <stamp> [--files] [--json]   show details of an export run (config, sessions, files; --json = raw)
+  exports verify [--tsv]   check which export runs no longer match the live DB
+  exports update <stamp>   refresh a run in place from the live DB (delta by
+                       default: add new, drop gone; --mode accumulative re-syncs
+                       the whole scope; --dry-run prints the plan and writes
+                       nothing; --keep-history hardlinks the previous state)
   shrinks list [--tsv]   list the produced shrink copies (criteria/counts/size)
   shrinks view <stamp> [--json]   show the shrink.json of a run (--json = raw)
   shrinks verify [--yes] [--tsv]   check for orphan run dirs, old pre-shrink
@@ -72,6 +78,11 @@ exports list         list past export runs (date/profile/counts/size);
                        DB; --yes auto-removes orphan dirs + old pre-shrinks
   shrinks remove <stamp> [--yes]   delete a shrink run (the pruned + VACUUMed copy)
   shrinks prune <N> [--yes]   keep only the N most recent shrink runs
+  shrinks preshrink [--json|remove [--yes]]
+                       the pre-swap safety copy the last --swap recorded (the
+                       rollback of the LIVE DB): show its details + sha check, or
+                       remove it. Restore with: opencode-db --from-backup
+                       pre-shrink/<file> <command>
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
   help                 this help
 
