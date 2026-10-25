@@ -518,8 +518,10 @@ oced_exports_view() {
             [ -n "$_mk" ] && ses_state["$_mk"]="$_st"
         done < <(o_export_stale_ids "$rec_meta")
         local -A ses_info=()
-        local sid skind stitle screated supdated when sflag
-        # Collect all session rows first so we can order stale/missing first
+        local sid skind stitle screated supdated when
+        # Collect all session rows first so we can order by last use (updated desc),
+        # matching the menu's updated-desc order. Stale/missing are NOT pulled to
+        # the top here; they are listed explicitly in == Changed since export ==.
         local -a all_rows=()
         while IFS=$'\t' read -r sid skind stitle screated supdated; do
             [ -n "$sid" ] || continue
@@ -528,20 +530,16 @@ oced_exports_view() {
             else
                 when="${screated:0:16} -> ${supdated:0:16}"
             fi
-            sflag="${ses_state[$sid]:-}"
-            ses_info["$sid"]="$skind"$'\t'"$when"$'\t'"$stitle"$'\t'"$sflag"
-            # store for sorting: stale/missing get priority
-            if [ -n "$sflag" ]; then
-                all_rows+=("1"$'\t'"$sid"$'\t'"$skind"$'\t'"$when"$'\t'"$stitle")
-            else
-                all_rows+=("0"$'\t'"$sid"$'\t'"$skind"$'\t'"$when"$'\t'"$stitle")
-            fi
+            ses_info["$sid"]="$skind"$'\t'"$when"$'\t'"$stitle"$'\t'"${ses_state[$sid]:-}"
+            # Sort key = updated desc (ISO8601 sorts correctly lexicographically)
+            all_rows+=("$supdated"$'\t'"$sid"$'\t'"$skind"$'\t'"$when"$'\t'"$stitle")
         done < <(oced_export_session_rows "$rec_meta")
-        # Print with stale/missing first (by last use / updated time desc as they appear)
-        local pr pflag psid pskind pwhen pstitle
+        local pr _updsid updsid upskind upwhen upstitle
+        mapfile -t all_rows < <(printf '%s\n' "${all_rows[@]}" | sort -r)
         for pr in "${all_rows[@]}"; do
-            IFS=$'\t' read -r pflag psid pskind pwhen pstitle <<< "$pr"
-            printf '  %-22s %-8s  %-25s %s\n' "$psid" "$pskind" "$pwhen" "$pstitle"
+            [ -n "$pr" ] || continue
+            IFS=$'\t' read -r _updsid updsid upskind upwhen upstitle <<< "$pr"
+            printf '  %-22s %-8s  %-25s %s\n' "$updsid" "$upskind" "$upwhen" "$upstitle"
         done
         # Summary counts
         local n_stale=0 n_missing=0
