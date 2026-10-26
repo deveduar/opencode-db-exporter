@@ -25,7 +25,13 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir, default_db, default_out, default_presets
-from exportlib.db import all_session_ids, backfill_session_tokens, load_sessions, since_ms
+from exportlib.db import (
+    all_session_ids,
+    backfill_session_tokens,
+    filter_subagent_policy,
+    load_sessions,
+    since_ms,
+)
 from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile, scope_meta
@@ -202,11 +208,11 @@ def _session_records(written: list, sessions: dict) -> list[dict]:
 
 def _scope_excluded(con, args, written_ids: set, db_ids: set):
     """metadata `.scope` + `.excluded`: what the run was DRAWN FROM versus what
-    it actually WRITES. `.excluded` is the pure fact `scope_match - written` —
-    sessions that were in scope and deliberately left out (the menu's marks), plus
-    sessions a drop flag removed. `exports update` re-opens that gap; a run's own
-    no_subagents/orphan policy is re-applied at write time, so it is not folded in
-    here. Recorded once at creation, because a run's scope cannot be re-derived
+    it actually WRITES. `.excluded` is the SELECTION gap
+    `effective_scope - written` (the menu's marks / a narrower `--sessions`); a
+    subagent removed by the run's own no_subagents/orphan policy is recorded by
+    those flags + `subagents_hidden`, never here. `exports update` re-opens the
+    gap. Recorded once at creation, because a run's scope cannot be re-derived
     later (a preset's file, and the DB, both move on)."""
     scope = scope_meta(args)
     rule = scope.get("rule")
@@ -216,6 +222,16 @@ def _scope_excluded(con, args, written_ids: set, db_ids: set):
         scope.get("ids") if rule == "sessions" else None,
         scope.get("value") if rule == "last" else None,
         scope.get("value") if rule == "since" else None,
+    )
+    # `.excluded` is the SELECTION gap: the run's own subagent policy is applied
+    # here too, so a `--no-subagents` drop is recorded by `no_subagents` /
+    # `subagents_hidden` instead of masquerading as a hand-picked exclusion (and
+    # `exports update` can never try to revive one). See docs/schemas.md.
+    scope_sessions = filter_subagent_policy(
+        scope_sessions, db_ids,
+        getattr(args, "no_subagents", False),
+        getattr(args, "no_orphan_subagents", False),
+        getattr(args, "sub", None),
     )
 
     def _sub(v: dict) -> bool:
@@ -329,23 +345,12 @@ def _matched_sessions(con, args) -> dict:
                              getattr(args, "last", None), getattr(args, "since", None))
     if not sessions:
         return {}
-    db_ids = all_session_ids(con)
-
-    def _is_subagent(v: dict) -> bool:
-        p = v.get("parent_id") or ""
-        return bool(p) and p in db_ids
-
-    if getattr(args, "no_subagents", False):
-        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
-    elif getattr(args, "no_orphan_subagents", False):
-        while True:
-            drop = {k for k, v in sessions.items()
-                    if _is_subagent(v) and v["parent_id"] not in sessions}
-            if not drop:
-                break
-            for k in drop:
-                del sessions[k]
-    return sessions
+    return filter_subagent_policy(
+        sessions, all_session_ids(con),
+        getattr(args, "no_subagents", False),
+        getattr(args, "no_orphan_subagents", False),
+        getattr(args, "sub", None),
+    )
 
 
 def _counts(sessions: dict) -> str:
@@ -485,32 +490,18 @@ def main() -> None:
     # the index, the metadata and the printed counts describing the SAME set.
     db_ids = all_session_ids(con)
 
-    def _is_subagent(v: dict) -> bool:
-        p = v.get("parent_id") or ""
-        return bool(p) and p in db_ids
-
-    n_hidden = 0
-    if args.no_subagents:
-        before = len(sessions)
-        sessions = {k: v for k, v in sessions.items() if not _is_subagent(v)}
-        n_hidden = before - len(sessions)
-        if not sessions:
+    # Closed set: a selected subagent survives only while its parent survives, so
+    # a nested chain collapses one level per pass (fixpoint). See the helper for
+    # the one definition of a real subagent (an orphan is a root).
+    before = len(sessions)
+    sessions = filter_subagent_policy(
+        sessions, db_ids, args.no_subagents, args.no_orphan_subagents)
+    n_hidden = before - len(sessions)
+    sessions = filter_subagent_policy(sessions, db_ids, sub=args.sub)
+    if not sessions:
+        if args.no_subagents:
             die("--no-subagents: every matched session is a subagent — nothing left to export.")
-    elif args.no_orphan_subagents:
-        # Closed set: a selected subagent survives only while its parent survives,
-        # so a nested chain collapses one level per pass (fixpoint).
-        before = len(sessions)
-        while True:
-            drop = {
-                k for k, v in sessions.items()
-                if _is_subagent(v) and v["parent_id"] not in sessions
-            }
-            if not drop:
-                break
-            for k in drop:
-                del sessions[k]
-        n_hidden = before - len(sessions)
-        if not sessions:
+        if args.no_orphan_subagents:
             die(
                 "--no-orphan-subagents: every matched session is a subagent whose "
                 "parent is not exported — nothing left to export."
@@ -532,9 +523,6 @@ def main() -> None:
         children_of.setdefault(v["parent_id"], []).append(k)
     for c in children_of.values():
         c.sort(key=lambda k: sessions[k]["time_created"])
-
-    if args.sub == "omit":
-        children_of = {}
 
     # The written set is predictable here (the same roots + children_of every
     # product writes), so `.scope`/`.excluded` can be computed ONCE, before the

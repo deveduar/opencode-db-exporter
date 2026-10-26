@@ -15,6 +15,7 @@ oc_root=(
     "sessions|Sessions|fn:oc_sessions_picker"
     "status|Status|fn:oc_show_status"
     "help|Help|tool:help|pause"
+    "exit|Exit|builtin:exit"
 )
 
 # Roots extra rows: INSTALL when the tool is not installed yet (and the running

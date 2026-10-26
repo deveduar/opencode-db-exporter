@@ -394,7 +394,11 @@ describes it"), `never` refuses even that — the user's "I dropped it, keep it 
 `--include-excluded ID,ID` reopens **specific** excluded sessions by id, the one thing the
 mode axis cannot express. `--include-excluded all` was the exact twin of `--mode accumulative`
 (both land on `in_scope`), so it is **refused** with a pointer at accumulative — there is no
-redundant flag left.
+redundant flag left. `.excluded` is the **selection** gap only (`effective_scope - written`);
+a drop caused by the run's own `--no-subagents`/`--no-orphan-subagents` policy lives in
+`.no_subagents`/`.no_orphan_subagents`/`.subagents_hidden`, and the refresh applies those
+recorded flags to the scope before computing `new`/`revived`, so a policy-dropped subagent is
+never revived only to be dropped again.
 
 **The refresh flow is three levels.** LEVEL 1 is the view/remove list; its `[>] update` opens
 LEVEL 2, the run list **in update mode**; picking a run opens LEVEL 3, the modes screen. LEVEL 3
@@ -448,15 +452,22 @@ action as delta) AND it moves, and every row only when its plan is not `up_to_da
 the scope row is offered so the gap can be closed. Only when **no** row would move anything does
 it say "nothing has moved" and stop.
 
-**Freshness is per-session, not one clock.** A backup or a shrink records a single
-`max_updated`; an export records each session's own `updated` in `.session_records`, so
-`o_export_stale <meta> [--tag]` is the ONE verdict (the `exports list` row, `exports view`,
-`exports verify [--tsv]` **and the menu's run feed `oc_exports_run_row`** all call it) and it
-flags two different things: **stale** when
-a recorded session was edited since (the live `time_updated` moved past the run's), and
-**missing** when a recorded session no longer exists. Both comparisons are at second
-resolution because `ts_iso` truncates. A run written before `.session_records` existed is
-`unverifiable` — a legacy run cannot be judged, so it is never silently called fresh. A
+**Freshness has one per-session rule, and one run-level verdict.** A backup or a shrink
+records a single `max_updated`; an export records each session's own `updated` in
+`.session_records`. `exportlib/stale.py` (`stale_ids`) is the ONE per-session rule: it feeds
+`exports stale <stamp> [--tsv|--json]`, the `== Changed since export ==` block of `exports
+view`, and `exportlib/update.py`'s changed/revived sets. On top of it,
+`o_export_stale <meta> [--tag]` is a Bash formatting wrapper around
+`exportlib/stale.py --summary`; the `exports list` row, `view`'s `freshness:` line,
+`exports verify [--tsv]`, and the menu all consume that same result. List, verify, and the
+menu send their metadata paths in one `--summary-batch` call, sharing one read-only DB
+connection rather than starting Python once per run. It distinguishes
+**stale** (live `time_updated` is later than the recorded value), **missing** (the session
+no longer exists), and **unverifiable** (a timestamp is absent or invalid). `exports stale
+--json|--tsv` reports both the recorded `updated` and current `live_updated`; comparisons
+are at second resolution. A legacy run without `.session_records` is also unverifiable,
+never silently called fresh. This is snapshot integrity, not scope coverage: sessions that
+newly match the scope are reported by `exports update` as `new`, not as `stale`. A
 refresh keeps the stamp, so the list, view **and menu row** render the refresh **next to** it
 (`refreshed <time> (<mode>)` / `updated: <mode> mode (refreshed in place)` / `· refreshed
 (mode)`), which is the only visible proof a real update moved; the menu row also shows the

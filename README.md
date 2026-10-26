@@ -141,6 +141,7 @@ opencode-db export rag --cap 3000        # per-run override
 opencode-db exports list              # date / profile / counts / size / preset / freshness / refresh
 opencode-db exports view <stamp>      # detail: banner, per-product summary, totals, sessions, "Changed since export" (stale/missing), excluded
 opencode-db exports view <stamp> --files   # + produced files with sizes
+opencode-db exports stale <stamp> --tsv    # per-session state + recorded/live timestamps (--json = array)
 opencode-db exports update <stamp>    # refresh in place (delta by default; --mode accumulative to reopen scope)
 opencode-db exports remove <stamp>    # delete one run (asks; --yes to skip)
 opencode-db exports prune 5           # keep only the 5 most recent runs

@@ -30,12 +30,20 @@ oc_exports_rows() {
         printf '__KEEP_NEWEST__\t[delete olds]\n'
     fi
     [ -d "$OCED_OUT" ] || return 0
-    local run
+    local run stamp recmeta freshness_json
     local dorder="desc"
     [ "$order" = "old" ] && dorder="asc"
-    exports_runs_find "$dorder" | while IFS= read -r run; do
+    local -a runs=() metas=() stale_metas=()
+    mapfile -t runs < <(exports_runs_find "$dorder")
+    for run in "${runs[@]}"; do
+        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        recmeta=$(oced_export_rec_meta "${metas[@]}")
+        [ -n "$recmeta" ] && stale_metas+=("$recmeta")
+    done
+    freshness_json=$(oced_exports_stale_batch "${stale_metas[@]}" 2>/dev/null) || freshness_json='{}'
+    for run in "${runs[@]}"; do
         [ -d "$run" ] || continue
-        oc_exports_run_row "${run##*/}"
+        oc_exports_run_row "${run##*/}" "$freshness_json"
     done
 }
 
@@ -59,6 +67,7 @@ oc_stamp_human() {
 # oc_exports_run_row <stamp> -> one TSV row aggregating a run's metadata.
 oc_exports_run_row() {
     local stamp="$1"
+    local freshness_json="${2:-}"
     local run="$OCED_OUT/$stamp"
     local meta profiles="" roots=0 subs=0 msgs=0 found=0 m p r s refresh="" tag="" shown_date="" sess_cell="" preset=""
     local kept total nex
@@ -112,7 +121,11 @@ oc_exports_run_row() {
     # use, so the menu can never disagree with the CLI about a run being behind.
     recmeta=$(oced_export_rec_meta "${metas[@]}")
     if [ -n "$recmeta" ]; then
-        tag=$(o_export_stale "$recmeta" --tag 2>/dev/null || true)
+        if [ -n "$freshness_json" ]; then
+            tag=$(printf '%s' "$freshness_json" | jq -r --arg path "$recmeta" '.[$path].tag // empty')
+        else
+            tag=$(o_export_stale "$recmeta" --tag 2>/dev/null || true)
+        fi
     elif [ "$found" -eq 1 ]; then
         tag="unverifiable"
     fi

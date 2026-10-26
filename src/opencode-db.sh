@@ -66,6 +66,8 @@ exports list         list past export runs (date/profile/counts/size);
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
   exports view <stamp> [--files] [--json]   show details of an export run (config, sessions, files; --json = raw)
+  exports stale <stamp> [--tsv|--json]   per-session stale/missing detail behind the
+                       run's freshness verdict (--json = array)
   exports verify [--tsv]   check which export runs no longer match the live DB
   exports update <stamp>   refresh a run in place from the live DB (delta by
                        default: add new, drop gone; --mode accumulative re-syncs

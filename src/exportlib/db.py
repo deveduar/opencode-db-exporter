@@ -152,6 +152,43 @@ def all_session_ids(con: sqlite3.Connection) -> set[str]:
     return {r[0] for r in con.execute("SELECT id FROM session")}
 
 
+def filter_subagent_policy(sessions: dict, db_ids: set,
+                           no_subagents: bool = False,
+                           no_orphan_subagents: bool = False,
+                           sub: str | None = None) -> dict:
+    """Return the sessions this run can actually write.
+
+    A real subagent has a non-empty parent_id whose parent row exists; an orphan
+    is a root. `no_orphan_subagents` closes over the selected set, while
+    `sub=omit` removes only selected children whose parent is also selected:
+    children with an unselected parent remain standalone roots.
+    """
+    def is_subagent(session: dict) -> bool:
+        parent_id = session.get("parent_id") or ""
+        return bool(parent_id) and parent_id in db_ids
+
+    if no_subagents:
+        out = {sid: session for sid, session in sessions.items()
+               if not is_subagent(session)}
+    elif no_orphan_subagents:
+        out = dict(sessions)
+        while True:
+            drop = {sid for sid, session in out.items()
+                    if is_subagent(session)
+                    and (session.get("parent_id") or "") not in out}
+            if not drop:
+                break
+            for sid in drop:
+                del out[sid]
+    else:
+        out = dict(sessions)
+
+    if sub == "omit":
+        out = {sid: session for sid, session in out.items()
+               if (session.get("parent_id") or "") not in out}
+    return out
+
+
 def load_messages(con: sqlite3.Connection, sid: str):
     """-> list[(mdata, parts)] with raw part dicts."""
     msgs = con.execute(

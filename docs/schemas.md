@@ -147,9 +147,9 @@ the same conditional `Preset` row.
   "selection": {"rule": "all"},         // the ONE rule that produced this run; see below
   "scope": {"rule": "all"},             // the BROADER selection the run was DRAWN FROM (same rule shapes); differs from
                                         // `selection` exactly when the CLI/menu narrowed it. `exports update` re-opens it.
-  "excluded": [                         // `scope_match - written`: what was in scope but deliberately left out (the menu's
-    {"id": "ses_x", "title": "…"}       // marks, or a drop flag). The gap `exports update` can revive; never folded with the
-  ],                                    // no_subagents/orphan policy (re-applied at write time). Always present.
+  "excluded": [                         // `effective_scope - written`: what was in scope but deliberately left out (the
+    {"id": "ses_x", "title": "…"}       // menu's marks / a narrower --sessions). The selection gap `exports update` can
+  ],                                    // revive; policy/layout drops are recorded by their flags, never here.
   "flags": {"sub": "full", "…": "…"},   // the EFFECTIVE content flags of the run (the recipe `exports update` replays), from
                                         // flags.effective_flags(args): every FLAGS key with its resolved value. Always present.
   "updated_from": "2026-10-19_13-36",   // R?: present only on a REFRESHED run — the stamp it was refreshed from (== its own)
@@ -235,18 +235,24 @@ subagent flag) nothing in `metadata.json` recorded the resulting set, so
 `selection` says what the run **contains**; `scope` says the **broader set it was drawn
 from**. They are identical for a plain run and differ exactly when the CLI/menu narrowed
 it (e.g. a preset pins `filter X`, the menu marks a subset → `--sessions`): then
-`selection` is the subset and `scope` is the whole rule. `excluded` is the pure fact
-`scope_match − written` — the sessions that were reachable but deliberately left out — and
+`selection` is the subset and `scope` is the whole rule. `excluded` is the selection gap
+`effective_scope − written` — the sessions that were reachable but deliberately left out — and
 is what `exports update` may revive: `--sticky stale` (default) revives an excluded session
 only once it was edited, `--sticky never` refuses even that (a dropped session stays
 dropped), and `--include-excluded ID,ID` reopens **specific** excluded sessions by id — the
 one thing the mode axis cannot express. `--include-excluded all` was the exact twin of
 `--mode accumulative` (both land on `in_scope == still ∪ new ∪ ex_live`), so it is **refused**
 pointing at `--mode accumulative`: "bring everything back" is one action, and the CLI no
-longer carries a redundant flag (the menu's single reopen row runs accumulative). It is **not**
-folded
-with a run's own `no_subagents`/orphan policy, because that policy is re-applied at write
-time; folding it would make a drop flag look like a hand-picked exclusion.
+longer carries a redundant flag (the menu's single reopen row runs accumulative).
+
+`effective_scope` is the scope **after** the run's recorded subagent/layout policy.
+`no_subagents` and `no_orphan_subagents` drops are recorded by their flags plus
+`subagents_hidden`, never by `excluded`. `sub: omit` removes a selected child only when its
+parent is also selected; a selected child whose parent is outside the set is still written
+as a standalone root. The shared policy helper is used both when creating `.excluded` and
+when planning `exports update`, so omitted children cannot appear as revivals that the
+renderer immediately drops. `subagents_hidden` continues to count only the two inclusion
+flags, not the `sub` layout choice.
 
 `flags` is the run's **effective** content flags (`flags.effective_flags(args)`), i.e. the
 recipe `exports update` replays. All three keys are always written.
@@ -641,8 +647,10 @@ prints just `N · R root S sub`; a **narrowed** run (`.excluded` non-empty) prin
 `K/N kept · R root S sub`, where `K` = `.session_records` length (or
 `roots+subagents` when there are none) and `N` = `K + len(.excluded)` — the excluded
 count is the difference `N - K`, so it is not repeated — so a `--sessions`
-run can never be mistaken for a full one. The short root/sub breakdown always rides
-along; the menu picker row uses the same cell, and marks a refreshed run
+run can never be mistaken for a full one. A content-policy drop
+(`--no-subagents`/`--no-orphan-subagents`) is not a selection gap, so it never
+inflates `N` (a full policy run stays `N/N`). The short root/sub breakdown always
+rides along; the menu picker row uses the same cell, and marks a refreshed run
 with ` ⟳` instead of the `<mode>` sentence the CLI keeps.
 
 The two trailing decoration fields are both optional and answer two different
@@ -657,8 +665,14 @@ questions:
   "same run, same date".
 
 `exports verify [--tsv]` audits every run against the SAME verdict (`--tsv` emits
-`stamp<TAB>tag` rows). `exports update <stamp>` refreshes in place (see §5 of
-`architecture.md` and the metadata subsection above).
+`stamp<TAB>tag` rows). `exports stale <stamp> [--tsv|--json]` asks for the per-session
+detail behind that verdict (`id`, `state`, `kind`, recorded `updated`, `live_updated`,
+`title`; stale, missing, then unverifiable, each by recorded updated desc) — the machine
+form of the `== Changed since export ==` block, from `exportlib/stale.py` (the SSoT
+`exports update` also uses). Freshness is snapshot integrity, not scope coverage: a new
+session entering the run's selection is reported by update as `new`, not `stale`.
+`exports update <stamp>` refreshes in place (see §5 of `architecture.md` and the
+metadata subsection above).
 
 `exports view <stamp>` is a **detail screen**, so it leads with a banner
 (`== Export run: <stamp> ==`), then one summary line per product, the aggregate
@@ -687,15 +701,17 @@ naming because the data shapes are not uniform:
 - `updated:` appears only on a refreshed run (`<mode> mode (refreshed in place)`),
   read from `.update_mode`; the `date:` above it is already the refresh time, so
   without the line the two are indistinguishable.
-- `freshness:` is the same `o_export_stale` verdict as `list`/`verify`, spelled out:
+- `freshness:` is the same Python freshness summary as `list`/`verify`, spelled out:
   `fresh (…)`, `STALE — <reason>` or `unverifiable (no session_records recorded)`.
 - `== Sessions ==` lists the run's `.session_records` (id, kind, created → updated,
-  title). The rows that are no longer current in the live DB are sorted FIRST, then a
-  summary line (`N session(s) changed since export: K stale[, M missing]`) and a
-  dedicated `== Changed since export ==` block naming each affected session (id, kind,
-  dates, the bare word `stale`/`missing`, title). The block and the run-level
-  `freshness:` line come from the same per-session rule (`o_export_stale_ids`), so they
-  cannot disagree; the main list carries no trailing mark.
+  title) by **updated desc**, with no stale/missing mark on the rows. A summary line
+  (`N session(s) changed since export: K stale[, M missing][, U unverifiable]`) and a
+  dedicated `== Changed since export ==` block follow, naming each affected session
+  (id, kind, recorded/live dates, the bare word `stale`/`missing`/`unverifiable`, title),
+  stale first, then missing and unverifiable. The block
+  reads `exportlib/stale.py` — the same per-session rule `exports stale` serves and
+  `exports update` uses — so the block and the run-level `freshness:` line cannot
+  disagree.
 - A `== Excluded (N kept out of scope) ==` block follows `== Sessions ==` when
   `.excluded` is non-empty: `id + title` per left-out session, capped at 8 with `… N more`
   (like `shrinks view`). This is the run's own GAP — the reason a `--sessions` run is not

@@ -26,93 +26,22 @@ oced_export_rec_meta() {
     done
 }
 
-# o_export_stale <metadata.json> [--tag] -> compares the sessions a run recorded
-# against the effective DB (read-only). Echoes a reason (human) or the compact
-# token `stale` / `missing` / `unverifiable` (with --tag) and returns 1 when
-# flagged, 0 when fresh. This is the ONE stale-check for `exports list`, `view`
-# and `verify`, the sibling of `o_shrink_stale`/`o_preshrink_stale` for the
-# shrink domain.
-#
-# Unlike a backup/shrink (one `max_updated`), an export records each session's
-# own `updated`, so staleness is per-session: an export is stale when a recorded
-# session was edited since, missing when a recorded session no longer exists.
-# The comparison is at SECOND resolution because `ts_iso` truncates to seconds
-# while `session.time_updated` is epoch ms — comparing raw ms would flag every
-# session as changed the instant it was exported.
+# o_export_stale <metadata.json> [--tag] -> uses Python's shared per-session
+# freshness rule; bash only formats the reason/tag and return code.
 o_export_stale() {
     local meta="$1" tag=0
     [ "${2:-}" = "--tag" ] && tag=1
     [ -f "$meta" ] || { [ "$tag" -eq 1 ] && printf 'unverifiable' || echo "metadata.json missing: $meta"; return 1; }
-    local nrec
-    nrec=$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)
-    if [ "${nrec:-0}" -eq 0 ]; then
-        [ "$tag" -eq 1 ] && printf 'unverifiable' \
-            || echo "cannot verify freshness (this export has no session_records — legacy format)."
-        return 1
-    fi
-    # One read for every recorded session's live time_updated.
-    local inlist id ts
-    inlist=$(jq -r '[.session_records[].id | @sh] | join(",")' "$meta" 2>/dev/null)
-    local -A oes_live=()
-    while IFS=$'\t' read -r id ts; do
-        [ -n "$id" ] && oes_live["$id"]="$ts"
-    done < <(o_q -separator $'\t' "SELECT id, time_updated FROM session WHERE id IN ($inlist)" 2>/dev/null)
-    local rec_iso rec_s cur_s changed=0 missing=0
-    while IFS=$'\t' read -r id rec_iso; do
-        [ -n "$id" ] || continue
-        if [ -z "${oes_live[$id]+x}" ]; then
-            missing=$((missing + 1)); continue
-        fi
-        rec_s=$(date -u -d "$rec_iso" +%s 2>/dev/null) || rec_s=""
-        [ -n "$rec_s" ] || continue
-        cur_s=$(( ${oes_live[$id]} / 1000 ))
-        [ "$cur_s" -gt "$rec_s" ] && changed=$((changed + 1))
-    done < <(jq -r '.session_records[] | [.id, (.updated // "")] | @tsv' "$meta")
-    if [ "$changed" -eq 0 ] && [ "$missing" -eq 0 ]; then
-        [ "$tag" -eq 1 ] && printf ''
+    local result state reason
+    result=$(OPENCODE_DB="$(o_effective_db)" python3 "$SCRIPT_DIR/exportlib/stale.py" --meta "$meta" --summary 2>/dev/null) || return 1
+    state=$(printf '%s' "$result" | jq -r '.tag // empty')
+    reason=$(printf '%s' "$result" | jq -r '.reason // empty')
+    if [ -z "$state" ]; then
+        [ "$tag" -eq 1 ] || printf ''
         return 0
     fi
-    if [ "$tag" -eq 1 ]; then
-        if [ "$changed" -gt 0 ]; then printf 'stale'; else printf 'missing'; fi
-    elif [ "$changed" -gt 0 ] && [ "$missing" -gt 0 ]; then
-        echo "$changed session(s) changed and $missing deleted from the live DB since this export."
-    elif [ "$changed" -gt 0 ]; then
-        echo "$changed session(s) changed in the live DB since this export."
-    else
-        echo "$missing session(s) recorded by this export no longer exist in the live DB."
-    fi
+    if [ "$tag" -eq 1 ]; then printf '%s' "$state"; else printf '%s\n' "$reason"; fi
     return 1
-}
-
-# o_export_stale_ids <metadata.json> -> per-session staleness, one line per
-# RECORDED session that is no longer current: `id<TAB>stale` when the DB's
-# `time_updated` moved past the run's recorded `updated`, `id<TAB>missing` when
-# the session is gone. Sessions that are still current emit NOTHING. Same query
-# and same second-resolution rule as `o_export_stale`, so the per-session marks
-# of `exports view` can never disagree with the run-level verdict.
-o_export_stale_ids() {
-    local meta="$1"
-    [ -f "$meta" ] || return 0
-    local nrec
-    nrec=$(jq -r '(.session_records // []) | length' "$meta" 2>/dev/null || echo 0)
-    [ "${nrec:-0}" -gt 0 ] || return 0
-    local inlist id ts
-    inlist=$(jq -r '[.session_records[].id | @sh] | join(",")' "$meta" 2>/dev/null)
-    local -A osi_live=()
-    while IFS=$'\t' read -r id ts; do
-        [ -n "$id" ] && osi_live["$id"]="$ts"
-    done < <(o_q -separator $'\t' "SELECT id, time_updated FROM session WHERE id IN ($inlist)" 2>/dev/null)
-    local rec_iso rec_s cur_s
-    while IFS=$'\t' read -r id rec_iso; do
-        [ -n "$id" ] || continue
-        if [ -z "${osi_live[$id]+x}" ]; then
-            printf '%s\tmissing\n' "$id"; continue
-        fi
-        rec_s=$(date -u -d "$rec_iso" +%s 2>/dev/null) || continue
-        cur_s=$(( ${osi_live[$id]} / 1000 ))
-        [ "$cur_s" -gt "$rec_s" ] && printf '%s\tstale\n' "$id"
-    done < <(jq -r '.session_records[] | [.id, (.updated // "")] | @tsv' "$meta")
-    return 0
 }
 
 oced_exports() {
@@ -122,9 +51,10 @@ oced_exports() {
         remove) shift; oced_exports_remove "$@" ;;
         prune)  shift; oced_exports_prune "$@" ;;
         view)   shift; oced_exports_view "$@" ;;
+        stale)  shift; oced_exports_stale "$@" ;;
         verify) shift; oced_exports_verify "$@" ;;
         update) shift; oced_exports_update "$@" ;;
-        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]|verify [--tsv]|update <stamp> [--mode delta|accumulative] [--sticky stale|always|never] [--include-excluded ID,ID] [--keep-history] [--dry-run] [--json] [--yes]]"; return 1 ;;
+        *) echo "Usage: opencode-db exports [list|remove <stamp> [--yes]|prune <keep> [--yes]|view <stamp> [--files] [--json]|stale <stamp> [--tsv|--json]|verify [--tsv]|update <stamp> [--mode delta|accumulative] [--sticky stale|always|never] [--include-excluded ID,ID] [--keep-history] [--dry-run] [--json] [--yes]]"; return 1 ;;
     esac
 }
 
@@ -140,10 +70,35 @@ oced_exports_update() {
         python3 "$SCRIPT_DIR/exportlib/update.py" "$@"
 }
 
+# oced_exports_stale <stamp> [--tsv|--json] -> per-session freshness of ONE run.
+# `exportlib/stale.py` is the SSoT (the same rule `exports view` renders and
+# `exports update` uses to decide what changed); bash only pins the effective DB.
+oced_exports_stale() {
+    OPENCODE_DB="$(o_effective_db)" \
+    OCED_OUT="$OCED_OUT" \
+        python3 "$SCRIPT_DIR/exportlib/stale.py" "$@"
+}
+
+oced_exports_stale_batch() {
+    [ "$#" -gt 0 ] || { printf '{}\n'; return 0; }
+    OPENCODE_DB="$(o_effective_db)" \
+        python3 "$SCRIPT_DIR/exportlib/stale.py" --summary-batch "$@"
+}
+
 oced_exports_list() {
     local -a runs metas rows=()
     local run meta profiles roots subs msgs comp size m found p r s stamp human_date lrmeta lrtag lrmode lrdate lrrefresh lrsess lrpreset lrn_rec lrn_ex lrkept
     mapfile -t runs < <(exports_runs_find)
+    local -a freshness_metas=()
+    local -a run_metas=()
+    local freshness_json
+    for run in "${runs[@]}"; do
+        stamp="${run##*/}"
+        mapfile -t run_metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        lrmeta=$(oced_export_rec_meta "${run_metas[@]}")
+        [ -n "$lrmeta" ] && freshness_metas+=("$lrmeta")
+    done
+    freshness_json=$(oced_exports_stale_batch "${freshness_metas[@]}" 2>/dev/null) || freshness_json='{}'
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
         # Format stamp YYYY-MM-DD_HH-MM -> YYYY-MM-DD HH:MM UTC
@@ -192,7 +147,7 @@ oced_exports_list() {
         lrtag=""
         lrrefresh=""
         if [ -n "$lrmeta" ]; then
-            lrtag=$(o_export_stale "$lrmeta" --tag 2>/dev/null || true)
+            lrtag=$(printf '%s' "$freshness_json" | jq -r --arg path "$lrmeta" '.[$path].tag // empty')
             # A run refreshed in place keeps its stamp (its place in this list),
             # so the ONLY visible proof it moved is the `.update_mode`/`date`
             # pair the engine records. Without it a successful refresh reads as
@@ -275,21 +230,32 @@ oced_exports_verify() {
     mapfile -t runs < <(exports_runs_find)
     local n=${#runs[@]}
     local -a flagged=()   # each entry: stamp<TAB>tag<TAB>reason
-    local run stamp mtag mreason rmeta
-    local -a mlist
+    local run stamp mtag mreason rmeta summary
+    local -a mlist freshness_metas=()
+    local -A run_meta=()
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
         mapfile -t mlist < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
         rmeta=$(oced_export_rec_meta "${mlist[@]}")
+        run_meta["$stamp"]="$rmeta"
+        [ -n "$rmeta" ] && freshness_metas+=("$rmeta")
+    done
+    local freshness_json
+    freshness_json=$(oced_exports_stale_batch "${freshness_metas[@]}" 2>/dev/null) || freshness_json='{}'
+    for run in "${runs[@]}"; do
+        stamp="${run##*/}"
+        rmeta="${run_meta[$stamp]:-}"
         if [ -z "$rmeta" ]; then
             flagged+=("$stamp"$'\t'"unverifiable"$'\t'"no metadata.json with session_records")
             continue
         fi
-        if mreason=$(o_export_stale "$rmeta"); then
+        summary=$(printf '%s' "$freshness_json" | jq -c --arg path "$rmeta" '.[$path] // {}')
+        if [ "$(printf '%s' "$summary" | jq -r '.clean // false')" = true ]; then
             continue
         fi
-        mtag=$(o_export_stale "$rmeta" --tag 2>/dev/null || true)
-        flagged+=("$stamp"$'\t'"${mtag:-stale}"$'\t'"$mreason")
+        mtag=$(printf '%s' "$summary" | jq -r '.tag // "unverifiable"')
+        mreason=$(printf '%s' "$summary" | jq -r '.reason // "cannot verify freshness"')
+        flagged+=("$stamp"$'\t'"$mtag"$'\t'"$mreason")
     done
     if [ "$tsv" -eq 1 ]; then
         local f
@@ -513,10 +479,22 @@ oced_exports_view() {
         # run-level `freshness:` line uses, so the dedicated section can never
         # contradict the verdict above.
         local -A ses_state=()
-        local _mk _st
-        while IFS=$'\t' read -r _mk _st; do
-            [ -n "$_mk" ] && ses_state["$_mk"]="$_st"
-        done < <(o_export_stale_ids "$rec_meta")
+        local -A ses_live_updated=()
+        local -a stale_ids=() missing_ids=() unverifiable_ids=()
+        local _mk _st _mk_kind _mk_upd _live_upd _mk_title
+        # `exportlib/stale.py` is the ONE freshness rule (shared with
+        # `exports stale` and `exports update`); its order is already stale first,
+        # then missing, each by updated desc, so the arrays keep it verbatim.
+        while IFS=$'\t' read -r _mk _st _mk_kind _mk_upd _live_upd _mk_title; do
+            [ -n "$_mk" ] || continue
+            ses_state["$_mk"]="$_st"
+            ses_live_updated["$_mk"]="$_live_upd"
+            case "$_st" in
+                stale)   stale_ids+=("$_mk") ;;
+                missing) missing_ids+=("$_mk") ;;
+                unverifiable) unverifiable_ids+=("$_mk") ;;
+            esac
+        done < <(oced_exports_stale --meta "$rec_meta" --tsv 2>/dev/null)
         local -A ses_info=()
         local sid skind stitle screated supdated when
         # Collect all session rows first so we can order by last use (updated desc),
@@ -541,33 +519,31 @@ oced_exports_view() {
             IFS=$'\t' read -r _updsid updsid upskind upwhen upstitle <<< "$pr"
             printf '  %-22s %-8s  %-25s %s\n' "$updsid" "$upskind" "$upwhen" "$upstitle"
         done
-        # Summary counts
-        local n_stale=0 n_missing=0
-        local -a stale_list=() missing_list=()
-        for _mk in "${!ses_state[@]}"; do
-            case "${ses_state[$_mk]}" in
-                stale)   n_stale=$((n_stale + 1)); stale_list+=("$_mk") ;;
-                missing) n_missing=$((n_missing + 1)); missing_list+=("$_mk") ;;
-            esac
-        done
-        if [ "$n_stale" -gt 0 ] || [ "$n_missing" -gt 0 ]; then
+        # Summary counts (the arrays are already in display order)
+        local n_stale=${#stale_ids[@]} n_missing=${#missing_ids[@]} n_unverifiable=${#unverifiable_ids[@]}
+        if [ "$n_stale" -gt 0 ] || [ "$n_missing" -gt 0 ] || [ "$n_unverifiable" -gt 0 ]; then
             local parts=""
             [ "$n_stale" -gt 0 ] && parts="$n_stale stale"
             [ "$n_missing" -gt 0 ] && parts="${parts:+$parts, }$n_missing missing"
+            [ "$n_unverifiable" -gt 0 ] && parts="${parts:+$parts, }$n_unverifiable unverifiable"
             printf '\n  %s session(s) changed since export: %s\n' \
-                "$((n_stale + n_missing))" "$parts"
+                "$((n_stale + n_missing + n_unverifiable))" "$parts"
             echo ""
             echo "== Changed since export =="
             local asid askind aswhen astitle astat
-            # print stale first, then missing
+            # print stale first, then missing, then unverifiable
             local al
-            for al in "${stale_list[@]}"; do
+            for al in "${stale_ids[@]}"; do
                 IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
-                printf '  %-22s %-8s  %-25s  %-8s  %s\n' "$al" "$askind" "$aswhen" "stale" "$astitle"
+                printf '  %-22s %-8s  %-25s  stale  live %s  %s\n' "$al" "$askind" "$aswhen" "${ses_live_updated[$al]:--}" "$astitle"
             done
-            for al in "${missing_list[@]}"; do
+            for al in "${missing_ids[@]}"; do
                 IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
-                printf '  %-22s %-8s  %-25s  %-8s  %s\n' "$al" "$askind" "$aswhen" "missing" "$astitle"
+                printf '  %-22s %-8s  %-25s  missing  live -  %s\n' "$al" "$askind" "$aswhen" "$astitle"
+            done
+            for al in "${unverifiable_ids[@]}"; do
+                IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
+                printf '  %-22s %-8s  %-25s  unverifiable  live %s  %s\n' "$al" "$askind" "$aswhen" "${ses_live_updated[$al]:--}" "$astitle"
             done
         fi
     fi

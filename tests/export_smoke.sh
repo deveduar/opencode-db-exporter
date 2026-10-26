@@ -1116,16 +1116,44 @@ SESSROW=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep
 SESSCOL=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep -E "^  ses_" | awk '{print index($0,"2026-")}' | sort -u | wc -l)
 [ "$SESSROW" -gt 0 ] && [ "$SESSCOL" -eq 1 ] \
     && ok "exports view session rows share one column ($SESSROW rows)" || bad "exports view session alignment ($SESSCOL distinct columns)"
-# A run that dropped a subagent must NOT list it in `== Sessions ==` (it now
-# appears under `== Excluded ==` — that block is the run's own gap, not content).
+# A run that dropped a subagent must NOT list it in `== Sessions ==`, and the
+# policy drop is NOT a selection gap: `.excluded` stays empty (the drop lives in
+# `no_subagents`/`subagents_hidden`), so no `== Excluded ==` block appears.
 NOSUBOUT=$(run export transcript --no-subagents --filter "%" --stamp "view-nosub")
-NOSUBV=$(run exports view "$(stamp_of "$NOSUBOUT")")
+NOSUBSTAMP=$(stamp_of "$NOSUBOUT")
+NOSUBV=$(run exports view "$NOSUBSTAMP")
 NOSUBSESS=$(printf '%s' "$NOSUBV" | sed -n '/== Sessions ==/,/^== /p' | grep -E '^  ses_')
 printf '%s' "$NOSUBSESS" | grep -q "ses_A0002" \
     && bad "exports view lists a subagent that was not exported" || ok "exports view session list matches the run"
-# ...but the gap IS shown, so a narrowed run is never mistaken for a full one.
+jq -e '(.excluded|length) == 0 and (.subagents_hidden // 0) > 0' \
+    "$OUT/$NOSUBSTAMP/transcript/metadata.json" >/dev/null \
+    && ok "a --no-subagents run records no selection gap in .excluded" \
+    || bad "no-subagents excluded: $(jq -c '{excluded,subagents_hidden}' "$OUT/$NOSUBSTAMP/transcript/metadata.json")"
 printf '%s' "$NOSUBV" | grep -q "== Excluded (" \
-    && ok "exports view shows the excluded gap" || bad "exports view excluded block"
+    && bad "a --no-subagents run printed a selection gap" \
+    || ok "exports view does not mistake a policy drop for a selection gap"
+
+OMITDB="$TMP/omit-update.db"; OMITOUT="$TMP/omit-update-out"; OMITBK="$TMP/omit-update-bk"
+bash "$TESTS_DIR/make_fake_db.sh" "$OMITDB" >/dev/null
+mkdir -p "$OMITOUT"
+runomit() { OPENCODE_DB="$OMITDB" OCED_OUT="$OMITOUT" OCED_BACKUP_DIR="$OMITBK" run "$@"; }
+OMITRUN=$(runomit export transcript --filter "%" --sub omit --stamp "omit-update")
+OMITSTAMP=$(stamp_of "$OMITRUN")
+OMITMETA="$OMITOUT/$OMITSTAMP/transcript/metadata.json"
+jq -e '(.excluded|length) == 0 and ([.session_records[].id] | sort == ["ses_A0001","ses_B0001","ses_ORPHAN01"])' "$OMITMETA" >/dev/null \
+    && ok "sub: omit records only written roots and no selection gap" \
+    || bad "sub omit metadata: $(jq -c '{excluded,records:[.session_records[].id]}' "$OMITMETA")"
+sqlite3 "$OMITDB" "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
+OMITPLAN=$(runomit exports update "$OMITSTAMP" --dry-run --json)
+printf '%s' "$OMITPLAN" | jq -e '.up_to_date == true and .counts.revived == 0 and .counts.excluded_total == 0 and .counts.target == 3' >/dev/null \
+    && ok "update does not revive subagents hidden by sub: omit" \
+    || bad "sub omit update plan: $OMITPLAN"
+OMITSTANDALONE=$(runomit export transcript --sessions ses_A0002 --sub omit --stamp "omit-standalone")
+OMITSTANDALONESTAMP=$(stamp_of "$OMITSTANDALONE")
+jq -e '[.session_records[] | select(.id == "ses_A0002" and .kind == "root")] | length == 1' \
+    "$OMITOUT/$OMITSTANDALONESTAMP/transcript/metadata.json" >/dev/null \
+    && ok "sub: omit preserves a selected child whose parent is outside the selection" \
+    || bad "sub omit standalone: $(jq -c '.session_records' "$OMITOUT/$OMITSTANDALONESTAMP/transcript/metadata.json")"
 # The per-session staleness marks: after the DB edits one recorded session, its
 # row in `== Sessions ==` wears the bare word `stale` (no symbol) and the block
 # gains a summary count — the same rule behind the run-level `freshness:` line.
@@ -1147,9 +1175,54 @@ STALEV=$(runv exports view "$STALESTAMP")
 printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep -qE "^  ses_A0001.*stale" \
     && ok "exports view lists the affected session under Changed since export (bare word, no symbol)" \
     || bad "session stale mark: $(printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep 'ses_A0001')"
+LIVE_UPDATED=$(runv exports stale "$STALESTAMP" --json | jq -r '.[0].live_updated')
+printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep -qF "live $LIVE_UPDATED" \
+    && ok "exports view shows the live timestamp beside the stale session" \
+    || bad "view live timestamp: $(printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep 'ses_A0001')"
 printf '%s' "$STALEV" | grep -qE "1 session\(s\) changed since export: 1 stale" \
     && ok "exports view summarises the not-current sessions (stale count)" \
     || bad "not-current summary: $(printf '%s' "$STALEV" | grep 'changed since export')"
+# The machine form of that block: `exports stale` is the SAME per-session rule,
+# so `view` and the CLI cannot disagree about which sessions moved.
+STJ=$(runv exports stale "$STALESTAMP" --json)
+printf '%s' "$STJ" | jq -e 'length == 1 and .[0].id == "ses_A0001" and .[0].state == "stale" and .[0].kind == "root" and .[0].updated < .[0].live_updated' >/dev/null \
+    && ok "exports stale --json names the edited session (stale)" \
+    || bad "stale json: $STJ"
+FRESHBATCHOUT=$(runv export transcript --sessions ses_B0001 --stamp "stale-batch-fresh")
+FRESHBATCHSTAMP=$(stamp_of "$FRESHBATCHOUT")
+STALEBATCH=$(runv exports stale --summary-batch \
+    "$SOUT/$STALESTAMP/transcript/metadata.json" \
+    "$SOUT/$FRESHBATCHSTAMP/transcript/metadata.json")
+printf '%s' "$STALEBATCH" | jq -e --arg stale "$SOUT/$STALESTAMP/transcript/metadata.json" \
+    --arg fresh "$SOUT/$FRESHBATCHSTAMP/transcript/metadata.json" \
+    '.[$stale].tag == "stale" and .[$fresh].clean == true' >/dev/null \
+    && ok "batch freshness checks several run metadata files in one DB session" \
+    || bad "stale summary batch: $STALEBATCH"
+STT=$(runv exports stale "$STALESTAMP" --tsv)
+printf '%s\n' "$STT" | awk -F'\t' 'NF == 6 && $1 == "ses_A0001" && $2 == "stale" && $3 == "root" && $5 != ""' | grep -q . \
+    && ok "exports stale --tsv includes recorded and live timestamps" \
+    || bad "stale tsv: [$STT]"
+sqlite3 "$SDBC" "DELETE FROM session WHERE id='ses_A0003';"
+STJ2=$(runv exports stale "$STALESTAMP" --json)
+printf '%s' "$STJ2" | jq -e 'length == 2 and .[0].id == "ses_A0001" and .[0].state == "stale" and .[1].id == "ses_A0003" and .[1].state == "missing"' >/dev/null \
+    && ok "exports stale orders stale before missing (each by updated desc)" \
+    || bad "stale order: $STJ2"
+STALEV2=$(runv exports view "$STALESTAMP")
+BLOCK=$(printf '%s' "$STALEV2" | sed -n '/== Changed since export ==/,$p')
+printf '%s' "$BLOCK" | grep -q "ses_A0001.*stale" && printf '%s' "$BLOCK" | grep -q "ses_A0003.*missing" \
+    && ok "exports view agrees with exports stale on stale + missing" \
+    || bad "view/stale disagreement: $BLOCK"
+BADMETA="$TMP/stale-invalid-timestamp.json"
+jq '(.session_records[] | select(.id == "ses_A0002") | .updated) = "not-a-date"' \
+    "$SOUT/$STALESTAMP/transcript/metadata.json" > "$BADMETA"
+BADSTALE=$(runv exports stale --meta "$BADMETA" --json)
+printf '%s' "$BADSTALE" | jq -e 'any(.[]; .id == "ses_A0002" and .state == "unverifiable" and .live_updated != null)' >/dev/null \
+    && ok "invalid recorded timestamps are reported as unverifiable with live time" \
+    || bad "invalid stale timestamp: $BADSTALE"
+BADSUMMARY=$(runv exports stale --meta "$BADMETA" --summary)
+printf '%s' "$BADSUMMARY" | jq -e '.tag == "stale" and .counts.unverifiable == 1 and .clean == false' >/dev/null \
+    && ok "run-level summary reports unverifiable records through the shared rule" \
+    || bad "invalid stale summary: $BADSUMMARY"
 
 echo "== metadata.session_records (WHICH sessions the run actually contains) =="
 # NOTE: the UNFILTERED run is the meaningful one. A title filter like
@@ -1985,6 +2058,9 @@ find "$UPD/$USTAMP" -name '*Fresh subagent*' | grep -q . \
 printf '%s' "$(runu exports verify)" | grep -q "All clean" \
     && ok "a refreshed run matches the live DB again (verify clean)" \
     || bad "post-update verify: $(runu exports verify)"
+printf '%s' "$(runu exports stale "$USTAMP" --json)" | jq -e 'length == 0' >/dev/null \
+    && ok "exports stale reports no rows for a fresh run" \
+    || bad "stale fresh: $(runu exports stale "$USTAMP" --json)"
 
 # 5) a refresh is re-runnable: nothing moved -> it says so and exits 0.
 printf '%s' "$(runu exports update "$USTAMP" --yes)" | grep -q "Nothing to do" \
@@ -2033,6 +2109,32 @@ printf '%s' "$ALLREF" | grep -q "mode accumulative" \
 printf '%s' "$(runu exports update "$NSTAMP" --dry-run --mode accumulative)" | grep -qE "After the update : 6" \
     && ok "--mode accumulative re-syncs the run with its scope" \
     || bad "accumulative: $(runu exports update "$NSTAMP" --dry-run --mode accumulative)"
+
+# 7b) the run's OWN subagent policy is not a selection gap: `.excluded` stays
+#     empty, and an edited subagent can never be revived only to be dropped again
+#     (the plan must equal what the child export really writes).
+NSRUN=$(runu export transcript --no-subagents)
+NSSTAMP=$(stamp_of "$NSRUN")
+NSMETA="$UPD/$NSSTAMP/transcript/metadata.json"
+jq -e '(.excluded|length) == 0 and (.subagents_hidden // 0) > 0 and .no_subagents == true' "$NSMETA" >/dev/null \
+    && ok "a --no-subagents run records its drop in the flags, not in .excluded" \
+    || bad "no-subagents meta: $(jq -c '{excluded,subagents_hidden,no_subagents}' "$NSMETA")"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
+NSPJ=$(runu exports update "$NSSTAMP" --dry-run --json)
+printf '%s' "$NSPJ" | jq -e '.up_to_date == true and .counts.revived == 0 and .counts.excluded_total == 0' >/dev/null \
+    && ok "a policy-dropped subagent is never revived (plan and artifacts agree)" \
+    || bad "no-subagents plan: $NSPJ"
+printf '%s' "$(runu exports update "$NSSTAMP" --yes)" | grep -q "Nothing to do" \
+    && ok "a --no-subagents run stays up to date after a dropped subagent is edited" \
+    || bad "no-subagents idempotent: $(runu exports update "$NSSTAMP" --yes)"
+# A legacy run may still carry a policy drop in `.excluded`; the plan applies the
+# recorded flags defensively, so even that cannot re-add it.
+jq '.excluded=[{"id":"ses_A0002","title":"Explore gaps (@explore subagent)"}]' "$NSMETA" > "$NSMETA.tmp" \
+    && mv "$NSMETA.tmp" "$NSMETA"
+NSPJ2=$(runu exports update "$NSSTAMP" --dry-run --json)
+printf '%s' "$NSPJ2" | jq -e '.up_to_date == true and .counts.revived == 0 and (.target|length) == 3' >/dev/null \
+    && ok "a legacy .excluded policy drop is ignored by the update plan" \
+    || bad "legacy no-subagents plan: $NSPJ2"
 
 # 8) a legacy run (no .scope/.flags, but .session_records) still refreshes.
 LRUN=$(runu export transcript)

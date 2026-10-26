@@ -189,6 +189,9 @@ printf '%s\n' "$EXTRA3" | grep -q '^install' && bad "Install shown while install
     || bad "rows leaked when installed without uninstall.sh: $(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
 
 echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
+printf '%s\n' "${oc_root[@]}" | grep -qxF 'exit|Exit|builtin:exit' \
+    && ok "the root menu offers an explicit Exit row" \
+    || bad "root menu has no Exit row: ${oc_root[*]}"
 reset
 oc_test_entries=(
     "alpha|Action alpha|tool:backups list"

@@ -44,9 +44,10 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_db, default_out
-from exportlib.db import all_session_ids, load_sessions
+from exportlib.db import all_session_ids, filter_subagent_policy, load_sessions
 from exportlib.flags import FLAGS
-from exportlib.util import die, selection_phrase, ts_iso
+from exportlib.stale import stale_ids
+from exportlib.util import die, selection_phrase
 
 MODES = ("delta", "accumulative")
 STICKY = ("stale", "always", "never")
@@ -87,6 +88,28 @@ def _baseline(prods: list[dict]) -> dict:
         if p["meta"].get("session_records"):
             return p
     return prods[0]
+
+
+def _effective_scope(in_scope: set, live: dict, live_ids: set, meta: dict) -> set:
+    """The scope after the run's own subagent policy.
+
+    Mirrors `exportlib.cli.filter_subagent_policy` (the ONE definition used at
+    write time): a real subagent has a non-empty `parent_id` whose parent row
+    still exists (an orphan is a root), and `--no-orphan-subagents` is a closed
+    set. Without this, `new` could re-add a subagent the run's flags drop, and a
+    legacy `.excluded` entry could be "revived" only to be dropped again — a plan
+    that never converges.
+    """
+    flags = meta.get("flags") if isinstance(meta.get("flags"), dict) else {}
+    selected = {sid: live[sid] for sid in in_scope if sid in live}
+    effective = filter_subagent_policy(
+        selected,
+        live_ids,
+        bool(meta.get("no_subagents") or flags.get("no_subagents")),
+        bool(meta.get("no_orphan_subagents") or flags.get("no_orphan_subagents")),
+        meta.get("sub") or flags.get("sub"),
+    )
+    return set(effective)
 
 
 # --------------------------------------------------------------------- plan ---
@@ -131,32 +154,39 @@ def build_plan(args) -> dict:
     finally:
         con.close()
 
-    def _iso(sid: str) -> str:
-        v = live.get(sid, {}).get("time_updated")
-        return ts_iso(v) if v is not None else ""
+    # The run's own subagent policy shapes the effective scope too. `.excluded`
+    # is the SELECTION gap (the run records it already policy-filtered), but a
+    # legacy run may still carry a policy-dropped subagent there; applying the
+    # flags here means `new`/`revived` can never re-add one. This is what keeps
+    # the plan equal to what the child export will really write.
+    effective_scope = _effective_scope(in_scope, live, live_ids, meta)
 
-    # A session "changed" when the DB's own clock moved past the timestamp the
-    # run recorded. Both sides are second-resolution UTC strings, so a plain
-    # comparison is already correct (no `>` on a float, no timezone trap).
-    def _changed(sid: str) -> bool:
-        return bool(live.get(sid)) and _iso(sid) > (recs[sid].get("updated") or "")
+    # ONE freshness rule (exportlib/stale.py), shared with `exports view` and
+    # `exports stale`. A session "changed" when the DB's clock moved past the
+    # timestamp the run recorded; missing sessions are handled by `gone`.
+    states = {
+        e["id"]: e["state"]
+        for e in stale_ids(
+            list(meta.get("session_records") or []) + list(excluded.values()),
+            live,
+        )
+    }
 
     still = included & set(live_ids)
     gone = included - set(live_ids)
-    new = in_scope - included - set(excluded)
+    new = effective_scope - included - set(excluded)
     # An excluded session only counts when it is still in scope AND still alive:
     # a dead one leaves `.excluded` rather than being offered forever.
-    ex_live = set(excluded) & in_scope & set(live_ids)
-    ex_stale = {sid for sid in ex_live
-                if _iso(sid) > (excluded[sid].get("updated") or "")}
-    changed = {sid for sid in still if _changed(sid)}
+    ex_live = set(excluded) & effective_scope & set(live_ids)
+    ex_stale = {sid for sid in ex_live if states.get(sid) == "stale"}
+    changed = {sid for sid in still if states.get(sid) == "stale"}
 
     mode = args.mode
     if mode == "accumulative":
         # The scope IS the content now: every excluded session comes back, and
         # anything that left the scope (a `--last N` window rolling forward) is
         # dropped. This is the "do it all over again" axis.
-        target = set(in_scope)
+        target = set(effective_scope)
         revived = set(ex_live)
         excluded_out = set()
     else:
@@ -170,7 +200,7 @@ def build_plan(args) -> dict:
             # session actually gets edited — then the run no longer describes it.
             revived = set(ex_stale)
         target = still | new | revived
-        excluded_out = set(excluded) & set(live_ids) - revived
+        excluded_out = ex_live - revived
 
     if not target:
         die("update would leave the run empty (nothing in scope) — "
@@ -198,7 +228,7 @@ def build_plan(args) -> dict:
             "gone": len(gone),
             "revived": len(revived),
             "excluded_kept": len(excluded_out),
-            "excluded_total": len(excluded),
+            "excluded_total": len(ex_live),
             "target": len(target),
             "before": len(included),
         },
@@ -213,7 +243,7 @@ def build_plan(args) -> dict:
     }
     plan["_included"] = included
     plan["_target"] = target
-    plan["_in_scope"] = in_scope
+    plan["_in_scope"] = effective_scope
     plan["_prods"] = prods
     plan["_meta"] = meta
     plan["_scope"] = scope
