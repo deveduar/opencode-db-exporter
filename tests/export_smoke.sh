@@ -1195,7 +1195,7 @@ STALEBATCH=$(runv exports stale --summary-batch \
     "$SOUT/$FRESHBATCHSTAMP/transcript/metadata.json")
 printf '%s' "$STALEBATCH" | jq -e --arg stale "$SOUT/$STALESTAMP/transcript/metadata.json" \
     --arg fresh "$SOUT/$FRESHBATCHSTAMP/transcript/metadata.json" \
-    '.[$stale].tag == "stale" and .[$fresh].clean == true' >/dev/null \
+    '(.[$stale].counts.stale == 1) and .[$fresh].clean == true' >/dev/null \
     && ok "batch freshness checks several run metadata files in one DB session" \
     || bad "stale summary batch: $STALEBATCH"
 STT=$(runv exports stale "$STALESTAMP" --tsv)
@@ -1220,9 +1220,56 @@ printf '%s' "$BADSTALE" | jq -e 'any(.[]; .id == "ses_A0002" and .state == "unve
     && ok "invalid recorded timestamps are reported as unverifiable with live time" \
     || bad "invalid stale timestamp: $BADSTALE"
 BADSUMMARY=$(runv exports stale --meta "$BADMETA" --summary)
-printf '%s' "$BADSUMMARY" | jq -e '.tag == "stale" and .counts.unverifiable == 1 and .clean == false' >/dev/null \
+printf '%s' "$BADSUMMARY" | jq -e '(.tag | contains("stale")) and .counts.unverifiable == 1 and .clean == false' >/dev/null \
     && ok "run-level summary reports unverifiable records through the shared rule" \
     || bad "invalid stale summary: $BADSUMMARY"
+
+NDBC="$TMP/new-coverage.db"; NOUT="$TMP/new-coverage-out"; NBKP="$TMP/new-coverage-bk"
+bash "$TESTS_DIR/make_fake_db.sh" "$NDBC" >/dev/null
+mkdir -p "$NOUT"
+runnew() { OPENCODE_DB="$NDBC" OCED_OUT="$NOUT" OCED_BACKUP_DIR="$NBKP" run "$@"; }
+runnew export transcript --stamp "coverage-all" >/dev/null
+runnew export transcript --sessions ses_A0001 --stamp "coverage-exact" >/dev/null
+EXACTMETA="$NOUT/coverage-exact/transcript/metadata.json"
+jq -e '.scope == {"rule":"sessions","ids":["ses_A0001"]}' "$EXACTMETA" >/dev/null \
+    && ok "direct --sessions records an exact update scope" \
+    || bad "direct sessions scope: $(jq -c '{selection,scope}' "$EXACTMETA")"
+sqlite3 "$NDBC" "INSERT INTO session (id,project_id,slug,directory,title,version,parent_id,agent,model,cost,time_created,time_updated) VALUES ('ses_NEWROOT01','p','new-root','/tmp','New root after export','v1',NULL,'build','m',0,1789002200000,1789002200000);"
+NEWALL=$(runnew exports stale coverage-all --json)
+printf '%s' "$NEWALL" | jq -e 'any(.[]; .id == "ses_NEWROOT01" and .state == "new")' >/dev/null \
+    && ok "exports stale reports a new session inside the stored broad scope" \
+    || bad "new session stale json: $NEWALL"
+NEWEXACT=$(runnew exports stale coverage-exact --json)
+printf '%s' "$NEWEXACT" | jq -e 'length == 0' >/dev/null \
+    && ok "an exact --sessions run does not report unrelated new sessions" \
+    || bad "exact-scope coverage: $NEWEXACT"
+NEWPLANALL=$(runnew exports update coverage-all --dry-run --json)
+printf '%s' "$NEWPLANALL" | jq -e '.counts.new == 1 and .up_to_date == false' >/dev/null \
+    && ok "update plan counts the same new in-scope session" \
+    || bad "new full-scope plan: $NEWPLANALL"
+NEWPLANEXACT=$(runnew exports update coverage-exact --dry-run --json)
+printf '%s' "$NEWPLANEXACT" | jq -e '.counts.new == 0 and .up_to_date == true' >/dev/null \
+    && ok "exact-scope update ignores an unrelated new session" \
+    || bad "new exact-scope plan: $NEWPLANEXACT"
+NEWROW=$(runnew exports list | grep 'coverage-all')
+printf '%s' "$NEWROW" | grep -q '(new)' \
+    && ok "exports list tags a run with new in-scope coverage" \
+    || bad "new list row: $NEWROW"
+NEWVERIFY=$(runnew exports verify)
+printf '%s' "$NEWVERIFY" | grep -q 'new session(s) in scope' \
+    && ok "exports verify explains the new-coverage status" \
+    || bad "new verify: $NEWVERIFY"
+NEWVERIFYTSV=$(runnew exports verify --tsv)
+printf '%s\n' "$NEWVERIFYTSV" | awk -F'\t' '$1 == "coverage-all" && $2 == "new"' | grep -q . \
+    && ok "exports verify --tsv uses the distinct new status" \
+    || bad "new verify tsv: $NEWVERIFYTSV"
+NEWVIEW=$(runnew exports view coverage-all)
+printf '%s' "$NEWVIEW" | grep -q 'freshness: *BEHIND — .*new session(s) in scope' \
+    && ok "exports view calls new-only coverage behind, not stale" \
+    || bad "new view freshness: $(printf '%s' "$NEWVIEW" | grep freshness)"
+printf '%s' "$NEWVIEW" | sed -n '/== New in scope ==/,$p' | grep -q 'ses_NEWROOT01.*New root after export' \
+    && ok "exports view lists new in-scope sessions separately" \
+    || bad "new in scope view: $(printf '%s' "$NEWVIEW" | sed -n '/== New in scope ==/,$p')"
 
 echo "== metadata.session_records (WHICH sessions the run actually contains) =="
 # NOTE: the UNFILTERED run is the meaningful one. A title filter like
@@ -2021,8 +2068,9 @@ printf '%s' "$UPLAN" | grep -qE "changed  : 1" \
 UPLANJ=$(runu exports update "$USTAMP" --dry-run --json)
 printf '%s' "$UPLANJ" | jq -e '.up_to_date == false and .mode == "delta" and (.target|length) == 5' >/dev/null \
     && ok "update --dry-run --json is machine-readable" || bad "plan json: $UPLANJ"
-printf '%s' "$(runu exports list)" | grep -q "(stale)" \
-    && ok "update --dry-run leaves the run stale" || bad "dry-run changed the run"
+printf '%s' "$(runu exports list)" | grep -q '(stale,missing)' \
+    && ok "update --dry-run leaves the run's stale/missing statuses unchanged" \
+    || bad "dry-run changed the run"
 
 # 4) a real update: the run matches the live set again (+new, -gone, re-render).
 usql "INSERT INTO session (id,project_id,slug,directory,title,version,parent_id,agent,model,cost,time_created,time_updated) VALUES ('ses_NEW01','p','n','/tmp','Fresh subagent (@build subagent)','v1','ses_A0001','build','m',0,1789003000000,1789003100000);"

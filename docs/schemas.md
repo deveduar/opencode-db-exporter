@@ -664,13 +664,15 @@ questions:
   exists because a refresh keeps the stamp, so without it a real update would read as
   "same run, same date".
 
-`exports verify [--tsv]` audits every run against the SAME verdict (`--tsv` emits
-`stamp<TAB>tag` rows). `exports stale <stamp> [--tsv|--json]` asks for the per-session
-detail behind that verdict (`id`, `state`, `kind`, recorded `updated`, `live_updated`,
-`title`; stale, missing, then unverifiable, each by recorded updated desc) — the machine
-form of the `== Changed since export ==` block, from `exportlib/stale.py` (the SSoT
-`exports update` also uses). Freshness is snapshot integrity, not scope coverage: a new
-session entering the run's selection is reported by update as `new`, not `stale`.
+`exports verify [--tsv]` audits every run against the same snapshot-and-coverage summary
+(`--tsv` emits `stamp<TAB>tag<TAB>reason` rows). `exports stale <stamp> [--tsv|--json]`
+returns per-session records (`id`, `state`, `kind`, recorded `updated`, `live_updated`,
+`title`; `state` is `stale`, `missing`, `unverifiable`, or `new`). The first three describe
+snapshot integrity; `new` means live and in effective scope, but neither recorded nor
+deliberately excluded. `exportlib/stale.py` backs both `== Changed since export ==` and
+`== New in scope ==` and is shared with `exports update`. A direct `--sessions ID` run
+records that exact ID set as `.scope`; preset/menu narrowing can still preserve their
+explicitly broader scope so refresh reopens only that intended gap.
 `exports update <stamp>` refreshes in place (see §5 of `architecture.md` and the
 metadata subsection above).
 
@@ -701,8 +703,8 @@ naming because the data shapes are not uniform:
 - `updated:` appears only on a refreshed run (`<mode> mode (refreshed in place)`),
   read from `.update_mode`; the `date:` above it is already the refresh time, so
   without the line the two are indistinguishable.
-- `freshness:` is the same Python freshness summary as `list`/`verify`, spelled out:
-  `fresh (…)`, `STALE — <reason>` or `unverifiable (no session_records recorded)`.
+- `freshness:` is the same Python summary as `list`/`verify`: `fresh`, `STALE — <reason>`
+  for snapshot changes, or `BEHIND — <reason>` when only new in-scope sessions exist.
 - `== Sessions ==` lists the run's `.session_records` (id, kind, created → updated,
   title) by **updated desc**, with no stale/missing mark on the rows. A summary line
   (`N session(s) changed since export: K stale[, M missing][, U unverifiable]`) and a
@@ -711,7 +713,9 @@ naming because the data shapes are not uniform:
   stale first, then missing and unverifiable. The block
   reads `exportlib/stale.py` — the same per-session rule `exports stale` serves and
   `exports update` uses — so the block and the run-level `freshness:` line cannot
-  disagree.
+  disagree. A separate summary (`N new session(s) in scope`) and `== New in scope ==`
+  section list coverage additions; exclusions are removed from that calculation, so
+  deliberate omissions are not relabeled as new.
 - A `== Excluded (N kept out of scope) ==` block follows `== Sessions ==` when
   `.excluded` is non-empty: `id + title` per left-out session, capped at 8 with `… N more`
   (like `shrinks view`). This is the run's own GAP — the reason a `--sessions` run is not

@@ -274,10 +274,12 @@ oced_exports_verify() {
         echo "All clean ($n run(s) match the live DB)."
         return 0
     fi
-    echo "⚠️  Runs that no longer match the live DB (${#flagged[@]} of $n):"
+    echo "⚠️  Runs with changed snapshots or new in-scope sessions (${#flagged[@]} of $n):"
     local f
     for f in "${flagged[@]}"; do
-        printf '  %-18s [%s]  %s\n' "${f%%$'\t'*}" "$(printf '%s' "$f" | cut -f2)" "$(printf '%s' "$f" | cut -f3)"
+        local ftag="$(printf '%s' "$f" | cut -f2)"
+        [[ "$ftag" == *new* ]] && ftag="($ftag)"
+        printf '  %-18s [%s]  %s\n' "${f%%$'\t'*}" "$ftag" "$(printf '%s' "$f" | cut -f3)"
     done
     echo ""
     echo "   Refresh one in place with: opencode-db exports update <stamp>"
@@ -445,11 +447,16 @@ oced_exports_view() {
         printf '  %-11s %s\n' "db:" "$(jq -r '.db // "-"' "$first_meta")"
         printf '  %-11s %s\n' "sha256:" "$(jq -r '.db_sha256 // "-"' "$first_meta")"
         if [ -n "$rec_meta" ]; then
-            local freason
+            local freason ftag
             if freason=$(o_export_stale "$rec_meta"); then
                 printf '  %-11s %s\n' "freshness:" "fresh (the live DB has no newer content for these sessions)"
             else
-                printf '  %-11s %s\n' "freshness:" "STALE — $freason"
+                ftag=$(o_export_stale "$rec_meta" --tag 2>/dev/null || true)
+                case ",$ftag," in
+                    *,stale,*|*,missing,*|*,unverifiable,*)
+                        printf '  %-11s %s\n' "freshness:" "STALE — $freason" ;;
+                    *) printf '  %-11s %s\n' "freshness:" "BEHIND — $freason" ;;
+                esac
             fi
         else
             printf '  %-11s %s\n' "freshness:" "unverifiable (no session_records recorded)"
@@ -480,7 +487,8 @@ oced_exports_view() {
         # contradict the verdict above.
         local -A ses_state=()
         local -A ses_live_updated=()
-        local -a stale_ids=() missing_ids=() unverifiable_ids=()
+        local -A new_info=()
+        local -a stale_ids=() missing_ids=() unverifiable_ids=() new_ids=()
         local _mk _st _mk_kind _mk_upd _live_upd _mk_title
         # `exportlib/stale.py` is the ONE freshness rule (shared with
         # `exports stale` and `exports update`); its order is already stale first,
@@ -493,7 +501,11 @@ oced_exports_view() {
                 stale)   stale_ids+=("$_mk") ;;
                 missing) missing_ids+=("$_mk") ;;
                 unverifiable) unverifiable_ids+=("$_mk") ;;
+                new) new_ids+=("$_mk") ;;
             esac
+            if [ "$_st" = "new" ]; then
+                new_info["$_mk"]="$_mk_kind"$'\t'"$_mk_upd"$'\t'"$_live_upd"$'\t'"$_mk_title"
+            fi
         done < <(oced_exports_stale --meta "$rec_meta" --tsv 2>/dev/null)
         local -A ses_info=()
         local sid skind stitle screated supdated when
@@ -520,7 +532,7 @@ oced_exports_view() {
             printf '  %-22s %-8s  %-25s %s\n' "$updsid" "$upskind" "$upwhen" "$upstitle"
         done
         # Summary counts (the arrays are already in display order)
-        local n_stale=${#stale_ids[@]} n_missing=${#missing_ids[@]} n_unverifiable=${#unverifiable_ids[@]}
+        local n_stale=${#stale_ids[@]} n_missing=${#missing_ids[@]} n_unverifiable=${#unverifiable_ids[@]} n_new=${#new_ids[@]}
         if [ "$n_stale" -gt 0 ] || [ "$n_missing" -gt 0 ] || [ "$n_unverifiable" -gt 0 ]; then
             local parts=""
             [ "$n_stale" -gt 0 ] && parts="$n_stale stale"
@@ -544,6 +556,16 @@ oced_exports_view() {
             for al in "${unverifiable_ids[@]}"; do
                 IFS=$'\t' read -r askind aswhen astitle astat <<< "${ses_info[$al]}"
                 printf '  %-22s %-8s  %-25s  unverifiable  live %s  %s\n' "$al" "$askind" "$aswhen" "${ses_live_updated[$al]:--}" "$astitle"
+            done
+        fi
+        if [ "$n_new" -gt 0 ]; then
+            printf '\n  %s new session(s) in scope\n' "$n_new"
+            echo ""
+            echo "== New in scope =="
+            local new_id new_kind new_updated new_live new_title
+            for new_id in "${new_ids[@]}"; do
+                IFS=$'\t' read -r new_kind new_updated new_live new_title <<< "${new_info[$new_id]}"
+                printf '  %-22s %-8s  %-25s  new  %s\n' "$new_id" "$new_kind" "${new_updated:0:16}" "$new_title"
             done
         fi
     fi

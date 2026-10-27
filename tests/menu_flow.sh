@@ -726,6 +726,14 @@ oc_exports_run_row bbb | grep -qE 'notes \(unverifiable\)$' \
 oc_exports_run_row aaa | grep -qE '[0-9]B +\(unverifiable\)$' \
     && ok "a run with no preset leaves the preset column empty" \
     || bad "preset column not empty: $(oc_exports_run_row aaa)"
+mkdir -p "$OUT/newrow"
+echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":1,"session_records":[{"id":"ses_A0001","updated":"2026-01-01T00:00:00Z"}]}' > "$OUT/newrow/metadata.json"
+NEW_STATE=$(jq -cn --arg path "$OUT/newrow/metadata.json" \
+    '{($path): {tag:"new",counts:{new:1},reason:"1 new session(s) in scope since this export.",clean:false,new:[{id:"ses_NEW01",state:"new",kind:"root",updated:"2026-10-27T00:00:00Z",live_updated:"2026-10-27T00:00:00Z",title:"New session"}]}}')
+oc_exports_run_row newrow "$NEW_STATE" | grep -qE '\(new\)$' \
+    && ok "the exports menu row marks new in-scope coverage distinctly" \
+    || bad "menu new status: $(oc_exports_run_row newrow "$NEW_STATE")"
+rm -rf "$OUT/newrow"
 : > "$CALLS"; call_log
 confirm_action() { return 0; }
 qset "ccc"

@@ -95,7 +95,9 @@ def scope_meta(args) -> dict:
         return selection_meta(args)  # explicit hand-off from `exports update`
     if flag_in_argv("--sessions"):
         name = getattr(args, "preset_name", None) or getattr(args, "preset", None)
-        return preset_selection(name) or {"rule": "all"}
+        if name:
+            return preset_selection(name) or {"rule": "all"}
+        return selection_meta(args)
     return selection_meta(args)
 
 

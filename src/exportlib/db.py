@@ -189,6 +189,34 @@ def filter_subagent_policy(sessions: dict, db_ids: set,
     return out
 
 
+def load_effective_scope(meta: dict, con: sqlite3.Connection) -> tuple[dict, dict]:
+    """Resolve metadata `.scope` against the DB and apply the run's content policy.
+
+    `.selection` says what was materialized; `.scope` is the larger rule a refresh
+    follows. The returned id set is the exact set this run's flags/layout can write.
+    """
+    scope = meta.get("scope") or meta.get("selection") or {"rule": "all"}
+    if not isinstance(scope, dict) or "rule" not in scope:
+        scope = {"rule": "all"}
+    rule = scope.get("rule")
+    sessions = load_sessions(
+        con,
+        scope.get("value") if rule == "filter" else None,
+        scope.get("ids") if rule == "sessions" else None,
+        scope.get("value") if rule == "last" else None,
+        scope.get("value") if rule == "since" else None,
+    )
+    flags = meta.get("flags") if isinstance(meta.get("flags"), dict) else {}
+    effective = filter_subagent_policy(
+        sessions,
+        all_session_ids(con),
+        bool(meta.get("no_subagents") or flags.get("no_subagents")),
+        bool(meta.get("no_orphan_subagents") or flags.get("no_orphan_subagents")),
+        meta.get("sub") or flags.get("sub"),
+    )
+    return scope, effective
+
+
 def load_messages(con: sqlite3.Connection, sid: str):
     """-> list[(mdata, parts)] with raw part dicts."""
     msgs = con.execute(

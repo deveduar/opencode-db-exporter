@@ -1,10 +1,7 @@
-"""Per-session freshness of an export run against the LIVE DB.
+"""Per-session export integrity and scope coverage against the LIVE DB.
 
-This is the ONE rule behind `exports stale`, the `freshness:` line /
-`== Changed since export ==` block of `exports view`, and the delta decision of
-`exports update`. An export records each session's own `updated` (second-
-resolution ISO); a session is `stale` when the live `time_updated` moved past it,
-`missing` when the row no longer exists. Fresh sessions are not returned.
+Snapshot integrity (`stale`, `missing`, `unverifiable`) and scope coverage
+(`new`) are deliberately separate states.
 
 Read-only on the DB, always: `mode=ro` is what opens it.
 """
@@ -23,6 +20,7 @@ if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)
 
 from exportlib.config import default_db, default_out
+from exportlib.db import load_effective_scope
 from exportlib.util import die, ts_iso
 
 
@@ -92,6 +90,29 @@ def stale_ids(records: list, live: dict) -> list[dict]:
     return out
 
 
+def new_sessions(records: list, excluded: list, effective_scope: dict,
+                 live_ids: set[str]) -> list[dict]:
+    """Live sessions in the effective scope, but neither written nor excluded."""
+    recorded_ids = {r.get("id") for r in records or [] if r.get("id")}
+    excluded_ids = {r.get("id") for r in excluded or [] if r.get("id")}
+    out = []
+    for sid, row in effective_scope.items():
+        if sid in recorded_ids or sid in excluded_ids:
+            continue
+        updated = _iso(row.get("time_updated"))
+        parent_id = row.get("parent_id") or ""
+        out.append({
+            "id": sid,
+            "state": "new",
+            "kind": "subagent" if parent_id in live_ids else "root",
+            "updated": updated,
+            "live_updated": updated,
+            "title": row.get("title") or row.get("slug") or "",
+        })
+    out.sort(key=lambda entry: (entry["updated"], entry["id"]), reverse=True)
+    return out
+
+
 def _records(meta: dict) -> list:
     recs = meta.get("session_records") if isinstance(meta, dict) else None
     return recs if isinstance(recs, list) else []
@@ -114,6 +135,12 @@ def _live_for(con, records: list) -> dict:
 def stale_for_meta(meta: dict, con) -> list[dict]:
     recs = _records(meta)
     return stale_ids(recs, _live_for(con, recs))
+
+
+def coverage_for_meta(meta: dict, con) -> list[dict]:
+    _, effective = load_effective_scope(meta, con)
+    live_ids = set(effective)
+    return new_sessions(_records(meta), meta.get("excluded") or [], effective, live_ids)
 
 
 def _read_meta(path: Path) -> dict:
@@ -147,6 +174,7 @@ def _human(entries: list, label: str) -> None:
     stale = sum(1 for e in entries if e["state"] == "stale")
     missing = sum(1 for e in entries if e["state"] == "missing")
     unverifiable = sum(1 for e in entries if e["state"] == "unverifiable")
+    new = sum(1 for e in entries if e["state"] == "new")
     parts = []
     if stale:
         parts.append(f"{stale} stale")
@@ -154,16 +182,20 @@ def _human(entries: list, label: str) -> None:
         parts.append(f"{missing} missing")
     if unverifiable:
         parts.append(f"{unverifiable} unverifiable")
-    print(f"{len(entries)} session(s) changed since export: {', '.join(parts)}")
+    if new:
+        parts.append(f"{new} new in scope")
+    print(f"{len(entries)} session(s) differ from the run: {', '.join(parts)}")
     print("")
     for e in entries:
           print(f"  {e['id']:<22} {e['state']:<12} {e['kind']:<8} "
               f"{e['updated']:<20} {e['live_updated'] or '-':<20} {e['title']}")
 
 
-def summarize(entries: list) -> dict:
+def summarize(entries: list, new: list | None = None) -> dict:
+    new = new or []
     counts = {state: sum(1 for entry in entries if entry["state"] == state)
               for state in ("stale", "missing", "unverifiable")}
+    counts["new"] = len(new)
     reasons = []
     if counts["stale"]:
         reasons.append(f"{counts['stale']} session(s) changed in the live DB")
@@ -171,20 +203,23 @@ def summarize(entries: list) -> dict:
         reasons.append(f"{counts['missing']} session(s) deleted from the live DB")
     if counts["unverifiable"]:
         reasons.append(f"{counts['unverifiable']} session(s) have unverifiable timestamps")
+    if counts["new"]:
+        reasons.append(f"{counts['new']} new session(s) in scope")
     reason = "; ".join(reasons)
     if reason:
         reason += " since this export."
-    tag = ("stale" if counts["stale"] else "missing" if counts["missing"]
-           else "unverifiable" if counts["unverifiable"] else "")
+    tags = [state for state in ("stale", "missing", "unverifiable", "new")
+            if counts[state]]
+    tag = ",".join(tags)
     return {"tag": tag, "counts": counts, "reason": reason,
-            "clean": not bool(tag)}
+            "clean": not bool(tag), "new": new}
 
 
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="opencode-db exports stale",
-        description="List the sessions of an export run that no longer match "
-                    "the live DB (read-only).",
+        description="List snapshot-integrity changes and new sessions in an "
+                    "export run's effective scope (read-only).",
     )
     ap.add_argument("stamp", nargs="?", help="export run (the name in `exports list`)")
     ap.add_argument("--meta", default=None,
@@ -207,6 +242,8 @@ def main(argv=None) -> int:
         if not db.exists():
             die(f"Database not found: {db}")
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        con.row_factory = sqlite3.Row
         try:
             results = {}
             for raw_path in args.summary_batch:
@@ -224,7 +261,8 @@ def main(argv=None) -> int:
                         "clean": False,
                     }
                     continue
-                results[raw_path] = summarize(stale_for_meta(meta, con))
+                results[raw_path] = summarize(
+                    stale_for_meta(meta, con), coverage_for_meta(meta, con))
         finally:
             con.close()
         json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
@@ -232,7 +270,10 @@ def main(argv=None) -> int:
         return 0
 
     if not args.stamp and not args.meta:
-        build_argparser().error("give a stamp or --meta")
+                _, effective = load_effective_scope(meta, con)
+                new = new_sessions(_records(meta), meta.get("excluded") or [],
+                                   effective, set(effective))
+                results[raw_path] = summarize(stale_for_meta(meta, con), new)
 
     if args.meta:
         path = Path(args.meta)
@@ -262,24 +303,27 @@ def main(argv=None) -> int:
     if not db.exists():
         die(f"Database not found: {db}")
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    con.row_factory = sqlite3.Row
     try:
         entries = stale_for_meta(meta, con)
+        new = coverage_for_meta(meta, con)
     finally:
         con.close()
 
     if args.summary:
-        json.dump(summarize(entries), sys.stdout, ensure_ascii=False)
+        json.dump(summarize(entries, new), sys.stdout, ensure_ascii=False)
         sys.stdout.write("\n")
     elif args.json:
-        json.dump(entries, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump(entries + new, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
     elif args.tsv:
-        for e in entries:
+        for e in entries + new:
             print("\t".join((e["id"], e["state"], e["kind"],
                              e["updated"], e["live_updated"] or "",
                              _clean(e["title"]))))
     else:
-        _human(entries, label)
+        _human(entries + new, label)
     return 0
 
 

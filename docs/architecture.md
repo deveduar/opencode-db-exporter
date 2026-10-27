@@ -454,20 +454,25 @@ it say "nothing has moved" and stop.
 
 **Freshness has one per-session rule, and one run-level verdict.** A backup or a shrink
 records a single `max_updated`; an export records each session's own `updated` in
-`.session_records`. `exportlib/stale.py` (`stale_ids`) is the ONE per-session rule: it feeds
-`exports stale <stamp> [--tsv|--json]`, the `== Changed since export ==` block of `exports
-view`, and `exportlib/update.py`'s changed/revived sets. On top of it,
+`.session_records`. `exportlib/stale.py` is the shared source for snapshot integrity and
+scope coverage: `stale_ids` detects `stale`/`missing`/`unverifiable` recorded sessions, and
+`new_sessions` detects live sessions in the effective scope that are neither written nor
+deliberately excluded. It feeds `exports stale <stamp> [--tsv|--json]`, the `== Changed
+since export ==` and `== New in scope ==` blocks of `exports view`, and `exports update`.
+On top of it,
 `o_export_stale <meta> [--tag]` is a Bash formatting wrapper around
 `exportlib/stale.py --summary`; the `exports list` row, `view`'s `freshness:` line,
 `exports verify [--tsv]`, and the menu all consume that same result. List, verify, and the
 menu send their metadata paths in one `--summary-batch` call, sharing one read-only DB
 connection rather than starting Python once per run. It distinguishes
 **stale** (live `time_updated` is later than the recorded value), **missing** (the session
-no longer exists), and **unverifiable** (a timestamp is absent or invalid). `exports stale
---json|--tsv` reports both the recorded `updated` and current `live_updated`; comparisons
-are at second resolution. A legacy run without `.session_records` is also unverifiable,
-never silently called fresh. This is snapshot integrity, not scope coverage: sessions that
-newly match the scope are reported by `exports update` as `new`, not as `stale`. A
+no longer exists), **unverifiable** (a timestamp is absent or invalid), and **new** (live
+session in scope, not recorded and not deliberately excluded). `exports stale --json|--tsv`
+reports recorded and live timestamps; comparisons are at second resolution. A legacy run
+without `.session_records` is unverifiable, never silently called fresh. `new` is a coverage
+status, not a snapshot-integrity failure, and can coexist with stale/missing statuses. A
+direct `--sessions ID` run stores exactly those IDs as `.scope`; preset/menu flows may
+preserve a broader scope when that broader selection was explicit.
 refresh keeps the stamp, so the list, view **and menu row** render the refresh **next to** it
 (`refreshed <time> (<mode>)` / `updated: <mode> mode (refreshed in place)` / `· refreshed
 (mode)`), which is the only visible proof a real update moved; the menu row also shows the

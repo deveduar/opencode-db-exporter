@@ -44,7 +44,7 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_db, default_out
-from exportlib.db import all_session_ids, filter_subagent_policy, load_sessions
+from exportlib.db import load_effective_scope
 from exportlib.flags import FLAGS
 from exportlib.stale import stale_ids
 from exportlib.util import die, selection_phrase
@@ -90,28 +90,6 @@ def _baseline(prods: list[dict]) -> dict:
     return prods[0]
 
 
-def _effective_scope(in_scope: set, live: dict, live_ids: set, meta: dict) -> set:
-    """The scope after the run's own subagent policy.
-
-    Mirrors `exportlib.cli.filter_subagent_policy` (the ONE definition used at
-    write time): a real subagent has a non-empty `parent_id` whose parent row
-    still exists (an orphan is a root), and `--no-orphan-subagents` is a closed
-    set. Without this, `new` could re-add a subagent the run's flags drop, and a
-    legacy `.excluded` entry could be "revived" only to be dropped again — a plan
-    that never converges.
-    """
-    flags = meta.get("flags") if isinstance(meta.get("flags"), dict) else {}
-    selected = {sid: live[sid] for sid in in_scope if sid in live}
-    effective = filter_subagent_policy(
-        selected,
-        live_ids,
-        bool(meta.get("no_subagents") or flags.get("no_subagents")),
-        bool(meta.get("no_orphan_subagents") or flags.get("no_orphan_subagents")),
-        meta.get("sub") or flags.get("sub"),
-    )
-    return set(effective)
-
-
 # --------------------------------------------------------------------- plan ---
 def build_plan(args) -> dict:
     db = Path(default_db())
@@ -130,36 +108,17 @@ def build_plan(args) -> dict:
         die(f"{args.stamp}: no .session_records — cannot tell what it contains "
             "(re-export it instead)")
     excluded = {r.get("id"): r for r in (meta.get("excluded") or []) if r.get("id")}
-    scope = meta.get("scope") or meta.get("selection") or {"rule": "all"}
-    if not isinstance(scope, dict) or "rule" not in scope:
-        scope = {"rule": "all"}
     included = set(recs)
 
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
         live = {r["id"]: dict(r) for r in con.execute(LIVE_SQL)}
-        live_ids = all_session_ids(con)
-        rule = scope.get("rule")
-        if rule == "all":
-            in_scope = set(live_ids)
-        else:
-            in_scope = set(load_sessions(
-                con,
-                scope.get("value") if rule == "filter" else None,
-                scope.get("ids") if rule == "sessions" else None,
-                scope.get("value") if rule == "last" else None,
-                scope.get("value") if rule == "since" else None,
-            ))
+        scope, effective_sessions = load_effective_scope(meta, con)
     finally:
         con.close()
-
-    # The run's own subagent policy shapes the effective scope too. `.excluded`
-    # is the SELECTION gap (the run records it already policy-filtered), but a
-    # legacy run may still carry a policy-dropped subagent there; applying the
-    # flags here means `new`/`revived` can never re-add one. This is what keeps
-    # the plan equal to what the child export will really write.
-    effective_scope = _effective_scope(in_scope, live, live_ids, meta)
+    live_ids = set(live)
+    effective_scope = set(effective_sessions)
 
     # ONE freshness rule (exportlib/stale.py), shared with `exports view` and
     # `exports stale`. A session "changed" when the DB's clock moved past the
