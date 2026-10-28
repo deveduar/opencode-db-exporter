@@ -46,7 +46,7 @@ from exportlib import TOOL_VERSION
 from exportlib.config import default_db, default_out
 from exportlib.db import load_effective_scope
 from exportlib.flags import FLAGS
-from exportlib.stale import stale_ids
+from exportlib.freshness import _require_canonical, snapshot_changes
 from exportlib.util import die, selection_phrase
 
 MODES = ("delta", "accumulative")
@@ -70,7 +70,8 @@ def _products_of(run_dir: Path) -> list[dict]:
         except Exception as e:
             die(f"{meta_path}: not readable JSON ({e})")
         if not isinstance(meta, dict):
-            continue
+            die(f"{meta_path}: not a metadata object")
+        _require_canonical(meta, str(meta_path))
         out.append({
             "profile": meta.get("profile") or meta_path.parent.name,
             "dir": meta_path.parent,
@@ -103,11 +104,11 @@ def build_plan(args) -> dict:
     base = _baseline(prods)
     meta = base["meta"]
 
-    recs = {r.get("id"): r for r in (meta.get("session_records") or []) if r.get("id")}
+    recs = {r.get("id"): r for r in meta["session_records"] if r.get("id")}
     if not recs:
         die(f"{args.stamp}: no .session_records — cannot tell what it contains "
             "(re-export it instead)")
-    excluded = {r.get("id"): r for r in (meta.get("excluded") or []) if r.get("id")}
+    excluded = {r.get("id"): r for r in meta["excluded"] if r.get("id")}
     included = set(recs)
 
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -120,13 +121,13 @@ def build_plan(args) -> dict:
     live_ids = set(live)
     effective_scope = set(effective_sessions)
 
-    # ONE freshness rule (exportlib/stale.py), shared with `exports view` and
-    # `exports stale`. A session "changed" when the DB's clock moved past the
+    # ONE freshness rule (exportlib/freshness.py), shared with `exports view` and
+    # `exports freshness`. A session "changed" when the DB's clock moved past the
     # timestamp the run recorded; missing sessions are handled by `gone`.
     states = {
         e["id"]: e["state"]
-        for e in stale_ids(
-            list(meta.get("session_records") or []) + list(excluded.values()),
+        for e in snapshot_changes(
+            list(meta["session_records"]) + list(excluded.values()),
             live,
         )
     }
@@ -265,26 +266,13 @@ def _oneline(entries, max_n: int = 4) -> str:
 
 # ------------------------------------------------------------------ execute ---
 def _flags_argv(meta: dict) -> list:
-    """argv for one product's content flags: `.flags` when the run recorded it,
-    the handful of top-level keys a legacy run did record otherwise (its missing
-    keys are the flag defaults, which is what the shipped presets set anyway)."""
+    """argv for one product's content flags. `.flags` is required: legacy
+    top-level mirrors are not reconstructed, because that would silently invent
+    a policy the run never recorded."""
     spec = {f.name: f for f in FLAGS}
     flags = meta.get("flags")
-    if not isinstance(flags, dict) or not flags:
-        flags = {}
-        for k in ("sub", "no_subagents", "no_orphan_subagents", "tool_output",
-                  "tool_input_limit", "tool_output_limit", "patch", "role",
-                  "summary_diffs", "sanitize", "cap", "files", "mark_compactions"):
-            if k in meta and meta[k] is not None:
-                flags[k] = meta[k]
-        # `reasoning` is stored ON, metadata writes it ON, the flag is `--no-reasoning`.
-        if "reasoning" in meta and "no_reasoning" not in flags:
-            flags["no_reasoning"] = not bool(meta.get("reasoning"))
-        if "no_reasoning" in flags:
-            flags["no_reasoning"] = bool(flags["no_reasoning"])
-        # memory stores the file list flag under its own name.
-        if "touched_files" in meta:
-            flags["files"] = bool(meta.get("touched_files"))
+    if not isinstance(flags, dict):
+        die("metadata is missing .flags; re-export this run")
     argv = []
     for k, v in flags.items():
         f = spec.get(k)

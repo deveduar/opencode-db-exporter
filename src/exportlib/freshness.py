@@ -50,7 +50,7 @@ def _clean(s) -> str:
     return str(s or "").replace("\t", " ").replace("\n", " ").replace("\r", " ")
 
 
-def stale_ids(records: list, live: dict) -> list[dict]:
+def snapshot_changes(records: list, live: dict) -> list[dict]:
     """Flagged sessions for a run's `.session_records` against `live`.
 
     `live` maps id -> a row/dict carrying `time_updated` (epoch ms), which is
@@ -113,9 +113,25 @@ def new_sessions(records: list, excluded: list, effective_scope: dict,
     return out
 
 
+CANONICAL_TYPES = {
+    "selection": dict,
+    "scope": dict,
+    "flags": dict,
+    "session_records": list,
+    "excluded": list,
+    "artifacts": list,
+}
+
+
+def _require_canonical(meta: dict, label: str) -> None:
+    """Reject incomplete export metadata instead of assigning it a legacy state."""
+    for key, expected in CANONICAL_TYPES.items():
+        if not isinstance(meta.get(key), expected):
+            die(f"{label}: missing or invalid .{key}; re-export this run")
+
+
 def _records(meta: dict) -> list:
-    recs = meta.get("session_records") if isinstance(meta, dict) else None
-    return recs if isinstance(recs, list) else []
+    return meta["session_records"]
 
 
 def _live_for(con, records: list) -> dict:
@@ -132,9 +148,9 @@ def _live_for(con, records: list) -> dict:
     return live
 
 
-def stale_for_meta(meta: dict, con) -> list[dict]:
+def snapshot_changes_for_meta(meta: dict, con) -> list[dict]:
     recs = _records(meta)
-    return stale_ids(recs, _live_for(con, recs))
+    return snapshot_changes(recs, _live_for(con, recs))
 
 
 def coverage_for_meta(meta: dict, con) -> list[dict]:
@@ -154,17 +170,18 @@ def _read_meta(path: Path) -> dict:
 
 
 def _find_meta(stamp: str):
-    """The product metadata that carries `.session_records` (a bundle sorts its
-    products, so the first file is not necessarily the one). `(None, None)` when
-    the run exists but is legacy (no record of which sessions it contains)."""
+    """Return canonical metadata for a run, rejecting incomplete products."""
     run = Path(default_out()) / stamp
     if not run.is_dir():
         die(f"Not found: {run}")
-    for path in sorted(run.glob("*/metadata.json")):
+    paths = sorted(run.glob("*/metadata.json"))
+    if not paths:
+        die(f"{run}: no metadata.json; re-export this run")
+    for path in paths:
         meta = _read_meta(path)
-        if _records(meta):
-            return path, meta
-    return None, None
+        _require_canonical(meta, str(path))
+    path = paths[0]
+    return path, _read_meta(path)
 
 
 def _human(entries: list, label: str) -> None:
@@ -217,7 +234,7 @@ def summarize(entries: list, new: list | None = None) -> dict:
 
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="opencode-db exports stale",
+        prog="opencode-db exports freshness",
         description="List snapshot-integrity changes and new sessions in an "
                     "export run's effective scope (read-only).",
     )
@@ -243,26 +260,16 @@ def main(argv=None) -> int:
             die(f"Database not found: {db}")
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
-        con.row_factory = sqlite3.Row
         try:
             results = {}
             for raw_path in args.summary_batch:
                 path = Path(raw_path)
                 if not path.is_file():
-                    results[raw_path] = {"tag": "unverifiable", "counts": {},
-                                         "reason": f"metadata.json missing: {path}",
-                                         "clean": False}
-                    continue
+                    die(f"metadata.json missing: {path}; re-export this run")
                 meta = _read_meta(path)
-                if not _records(meta):
-                    results[raw_path] = {
-                        "tag": "unverifiable", "counts": {},
-                        "reason": "cannot verify freshness (no session_records recorded).",
-                        "clean": False,
-                    }
-                    continue
+                _require_canonical(meta, str(path))
                 results[raw_path] = summarize(
-                    stale_for_meta(meta, con), coverage_for_meta(meta, con))
+                    snapshot_changes_for_meta(meta, con), coverage_for_meta(meta, con))
         finally:
             con.close()
         json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
@@ -270,43 +277,26 @@ def main(argv=None) -> int:
         return 0
 
     if not args.stamp and not args.meta:
-                _, effective = load_effective_scope(meta, con)
-                new = new_sessions(_records(meta), meta.get("excluded") or [],
-                                   effective, set(effective))
-                results[raw_path] = summarize(stale_for_meta(meta, con), new)
+        build_argparser().error("give a stamp or --meta")
 
     if args.meta:
         path = Path(args.meta)
         if not path.is_file():
             die(f"Not found: {path}")
         meta = _read_meta(path)
+        _require_canonical(meta, str(path))
         label = str(path)
     else:
         path, meta = _find_meta(args.stamp)
         label = args.stamp
-
-    if meta is None or not _records(meta):
-        # A legacy run has no record of which sessions it contains; say so
-        # instead of inventing a verdict (the view does the same).
-        if args.json:
-            print("[]")
-        elif args.summary:
-            json.dump({"tag": "unverifiable", "counts": {},
-                       "reason": "cannot verify freshness (no session_records recorded).",
-                       "clean": False}, sys.stdout)
-            sys.stdout.write("\n")
-        else:
-            print(f"unverifiable: {label} has no .session_records", file=sys.stderr)
-        return 0
 
     db = Path(os.environ.get("OPENCODE_DB") or default_db())
     if not db.exists():
         die(f"Database not found: {db}")
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
-    con.row_factory = sqlite3.Row
     try:
-        entries = stale_for_meta(meta, con)
+        entries = snapshot_changes_for_meta(meta, con)
         new = coverage_for_meta(meta, con)
     finally:
         con.close()

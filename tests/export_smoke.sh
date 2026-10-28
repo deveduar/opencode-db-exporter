@@ -374,8 +374,8 @@ TC=$(cat "$(last_transcript transcript 'Project Alpha')")
 echo "$TC" | grep -q "**Tool:**" && ok "transcript keeps tool calls" || bad "transcript no tools"
 echo "$TC" | grep -q "Let me think first" && ok "transcript keeps reasoning by default" || bad "transcript reasoning lost"
 MT=$(last_meta transcript)
-jq -e '.profile == "transcript" and .sanitize == false and .reasoning == true and .tool_output == "truncated"' "$MT" >/dev/null \
-    && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,sanitize,reasoning,tool_output}' "$MT")"
+jq -e '.profile == "transcript" and .flags.sanitize == false and .flags.no_reasoning == false and .flags.tool_output == "truncated"' "$MT" >/dev/null \
+    && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,flags}' "$MT")"
 
 echo "== export transcript --no-reasoning =="
 run export transcript --no-reasoning --filter ses_A0001 >/dev/null
@@ -383,7 +383,7 @@ TC=$(cat "$(last_transcript transcript 'Project Alpha')")
 echo "$TC" | grep -q "Let me think first" && bad "no-reasoning kept reasoning" || ok "no-reasoning omits reasoning"
 echo "$TC" | grep -q "I'll look at the files" && ok "no-reasoning keeps the text" || bad "no-reasoning lost text"
 MT=$(last_meta transcript)
-jq -e '.reasoning == false' "$MT" >/dev/null && ok "no-reasoning recorded in metadata" || bad "no-reasoning metadata"
+jq -e '.flags.no_reasoning == true' "$MT" >/dev/null && ok "no-reasoning recorded in metadata" || bad "no-reasoning metadata"
 
 echo "== export transcript --role user (prompts only, flag not a preset) =="
 run export transcript --role user --filter ses_A0001 >/dev/null
@@ -435,9 +435,9 @@ echo "== contract hardening: schema_version / model / null / ISO dates =="
 printf '%s' "$(sed -n '1p' "$MB/corpus.jsonl")" | jq -e '.schema_version == 1 and .model == "model-a" and .parent_id == null and .created == "2026-09-10T00:26:40Z"' >/dev/null \
     && ok "corpus line: schema_version, plain model id, null parent, ISO date" \
     || bad "corpus contract: $(sed -n '1p' "$MB/corpus.jsonl" | jq -c '{schema_version,model,parent_id,created}')"
-jq -e '.touched_files == false and .files == ["corpus.jsonl", "index.md"] and .profile == "memory"' "$MB/metadata.json" >/dev/null \
-    && ok "memory metadata: touched_files false + produced files list" \
-    || bad "memory meta contract: $(jq -c '{touched_files,files,profile}' "$MB/metadata.json")"
+jq -e '.flags.files == false and .artifacts == ["corpus.jsonl", "index.md"] and .profile == "memory"' "$MB/metadata.json" >/dev/null \
+    && ok "memory metadata: flags.files false + artifacts list" \
+    || bad "memory meta contract: $(jq -c '{flags,artifacts,profile}' "$MB/metadata.json")"
 
 echo "== faithful product (lossless JSON archive) =="
 run export faithful --filter ses_A0001 >/dev/null
@@ -461,7 +461,7 @@ run export faithful --sanitize --filter ses_A0001 >/dev/null
 FR=$(find "$OUT" -path "*/faithful/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "faithful sanitize leaked" || ok "faithful sanitize redacts recursively"
 MT=$(last_meta faithful)
-jq -e '.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize recorded in metadata" || bad "faithful sanitize metadata"
+jq -e '.flags.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize recorded in metadata" || bad "faithful sanitize metadata"
 
 echo "== shared-stamp bundle (products share one run folder) =="
 BSTAMP="stplug-$(date -u +%s)"
@@ -485,54 +485,62 @@ VJSON=$(run exports view "$BSTAMP" --json)
 printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["digest","transcript"]' >/dev/null \
     && ok "exports view --json is one metadata record per product" || bad "exports view --json: $VJSON"
 printf '%s' "$VJSON" | grep -q "== Export run" && bad "exports view --json header" || ok "exports view --json has no header"
-# sessions_selected is an ARRAY: the Selection line must join it, never concat it.
+# `.selection.ids` is an ARRAY: the Selection line must join it, never concat it.
 mkdir -p "$OUT/$SELRUN/transcript"
-jq -n '{profile:"transcript",filter:null,sessions_selected:["ses_A0001","ses_B0001"],preset:"archive",
-        sessions:{total:2,roots:2,subagents:0},messages:2,compactions:0,files:["index.md"]}' \
+jq -n '{tool:"opencode-db/exportlib",version:"0",date:"2026-01-02T03:04:05Z",db:"/db",db_sha256:"x",
+        last_backup:null,profile:"transcript",preset:"archive",
+        selection:{rule:"sessions",ids:["ses_A0001","ses_B0001"]},
+        scope:{rule:"all"},excluded:[],
+        session_records:[{id:"ses_A0001",title:"Alpha",kind:"root",parent_id:null,created:"2026-01-01T00:00:00Z",updated:"2026-01-01T00:00:00Z"},
+                         {id:"ses_B0001",title:"Beta",kind:"root",parent_id:null,created:"2026-01-01T00:00:00Z",updated:"2026-01-01T00:00:00Z"}],
+        flags:{no_subagents:false,no_orphan_subagents:false,sub:"separate",tool_output:"truncated",
+               no_reasoning:false,mark_compactions:false,summary_diffs:false,role:"all",sanitize:false},
+        subagents_hidden:0,messages:2,compactions:0,digests:0,tokens_backfilled:0,
+        artifacts:["index.md"]}' \
     > "$OUT/$SELRUN/transcript/metadata.json"
 SELV=$(run exports view "$SELRUN")
-printf '%s' "$SELV" | grep -q "jq: error" && bad "exports view selection array: jq error" || ok "exports view renders an array sessions_selected"
-# The selection is read from `.selection` (the inverse of selection_meta), so an
-# array sessions_selected WITHOUT .selection degrades to a legacy record.
-printf '%s' "$SELV" | grep -qE "selection: +2 explicit session id\(s\) \(legacy record\)" \
-    && ok "exports view joins an array sessions_selected" || bad "exports view selection array: $(printf '%s' "$SELV" | grep -i 'selection')"
+printf '%s' "$SELV" | grep -q "jq: error" && bad "exports view selection array: jq error" || ok "exports view renders an array selection"
+printf '%s' "$SELV" | grep -qE "selection: +2 explicit session id\(s\)" \
+    && ok "exports view joins selection.ids" || bad "exports view selection array: $(printf '%s' "$SELV" | grep -i 'selection')"
 # It must NOT be printed per product: it is a run-level fact.
 [ "$(printf '%s' "$SELV" | grep -ci 'selection:')" -eq 1 ] \
     && ok "exports view prints the selection once per run" || bad "exports view repeats the selection"
-# Keys a product does not have must not be invented: `cap`/`touched_files` are
-# memory-only, and this fixture is a transcript.
+printf '%s' "$SELV" | grep -qE "^  scope: +ALL sessions" \
+    && ok "exports view names the wider scope" || bad "view scope: $(printf '%s' "$SELV" | grep -i scope)"
+# Keys a product does not have must not be invented: `cap`/`files` are
+# memory-only `.flags` keys, and this fixture is a transcript.
 printf '%s' "$SELV" | grep -qE "^  (Cap|Touched files):" \
     && bad "exports view invents memory-only keys: $(printf '%s' "$SELV" | grep -E "^  (Cap|Touched)")" \
     || ok "exports view omits keys the product does not have"
 # Field labels must align on one column.
 BADALIGN=$(printf '%s' "$SELV" | sed -n '/== Details per product ==/,$p' | grep -E '^  [A-Za-z].*[A-Za-z]+: ' | grep -vcE '^  [A-Za-z][A-Za-z ()]*: {2,}')
 [ "$BADALIGN" -eq 0 ] && ok "exports view field labels align" || bad "exports view label alignment ($BADALIGN ragged)"
+# Every canonical metadata key is required. A run missing one is refused with a
+# re-export instruction; no legacy top-level mirror is reconstructed from.
+for badkey in selection scope flags session_records excluded artifacts; do
+    NKEY="nokey-$badkey-$(date -u +%s%N)"
+    mkdir -p "$OUT/$NKEY/transcript"
+    jq "del(.$badkey)" "$OUT/$SELRUN/transcript/metadata.json" > "$OUT/$NKEY/transcript/metadata.json"
+    KOUT=$(run exports view "$NKEY" 2>&1); krc=$?
+    [ "$krc" -ne 0 ] && printf '%s' "$KOUT" | grep -q "incomplete canonical metadata; re-export this run" \
+        && ok "exports view refuses a run without .$badkey" \
+        || bad "missing .$badkey: rc=$krc $(printf '%s' "$KOUT" | head -1)"
+    rm -rf "$OUT/$NKEY"
+done
 # The legacy `metadatos.json` file name is gone: a run dir that only has it is
-# ignored (one name, English). The shape fallbacks for OLD metadata.json CONTENT
-# (no .sessions.total, no .session_records) still apply.
+# invalid, rather than silently omitted from `exports list`.
 LEGACY="legacy-$(date -u +%s)"
 mkdir -p "$OUT/$LEGACY/transcript"
-echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
+echo '{"profile":"transcript","session_records":[],"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
 LEGACYV=$(run exports view "$LEGACY" 2>&1)
 [ $? -ne 0 ] && printf '%s' "$LEGACYV" | grep -q "No metadata.json found" \
     && ok "exports view refuses a legacy-only metadatos.json run dir" \
     || bad "exports view legacy: $(printf '%s' "$LEGACYV" | head -1)"
 EXL=$(run exports list)
-LEGRO=$(printf '%s' "$EXL" | grep "$LEGACY" || true)
-printf '%s' "$LEGRO" | grep -qv transcript \
-    && ok "exports list stops aggregating metadatos.json runs" \
-    || bad "legacy list row: $(printf '%s' "$LEGRO" | head -1)"
-
-# Same minimal record as metadata.json: the content fallbacks stay.
-NOSHAPE="noshape-$(date -u +%s)"
-mkdir -p "$OUT/$NOSHAPE/transcript"
-echo '{"profile":"transcript","sessions_selected":["ses_A0001"],"sessions":{"roots":1,"subagents":0},"messages":2,"compactions":0}' > "$OUT/$NOSHAPE/transcript/metadata.json"
-NOSS=$(run exports view "$NOSHAPE")
-# No sessions.total: totals must come from roots + subagents.
-printf '%s' "$NOSS" | grep -qE "^  totals: +1 roots \(0 subagent\)" \
-    && ok "exports view derives totals from roots + subagents" || bad "noshape totals: $(printf '%s' "$NOSS" | grep -i 'totals:')"
-printf '%s' "$NOSS" | grep -q "legacy record" \
-    && ok "exports view labels a pre-session_records run's selection" || bad "noshape selection label"
+[ $? -ne 0 ] && printf '%s' "$EXL" | grep -q "no metadata.json; re-export this run" \
+    && ok "exports list rejects a run without canonical metadata" \
+    || bad "legacy list: $(printf '%s' "$EXL" | head -1)"
+rm -rf "$OUT/$LEGACY"
 
 # A NARROWED run records `.scope` (the wider set) + `.excluded` (what it left
 # out). `exports view` must name the scope and list the excluded gap, and
@@ -546,7 +554,8 @@ jq -n '{profile:"transcript",preset:"notes",date:"2026-01-02T03:04:05Z",db:"/db"
         excluded:[{id:"ses_B0001",title:"Left out one",updated:"2026-01-01T00:00:00Z"},
                   {id:"ses_B0002",title:"Left out two",updated:"2026-01-01T00:00:00Z"}],
         session_records:[{id:"ses_A0001",title:"Kept",kind:"root",parent_id:null,created:"2026-01-01T00:00:00Z",updated:"2026-01-01T00:00:00Z"}],
-        sessions:{total:1,roots:1,subagents:0},messages:2,compactions:0,files:["index.md"]}' \
+        flags:{sub:"separate",no_subagents:false,no_orphan_subagents:false},subagents_hidden:0,
+        messages:2,compactions:0,digests:0,tokens_backfilled:0,artifacts:["index.md"]}' \
     > "$OUT/$SCOPER/transcript/metadata.json"
 SCOPEV=$(run exports view "$SCOPER")
 printf '%s' "$SCOPEV" | grep -qE "^  scope: +ALL sessions" \
@@ -573,8 +582,8 @@ printf '%s' "$(run exports list | grep "$BSTAMP")" | grep -qE "[0-9]+ · [0-9]+ 
 echo "== filter =="
 run export transcript --filter 'Project Beta' >/dev/null
 ME=$(last_meta transcript)
-jq -e '.filter == "Project Beta"' "$ME" >/dev/null && ok "filter applied in metadata" || bad "filter metadata"
-jq -e '.sessions.roots == 1' "$ME" >/dev/null && ok "filter counts in metadata" || bad "filter counts"
+jq -e '.selection.rule == "filter" and .selection.value == "Project Beta"' "$ME" >/dev/null && ok "filter applied in metadata" || bad "filter metadata"
+jq -e '([.session_records[] | select(.kind == "root")] | length) == 1' "$ME" >/dev/null && ok "filter counts in metadata" || bad "filter counts"
 
 echo "== recency selection: --last N / --since DATE (CLI-only) =="
 # the fake DB's time_updated order is ORPHAN01 > B0001 > B0002 > A0001 > A0003 > A0002
@@ -582,24 +591,24 @@ run export transcript --last 2 >/dev/null
 ME=$(last_meta transcript)
 jq -e '.selection == {"rule":"last","value":2}' "$ME" >/dev/null \
     && ok "--last N is recorded as the selection rule" || bad "--last metadata: $(jq -c .selection "$ME")"
-jq -e '.sessions.roots == 2 and .sessions.subagents == 1 and .sessions.total == 3' "$ME" >/dev/null \
-    && ok "--last 2 = 2 newest roots + the subagent that follows one" || bad "--last counts: $(jq -c .sessions "$ME")"
+jq -e '([.session_records[] | select(.kind == "root")] | length) == 2 and ([.session_records[] | select(.kind == "subagent")] | length) == 1 and (.session_records | length) == 3' "$ME" >/dev/null \
+    && ok "--last 2 = 2 newest roots + the subagent that follows one" || bad "--last counts: $(jq -c .session_records "$ME")"
 grep -q '^| Selection | last 2 session(s) by last update |' "$(dirname "$ME")/index.md" \
     && ok "index.md states the --last rule" || bad "--last index row: $(grep '^| Selection' "$(dirname "$ME")/index.md")"
 # --last counts ROOTS and closes the set over their subagents (like shrink --keep N)
 run export transcript --last 1 >/dev/null
-jq -e '.sessions.roots == 1 and .sessions.subagents == 0' "$(last_meta transcript)" >/dev/null \
-    && ok "--last 1 = the newest root, nothing dragged in" || bad "--last 1 counts: $(jq -c .sessions "$(last_meta transcript)")"
+jq -e '([.session_records[] | select(.kind == "root")] | length) == 1 and ([.session_records[] | select(.kind == "subagent")] | length) == 0' "$(last_meta transcript)" >/dev/null \
+    && ok "--last 1 = the newest root, nothing dragged in" || bad "--last 1 counts: $(jq -c .session_records "$(last_meta transcript)")"
 run export transcript --last 4 >/dev/null
-jq -e '.sessions.roots == 3 and .sessions.total == 6' "$(last_meta transcript)" >/dev/null \
-    && ok "--last 4 (more than the 3 roots) still yields every session" || bad "--last 4 counts: $(jq -c .sessions "$(last_meta transcript)")"
+jq -e '([.session_records[] | select(.kind == "root")] | length) == 3 and (.session_records | length) == 6' "$(last_meta transcript)" >/dev/null \
+    && ok "--last 4 (more than the 3 roots) still yields every session" || bad "--last 4 counts: $(jq -c .session_records "$(last_meta transcript)")"
 
 run export transcript --since 2026-08-01 >/dev/null
 ME=$(last_meta transcript)
 jq -e '.selection == {"rule":"since","value":"2026-08-01"}' "$ME" >/dev/null \
     && ok "--since is recorded as the selection rule" || bad "--since metadata: $(jq -c .selection "$ME")"
-jq -e '.sessions.roots == 3 and .sessions.total == 6' "$ME" >/dev/null \
-    && ok "--since on a wide window keeps every session" || bad "--since counts: $(jq -c .sessions "$ME")"
+jq -e '([.session_records[] | select(.kind == "root")] | length) == 3 and (.session_records | length) == 6' "$ME" >/dev/null \
+    && ok "--since on a wide window keeps every session" || bad "--since counts: $(jq -c .session_records "$ME")"
 run export transcript --since 2030-01-01 >/dev/null 2>&1
 [ $? -ne 0 ] && ok "--since with no match exits non-zero" || bad "--since future was accepted"
 grep_run "updated on or after 2030-01-01 matched nothing" export transcript --since 2030-01-01 \
@@ -634,27 +643,27 @@ INL=$(last_transcript transcript 'Project Alpha')
 grep -q "Subagent" "$INL" && ok "sub inline included" || bad "sub inline"
 run export transcript --sub omit >/dev/null
 OMIT=$(last_meta transcript)
-jq -e '.sessions.subagents == 0' "$OMIT" >/dev/null && ok "sub omit = 0 subagents" || bad "sub omit: $(jq '.sessions.subagents' "$OMIT")"
+jq -e '([.session_records[] | select(.kind == "subagent")] | length) == 0' "$OMIT" >/dev/null && ok "sub omit = 0 subagents" || bad "sub omit: $(jq '([.session_records[] | select(.kind == "subagent")] | length)' "$OMIT")"
 run export transcript --sub separate >/dev/null
 SEP=$(last_meta transcript)
-jq -e '.sessions.subagents == 3' "$SEP" >/dev/null && ok "sub separate = 3 subagents" || bad "sub separate: $(jq '.sessions.subagents' "$SEP")"
+jq -e '([.session_records[] | select(.kind == "subagent")] | length) == 3' "$SEP" >/dev/null && ok "sub separate = 3 subagents" || bad "sub separate: $(jq '([.session_records[] | select(.kind == "subagent")] | length)' "$SEP")"
 
 echo "== subagent inclusion: --no-subagents (all products) =="
 # A subagent selected alone IS exported as a root (the historical behaviour the
 # "export only a subagent" use case needs) — pin it before changing it.
 run export transcript --sessions ses_A0002 >/dev/null
 ORPH=$(last_meta transcript)
-jq -e '.sessions.total == 1 and .sessions.roots == 1 and .no_orphan_subagents == false' "$ORPH" >/dev/null \
-    && ok "a lone subagent is exported standalone (default)" || bad "lone subagent: $(jq -c .sessions "$ORPH")"
+jq -e '(.session_records | length) == 1 and ([.session_records[] | select(.kind == "root")] | length) == 1 and .flags.no_orphan_subagents == false' "$ORPH" >/dev/null \
+    && ok "a lone subagent is exported standalone (default)" || bad "lone subagent: $(jq -c .session_records "$ORPH")"
 # --no-subagents drops every real subagent from ALL products; the orphan (its
 # parent row is gone) survives because it is a root.
 for prod in transcript memory digest; do
     run export "$prod" --no-subagents >/dev/null
     M=$(last_meta "$prod")
-    jq -e '.no_subagents == true and .subagents_hidden == 3 and .sessions.subagents == 0
-           and .sessions.total == 3' "$M" >/dev/null \
+    jq -e '.flags.no_subagents == true and .subagents_hidden == 3 and ([.session_records[] | select(.kind == "subagent")] | length) == 0
+           and (.session_records | length) == 3' "$M" >/dev/null \
         && ok "--no-subagents: $prod keeps 3 roots, 0 subagents" \
-        || bad "--no-subagents $prod: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$M")"
+        || bad "--no-subagents $prod: $(jq -c '{n:.flags.no_subagents,h:.subagents_hidden,s:.session_records}' "$M")"
 done
 grep_run "Excluded      : 3 subagent(s) (--no-subagents)" export transcript --no-subagents \
     && ok "--no-subagents reports the excluded count" || bad "--no-subagents report"
@@ -700,16 +709,16 @@ grep -qE '^\| Tokens backfilled \| 1 session' "$IDX" \
 echo "== subagent inclusion: --no-orphan-subagents (closed set) =="
 run export transcript --sessions ses_A0001,ses_B0002 --no-orphan-subagents >/dev/null
 CLOSED=$(last_meta transcript)
-jq -e '.no_orphan_subagents == true and .subagents_hidden == 1 and .sessions.total == 1
-       and .sessions.subagents == 0' "$CLOSED" >/dev/null \
+jq -e '.flags.no_orphan_subagents == true and .subagents_hidden == 1 and (.session_records | length) == 1
+       and ([.session_records[] | select(.kind == "subagent")] | length) == 0' "$CLOSED" >/dev/null \
     && ok "--no-orphan-subagents drops a subagent whose parent is absent" \
-    || bad "closed set: $(jq -c '{h:.subagents_hidden,s:.sessions}' "$CLOSED")"
+    || bad "closed set: $(jq -c '{h:.subagents_hidden,s:.session_records}' "$CLOSED")"
 # Root + its own subagent: the pair survives (only orphans are dropped).
 run export transcript --sessions ses_A0001,ses_A0002 --no-orphan-subagents >/dev/null
 PAIR=$(last_meta transcript)
-jq -e '.subagents_hidden == 0 and .sessions.total == 2 and .sessions.subagents == 1' "$PAIR" >/dev/null \
+jq -e '.subagents_hidden == 0 and (.session_records | length) == 2 and ([.session_records[] | select(.kind == "subagent")] | length) == 1' "$PAIR" >/dev/null \
     && ok "--no-orphan-subagents keeps a subagent whose parent IS exported" \
-    || bad "pair: $(jq -c '{h:.subagents_hidden,s:.sessions}' "$PAIR")"
+    || bad "pair: $(jq -c '{h:.subagents_hidden,s:.session_records}' "$PAIR")"
 # Everything is an orphan subagent -> refuse instead of writing an empty export.
 DRO=$(run export transcript --sessions ses_A0002 --no-orphan-subagents); rc=$?
 [ "$rc" -ne 0 ] && ok "--no-orphan-subagents exits non-zero when nothing survives" || bad "closed set rc"
@@ -718,8 +727,8 @@ printf '%s' "$DRO" | grep -q "nothing left to export" \
 # --no-subagents wins when both are given (it already drops every subagent).
 run export transcript --no-subagents --no-orphan-subagents >/dev/null
 BOTH=$(last_meta transcript)
-jq -e '.no_subagents == true and .sessions.total == 3' "$BOTH" >/dev/null \
-    && ok "both flags together = the --no-subagents set" || bad "both flags: $(jq -c .sessions "$BOTH")"
+jq -e '.flags.no_subagents == true and (.session_records | length) == 3' "$BOTH" >/dev/null \
+    && ok "both flags together = the --no-subagents set" || bad "both flags: $(jq -c .session_records "$BOTH")"
 # Preset key (all products) + CLI override.
 PRESETS="$TMP/presets-sub.json"
 cat > "$PRESETS" <<'JSON'
@@ -730,18 +739,18 @@ cat > "$PRESETS" <<'JSON'
 JSON
 OCED_PRESETS="$PRESETS" run export roots-only >/dev/null
 RP=$(last_meta transcript)
-jq -e '.preset == "roots-only" and .no_subagents == true and .sessions.subagents == 0' "$RP" >/dev/null \
-    && ok "preset key no_subagents: true applies" || bad "preset no_subagents: $(jq -c .sessions "$RP")"
+jq -e '.preset == "roots-only" and .flags.no_subagents == true and ([.session_records[] | select(.kind == "subagent")] | length) == 0' "$RP" >/dev/null \
+    && ok "preset key no_subagents: true applies" || bad "preset no_subagents: $(jq -c .session_records "$RP")"
 OCED_PRESETS="$PRESETS" run export closed >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] && ok "preset key no_orphan_subagents: true is validated + applied" || bad "preset no_orphan rc"
 OCED_PRESETS="$PRESETS" run export roots-only --sessions ses_A0001,ses_A0002 >/dev/null
 RO=$(last_meta transcript)
 # Documented precedence: a CLI selection clobbers the preset SELECTION only — the
 # preset's own config flags keep applying (so the subagent stays hidden here).
-jq -e '.sessions_selected == ["ses_A0001","ses_A0002"] and .no_subagents == true
-       and .sessions.total == 1' "$RO" >/dev/null \
+jq -e '.selection.rule == "sessions" and .selection.ids == ["ses_A0001","ses_A0002"] and .flags.no_subagents == true
+       and (.session_records | length) == 1' "$RO" >/dev/null \
     && ok "CLI --sessions wins over the preset selection (preset flags still apply)" \
-    || bad "preset+cli: $(jq -c '{sel:.sessions_selected,s:.sessions}' "$RO")"
+    || bad "preset+cli: $(jq -c '{sel:.selection,s:.session_records}' "$RO")"
 # A preset may also hide subagents PER PRODUCT inside a bundle.
 BPRESETS="$TMP/presets-sub-bundle.json"
 cat > "$BPRESETS" <<'JSON'
@@ -750,9 +759,9 @@ cat > "$BPRESETS" <<'JSON'
 JSON
 OCED_PRESETS="$BPRESETS" run export mixed >/dev/null
 BM=$(last_meta transcript)
-jq -e '.sessions.subagents == 0' "$BM" >/dev/null \
-    && ok "bundle per-product no_subagents applies" || bad "bundle no_subagents: $(jq -c .sessions "$BM")"
-jq -e '.touched_files == true' "$(last_meta memory)" >/dev/null \
+jq -e '([.session_records[] | select(.kind == "subagent")] | length) == 0' "$BM" >/dev/null \
+    && ok "bundle per-product no_subagents applies" || bad "bundle no_subagents: $(jq -c .session_records "$BM")"
+jq -e '.flags.files == true' "$(last_meta memory)" >/dev/null \
     && ok "bundle sibling product keeps its own flags" || bad "bundle sibling flags"
 
 echo "== shrink (pruned + VACUUMed copy, never touches the live DB) =="
@@ -897,7 +906,7 @@ printf '%s' "$DH4" | grep -q "Using 'transcript' instead" \
 # the exact-ids contract that forces the caller-side expansion (guard against a
 # future "--sessions closes over descendants": the menu expands, the engine does not)
 RO=$(OCED_PRESETS="$EX_PRESETS" run export archive --sessions ses_A0001)
-jq -e '.sessions.total == 1 and .sessions.subagents == 0' "$(meta_of "$RO")" >/dev/null \
+jq -e '(.session_records | length) == 1 and ([.session_records[] | select(.kind == "subagent")] | length) == 0' "$(meta_of "$RO")" >/dev/null \
     && ok "--sessions stays EXACT (1 root, 0 subagents) — the menu expands instead" || bad "--sessions is no longer exact"
 
 # ...and the other half of the same contract: handed the CASCADE, the export must
@@ -907,9 +916,9 @@ jq -e '.sessions.total == 1 and .sessions.subagents == 0' "$(meta_of "$RO")" >/d
 # the engine actually drops — which is the bug: 2 of 7 sessions exported, silently.
 CAS=$(OCED_PRESETS="$EX_PRESETS" run export archive --sessions ses_A0001,ses_A0002,ses_A0003)
 CMETA="$(meta_of "$CAS")"
-jq -e '.sessions.total == 3 and .sessions.subagents == 2' "$CMETA" >/dev/null \
+jq -e '(.session_records | length) == 3 and ([.session_records[] | select(.kind == "subagent")] | length) == 2' "$CMETA" >/dev/null \
     && ok "the cascade export writes the root AND its 2 subagents (3 sessions)" \
-    || bad "cascade export: $(jq -c '.sessions' "$CMETA")"
+    || bad "cascade export: $(jq -c '.session_records' "$CMETA")"
 # `archive` is a BUNDLE, so out_dir_of lands on the LAST product (memory). Read the
 # transcript subdir from the stamp — that is where the per-session files live, and
 # the nesting question ("under their own root, or as extra roots?") is asked there.
@@ -932,7 +941,7 @@ printf '%s' "$(sed -n '1p' "$CSTAMP/memory/corpus.jsonl")" | jq -e '(.subagents 
 
 echo "== the discard cascade export is linked into shrink.json =="
 # The offer/hint exports EXACTLY the closed cascade (`--sessions root,sub,sub`),
-# so the engine auto-detects the NEWEST export run whose .sessions_selected equals
+# so the engine auto-detects the NEWEST export run whose .selection.ids equals
 # it and records .discard_exported — one link shared by the CLI path (this run)
 # and the menu offer, with no flag and no menu-side state. This shrink runs AFTER
 # the cascade export above, which is the order the offer/hint enforces.
@@ -1078,7 +1087,7 @@ echo "$DT2" | grep -q "Compaction markers:" \
     && ok "transcript header reports markers too" || bad "transcript markers"
 
 echo "== exports view: the selection comes from .selection, not from .filter =="
-# THE BUG THIS FIXES: reading `.filter`/`.sessions_selected` reported a
+# THE BUG THIS FIXES: reading the old `.filter` mirror reported a
 # `--last N` / `--since DATE` run as "sessions: all", i.e. the detail screen of
 # a run lied about the rule that produced it. Both rules are CLI-only, so no
 # preset key could cover them -- only `.selection` can.
@@ -1118,7 +1127,7 @@ SESSCOL=$(printf '%s' "$RECV" | sed -n '/== Sessions ==/,$p' | tail -n +3 | grep
     && ok "exports view session rows share one column ($SESSROW rows)" || bad "exports view session alignment ($SESSCOL distinct columns)"
 # A run that dropped a subagent must NOT list it in `== Sessions ==`, and the
 # policy drop is NOT a selection gap: `.excluded` stays empty (the drop lives in
-# `no_subagents`/`subagents_hidden`), so no `== Excluded ==` block appears.
+# `.flags.no_subagents`/`subagents_hidden`), so no `== Excluded ==` block appears.
 NOSUBOUT=$(run export transcript --no-subagents --filter "%" --stamp "view-nosub")
 NOSUBSTAMP=$(stamp_of "$NOSUBOUT")
 NOSUBV=$(run exports view "$NOSUBSTAMP")
@@ -1175,22 +1184,22 @@ STALEV=$(runv exports view "$STALESTAMP")
 printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep -qE "^  ses_A0001.*stale" \
     && ok "exports view lists the affected session under Changed since export (bare word, no symbol)" \
     || bad "session stale mark: $(printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep 'ses_A0001')"
-LIVE_UPDATED=$(runv exports stale "$STALESTAMP" --json | jq -r '.[0].live_updated')
+LIVE_UPDATED=$(runv exports freshness "$STALESTAMP" --json | jq -r '.[0].live_updated')
 printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep -qF "live $LIVE_UPDATED" \
     && ok "exports view shows the live timestamp beside the stale session" \
     || bad "view live timestamp: $(printf '%s' "$STALEV" | sed -n '/== Changed since export ==/,$p' | grep 'ses_A0001')"
 printf '%s' "$STALEV" | grep -qE "1 session\(s\) changed since export: 1 stale" \
     && ok "exports view summarises the not-current sessions (stale count)" \
     || bad "not-current summary: $(printf '%s' "$STALEV" | grep 'changed since export')"
-# The machine form of that block: `exports stale` is the SAME per-session rule,
+# The machine form of that block: `exports freshness` is the SAME per-session rule,
 # so `view` and the CLI cannot disagree about which sessions moved.
-STJ=$(runv exports stale "$STALESTAMP" --json)
+STJ=$(runv exports freshness "$STALESTAMP" --json)
 printf '%s' "$STJ" | jq -e 'length == 1 and .[0].id == "ses_A0001" and .[0].state == "stale" and .[0].kind == "root" and .[0].updated < .[0].live_updated' >/dev/null \
-    && ok "exports stale --json names the edited session (stale)" \
+    && ok "exports freshness --json names the edited session (stale)" \
     || bad "stale json: $STJ"
 FRESHBATCHOUT=$(runv export transcript --sessions ses_B0001 --stamp "stale-batch-fresh")
 FRESHBATCHSTAMP=$(stamp_of "$FRESHBATCHOUT")
-STALEBATCH=$(runv exports stale --summary-batch \
+STALEBATCH=$(runv exports freshness --summary-batch \
     "$SOUT/$STALESTAMP/transcript/metadata.json" \
     "$SOUT/$FRESHBATCHSTAMP/transcript/metadata.json")
 printf '%s' "$STALEBATCH" | jq -e --arg stale "$SOUT/$STALESTAMP/transcript/metadata.json" \
@@ -1198,31 +1207,36 @@ printf '%s' "$STALEBATCH" | jq -e --arg stale "$SOUT/$STALESTAMP/transcript/meta
     '(.[$stale].counts.stale == 1) and .[$fresh].clean == true' >/dev/null \
     && ok "batch freshness checks several run metadata files in one DB session" \
     || bad "stale summary batch: $STALEBATCH"
-STT=$(runv exports stale "$STALESTAMP" --tsv)
+STT=$(runv exports freshness "$STALESTAMP" --tsv)
 printf '%s\n' "$STT" | awk -F'\t' 'NF == 6 && $1 == "ses_A0001" && $2 == "stale" && $3 == "root" && $5 != ""' | grep -q . \
-    && ok "exports stale --tsv includes recorded and live timestamps" \
+    && ok "exports freshness --tsv includes recorded and live timestamps" \
     || bad "stale tsv: [$STT]"
 sqlite3 "$SDBC" "DELETE FROM session WHERE id='ses_A0003';"
-STJ2=$(runv exports stale "$STALESTAMP" --json)
+STJ2=$(runv exports freshness "$STALESTAMP" --json)
 printf '%s' "$STJ2" | jq -e 'length == 2 and .[0].id == "ses_A0001" and .[0].state == "stale" and .[1].id == "ses_A0003" and .[1].state == "missing"' >/dev/null \
-    && ok "exports stale orders stale before missing (each by updated desc)" \
+    && ok "exports freshness orders stale before missing (each by updated desc)" \
     || bad "stale order: $STJ2"
 STALEV2=$(runv exports view "$STALESTAMP")
 BLOCK=$(printf '%s' "$STALEV2" | sed -n '/== Changed since export ==/,$p')
 printf '%s' "$BLOCK" | grep -q "ses_A0001.*stale" && printf '%s' "$BLOCK" | grep -q "ses_A0003.*missing" \
-    && ok "exports view agrees with exports stale on stale + missing" \
+    && ok "exports view agrees with exports freshness on stale + missing" \
     || bad "view/stale disagreement: $BLOCK"
 BADMETA="$TMP/stale-invalid-timestamp.json"
 jq '(.session_records[] | select(.id == "ses_A0002") | .updated) = "not-a-date"' \
     "$SOUT/$STALESTAMP/transcript/metadata.json" > "$BADMETA"
-BADSTALE=$(runv exports stale --meta "$BADMETA" --json)
+BADSTALE=$(runv exports freshness --meta "$BADMETA" --json)
 printf '%s' "$BADSTALE" | jq -e 'any(.[]; .id == "ses_A0002" and .state == "unverifiable" and .live_updated != null)' >/dev/null \
     && ok "invalid recorded timestamps are reported as unverifiable with live time" \
     || bad "invalid stale timestamp: $BADSTALE"
-BADSUMMARY=$(runv exports stale --meta "$BADMETA" --summary)
+BADSUMMARY=$(runv exports freshness --meta "$BADMETA" --summary)
 printf '%s' "$BADSUMMARY" | jq -e '(.tag | contains("stale")) and .counts.unverifiable == 1 and .clean == false' >/dev/null \
     && ok "run-level summary reports unverifiable records through the shared rule" \
     || bad "invalid stale summary: $BADSUMMARY"
+STNOARGS=$(runv exports freshness); STNOARGS_RC=$?
+{ [ "$STNOARGS_RC" -ne 0 ] && printf '%s' "$STNOARGS" | grep -q "give a stamp or --meta" \
+    && ! printf '%s' "$STNOARGS" | grep -q "Traceback"; } \
+    && ok "exports freshness without a stamp/meta reports usage without a traceback" \
+    || bad "stale no-args: rc=$STNOARGS_RC $STNOARGS"
 
 NDBC="$TMP/new-coverage.db"; NOUT="$TMP/new-coverage-out"; NBKP="$TMP/new-coverage-bk"
 bash "$TESTS_DIR/make_fake_db.sh" "$NDBC" >/dev/null
@@ -1235,11 +1249,11 @@ jq -e '.scope == {"rule":"sessions","ids":["ses_A0001"]}' "$EXACTMETA" >/dev/nul
     && ok "direct --sessions records an exact update scope" \
     || bad "direct sessions scope: $(jq -c '{selection,scope}' "$EXACTMETA")"
 sqlite3 "$NDBC" "INSERT INTO session (id,project_id,slug,directory,title,version,parent_id,agent,model,cost,time_created,time_updated) VALUES ('ses_NEWROOT01','p','new-root','/tmp','New root after export','v1',NULL,'build','m',0,1789002200000,1789002200000);"
-NEWALL=$(runnew exports stale coverage-all --json)
+NEWALL=$(runnew exports freshness coverage-all --json)
 printf '%s' "$NEWALL" | jq -e 'any(.[]; .id == "ses_NEWROOT01" and .state == "new")' >/dev/null \
-    && ok "exports stale reports a new session inside the stored broad scope" \
+    && ok "exports freshness reports a new session inside the stored broad scope" \
     || bad "new session stale json: $NEWALL"
-NEWEXACT=$(runnew exports stale coverage-exact --json)
+NEWEXACT=$(runnew exports freshness coverage-exact --json)
 printf '%s' "$NEWEXACT" | jq -e 'length == 0' >/dev/null \
     && ok "an exact --sessions run does not report unrelated new sessions" \
     || bad "exact-scope coverage: $NEWEXACT"
@@ -1279,18 +1293,15 @@ run export transcript --filter "%" >/dev/null
 SR=$(last_meta transcript)
 jq -e '.session_records | type == "array"' "$SR" >/dev/null \
     && ok "session_records is an array" || bad "session_records type"
-# .sessions stays the untouched AGGREGATE object (nothing was repurposed).
-jq -e '.sessions | (has("total") and has("roots") and has("subagents"))' "$SR" >/dev/null \
-    && ok ".sessions is still the aggregate {total,roots,subagents}" || bad ".sessions shape"
-# The aggregate is the SUMMARY of the records, so the two cannot disagree.
+# `.sessions` was removed: `.session_records` is the ONE source of truth, so the
+# counts are derived from it and no second aggregate can disagree.
+jq -e 'has("sessions") | not' "$SR" >/dev/null \
+    && ok ".sessions is gone (records are the only source)" || bad ".sessions still present"
 NREC=$(jq '.session_records | length' "$SR")
-[ "$NREC" = "$(jq '.sessions.total' "$SR")" ] \
-    && ok "records == sessions.total ($NREC)" || bad "records $NREC != total $(jq '.sessions.total' "$SR")"
-[ "$(jq '[.session_records[] | select(.kind == "root")] | length' "$SR")" = "$(jq '.sessions.roots' "$SR")" ] \
-    && ok "record roots == sessions.roots" || bad "root count mismatch"
+NROOT=$(jq '[.session_records[] | select(.kind == "root")] | length' "$SR")
 NSUB=$(jq '[.session_records[] | select(.kind == "subagent")] | length' "$SR")
-[ "$NSUB" = "$(jq '.sessions.subagents' "$SR")" ] \
-    && ok "record subagents == sessions.subagents ($NSUB)" || bad "subagent count mismatch"
+[ "$NREC" -eq $((NROOT + NSUB)) ] \
+    && ok "records derive the counts ($NROOT root + $NSUB sub = $NREC)" || bad "record counts disagree"
 [ "$NSUB" -gt 0 ] \
     && ok "the run really did include subagents (assertions are not vacuous)" || bad "no subagents in the set"
 # IDENTITY only: no per-session counts duplicated (the totals live at top level).
@@ -1312,19 +1323,19 @@ jq -e '[.session_records[] | .created, .updated] | all(test("^[0-9]{4}-[0-9]{2}-
 # It tracks the EXPORTED set, not the requested one: --no-subagents drops rows.
 run export transcript --filter "%" --no-subagents >/dev/null
 SR2=$(last_meta transcript)
-[ "$(jq '.session_records | length' "$SR2")" = "$(jq '.sessions.total' "$SR2")" ] \
-    && ok "no-subagents: records == total ($(jq '.sessions.total' "$SR2"))" || bad "no-subagents: records $(jq '.session_records|length' "$SR2") != total $(jq '.sessions.total' "$SR2")"
+[ "$(jq '.session_records | length' "$SR2")" = 3 ] \
+    && ok "no-subagents: records == the 3 roots" || bad "no-subagents records: $(jq '.session_records|length' "$SR2")"
 jq -e '[.session_records[] | select(.kind == "subagent")] | length == 0' "$SR2" >/dev/null \
     && ok "no-subagents: every dropped subagent is absent from the records" || bad "no-subagents records leak"
-# It is NOT sessions_selected, which stays the REQUESTED ids (and only when asked).
-jq -e '.sessions_selected == null' "$SR" >/dev/null \
-    && ok "sessions_selected untouched (no --sessions was passed)" || bad "sessions_selected changed"
+# `.selection` is the RULE that produced the run, never a duplicate of the writes.
+jq -e '.selection.rule == "filter" and .selection.value == "%"' "$SR" >/dev/null \
+    && ok "a filter run records the filter rule" || bad "filter selection changed"
 run export transcript --sessions ses_A0001,ses_B0001 >/dev/null
 SR3=$(last_meta transcript)
 [ "$(jq '.session_records | length' "$SR3")" = 2 ] \
     && ok "an explicit --sessions run records exactly what it exported" || bad "records with --sessions: $(jq -c '.session_records|map(.id)' "$SR3")"
-jq -e '.sessions_selected | type == "array"' "$SR3" >/dev/null \
-    && ok "sessions_selected keeps its own meaning (requested ids)" || bad "sessions_selected type"
+jq -e '.selection.rule == "sessions" and .selection.ids == ["ses_A0001","ses_B0001"]' "$SR3" >/dev/null \
+    && ok "explicit ids are recorded once, in .selection.ids" || bad "selection ids"
 # exports view --json carries them through (it returns the raw metadata). It
 # aggregates EVERY run of the stamp, so assert "at least one has records" rather
 # than reading [0]: older runs predate the key.
@@ -1336,7 +1347,7 @@ echo "== exports management =="
 XL=$(run exports list)
 printf '%s' "$XL" | grep -q "^== Exports (" && ok "exports list" || bad "exports list"
 printf '%s' "$XL" | grep -qE '^[ ]*[0-9]+\.' && ok "exports list rows" || bad "exports list rows"
-STAMP=$(printf '%s' "$XL" | awk '/^[ ]*[0-9]+\./ {print $2; exit}')
+STAMP=$(find "$OUT" -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name '*~*' -exec basename {} \; | sort -r | head -1)
 run exports remove "$STAMP" --yes >/dev/null
 printf '%s' "$(run exports list)" | grep -q "$STAMP" && bad "exports remove" || ok "exports remove"
 run exports prune 1 --yes >/dev/null
@@ -1370,33 +1381,33 @@ cat > "$PRESETS" <<'EOF'
 EOF
 export OCED_PRESETS="$PRESETS"
 run export clean >/dev/null
-jq -e '.preset == "clean" and .sanitize == true and .reasoning == false' "$(last_meta transcript)" >/dev/null \
-    && ok "preset 'clean' applies product + config flags" || bad "preset flags: $(jq -r '.preset,.sanitize,.reasoning' "$(last_meta transcript)")"
-jq -e '.filter == "Project Beta"' "$(last_meta transcript)" >/dev/null \
+jq -e '.preset == "clean" and .flags.sanitize == true and .flags.no_reasoning == true' "$(last_meta transcript)" >/dev/null \
+    && ok "preset 'clean' applies product + config flags" || bad "preset flags: $(jq -r '.preset,.flags.sanitize,.flags.no_reasoning' "$(last_meta transcript)")"
+jq -e '.selection.rule == "filter" and .selection.value == "Project Beta"' "$(last_meta transcript)" >/dev/null \
     && ok "preset pins its own filter" || bad "preset filter"
-jq -e '.sessions.total == 1' "$(last_meta transcript)" >/dev/null \
-    && ok "preset filter selects the matching session" || bad "preset filter sessions: $(jq -r .sessions.total "$(last_meta transcript)")"
+jq -e '(.session_records | length) == 1' "$(last_meta transcript)" >/dev/null \
+    && ok "preset filter selects the matching session" || bad "preset filter sessions: $(jq -r '(.session_records | length)' "$(last_meta transcript)")"
 # Product keyword still means the product (regression): preset file present but "transcript" is one.
 run export transcript >/dev/null
 jq -e '.preset == null' "$(last_meta transcript)" >/dev/null \
     && ok "product keyword ignores presets (preset=null)" || bad "product keyword leak"
 run export memory --sessions ses_A0001 >/dev/null
-jq -e '.sessions_selected == ["ses_A0001"] and .sessions.total == 1 and .preset == null' "$(last_meta memory)" >/dev/null \
-    && ok "--sessions exports exactly the given sessions" || bad "--sessions: $(jq -r '.sessions_selected,.sessions.total' "$(last_meta memory)")"
+jq -e '.selection.rule == "sessions" and .selection.ids == ["ses_A0001"] and (.session_records | length) == 1 and .preset == null' "$(last_meta memory)" >/dev/null \
+    && ok "--sessions exports exactly the given sessions" || bad "--sessions: $(jq -r '.selection,(.session_records | length)' "$(last_meta memory)")"
 run export corpus >/dev/null
-jq -e '.preset == "corpus" and .cap == 400 and .filter == "ses_%"' "$(last_meta memory)" >/dev/null \
+jq -e '.preset == "corpus" and .flags.cap == 400 and .selection.rule == "filter" and .selection.value == "ses_%"' "$(last_meta memory)" >/dev/null \
     && ok "memory preset records preset/cap/filter" || bad "memory preset meta"
 MCPF=$(last_meta memory); MCPF="${MCPF%/metadata.json}"
 [ "$(wc -l < "$MCPF/corpus.jsonl")" -eq 3 ] && ok "memory preset filter kept all roots" || bad "memory preset roots: $(wc -l < "$MCPF/corpus.jsonl")"
 printf '%s' "$(sed -n '1p' "$MCPF/corpus.jsonl")" | jq -e '.files | index("src/a.py") != null' >/dev/null \
     && ok "memory preset --files applies" || bad "memory preset files"
-jq -e '.touched_files == true' "$MCPF/metadata.json" >/dev/null \
-    && ok "memory metadata records touched_files when --files requested" \
-    || bad "memory touched_files: $(jq -c .touched_files "$MCPF/metadata.json")"
+jq -e '.flags.files == true' "$MCPF/metadata.json" >/dev/null \
+    && ok "memory metadata records flags.files when --files requested" \
+    || bad "memory flags.files: $(jq -c .flags.files "$MCPF/metadata.json")"
 # CLI flags override the preset's selection/config.
 run export corpus --sessions ses_A0001 --cap 77 >/dev/null
-jq -e '.sessions_selected == ["ses_A0001"] and .cap == 77' "$(last_meta memory)" >/dev/null \
-    && ok "CLI --sessions/--cap override the preset" || bad "override: $(jq -r '.sessions_selected,.cap' "$(last_meta memory)")"
+jq -e '.selection.rule == "sessions" and .selection.ids == ["ses_A0001"] and .flags.cap == 77' "$(last_meta memory)" >/dev/null \
+    && ok "CLI --sessions/--cap override the preset" || bad "override: $(jq -r '.selection,.flags.cap' "$(last_meta memory)")"
 # Invalid preset value and unknown target must fail with a helpful message.
 DOR=$(run export dorky); rc=$?
 [ "$rc" -ne 0 ] && ok "invalid preset value exits non-zero" || bad "invalid preset rc"
@@ -1452,7 +1463,7 @@ BT="$(last_meta transcript)"; BT="${BT%/metadata.json}"; BSTAMP="${BT%/*}"
 [ -d "$BSTAMP/transcript" ] && [ -d "$BSTAMP/memory" ] && [ -d "$BSTAMP/faithful" ] && [ ! -d "$BSTAMP/digest" ] \
     && ok "bundle 'everything' = one stamp with transcript+memory+faithful (no digest)" \
     || bad "bundle dirs: $BSTAMP"
-jq -e '.preset == "everything" and .profile == "transcript" and .tool_output == "full"' "$BSTAMP/transcript/metadata.json" >/dev/null \
+jq -e '.preset == "everything" and .profile == "transcript" and .flags.tool_output == "full"' "$BSTAMP/transcript/metadata.json" >/dev/null \
     && ok "bundle transcript runs with its preset flags + provenance" || bad "bundle transcript meta"
 jq -e '.preset == "everything" and .profile == "memory"' "$BSTAMP/memory/metadata.json" >/dev/null \
     && ok "bundle memory records preset + profile" || bad "bundle memory meta"
@@ -1464,11 +1475,11 @@ grep -q "transcript + memory + faithful" "$BSTAMP/index.md" && ok "bundle stamp 
 run export everything --sessions ses_A0001 --cap 100 --tool-output omit >/dev/null
 BT2="$(last_meta transcript)"; BT2="${BT2%/metadata.json}"; BSTAMP2="${BT2%/*}"
 [ "$BSTAMP2" != "$BSTAMP" ] && ok "override run used a new shared stamp" || bad "override stamp"
-jq -e '.sessions_selected == ["ses_A0001"] and .sessions.total == 1' "$BSTAMP2/transcript/metadata.json" >/dev/null \
+jq -e '.selection.rule == "sessions" and .selection.ids == ["ses_A0001"] and (.session_records | length) == 1' "$BSTAMP2/transcript/metadata.json" >/dev/null \
     && ok "bundle CLI --sessions clobbers the shared selection" || bad "bundle override sessions"
-jq -e '.tool_output == "omit"' "$BSTAMP2/transcript/metadata.json" >/dev/null \
-    && ok "bundle CLI flag overrides the per-product preset config" || bad "bundle override flag: $(jq -r .tool_output "$BSTAMP2/transcript/metadata.json")"
-jq -e '.cap == 100' "$BSTAMP2/memory/metadata.json" >/dev/null \
+jq -e '.flags.tool_output == "omit"' "$BSTAMP2/transcript/metadata.json" >/dev/null \
+    && ok "bundle CLI flag overrides the per-product preset config" || bad "bundle override flag: $(jq -r .flags.tool_output "$BSTAMP2/transcript/metadata.json")"
+jq -e '.flags.cap == 100' "$BSTAMP2/memory/metadata.json" >/dev/null \
     && ok "bundle CLI --cap reaches memory too" || bad "bundle cap: $(jq -r .cap "$BSTAMP2/memory/metadata.json")"
 # A bundle may include the standalone digest product.
 run export debugmsg >/dev/null
@@ -1518,7 +1529,7 @@ run export archive >/dev/null
 EJ="$(last_meta transcript)"; EJ="${EJ%/metadata.json}"; EJSTAMP="${EJ%/*}"
 [ -d "$EJSTAMP/transcript" ] && [ -d "$EJSTAMP/memory" ] && [ -d "$EJSTAMP/faithful" ] && [ ! -d "$EJSTAMP/digest" ] \
     && ok "shipped 'archive' runs transcript+memory+faithful under one stamp" || bad "shipped archive dirs"
-jq -e '.preset == "archive" and .tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
+jq -e '.preset == "archive" and .flags.tool_output == "full"' "$EJSTAMP/transcript/metadata.json" >/dev/null \
     && ok "shipped archive transcript flags applied" || bad "shipped archive meta"
 grep -q '^| Preset | `archive` |$' "$EJSTAMP/transcript/index.md" \
     && ok "index.md records the preset that produced the run" || bad "index preset row"
@@ -1539,19 +1550,19 @@ STUDY="$(last_meta memory)"; STUDY="${STUDY%/metadata.json}"; STUDYR="${STUDY%/*
 njson=$(find "$STUDYR/transcript" -type f -name '*.json' ! -name 'metadata.json' | wc -l)
 [ -d "$STUDYR/transcript" ] && [ -d "$STUDYR/memory" ] && [ "$njson" -eq 0 ] \
     && ok "shipped 'study' is transcript+memory with no per-session JSON" || bad "shipped study dirs/json ($njson)"
-jq -e '.preset == "study" and .tool_output == "truncated"' "$STUDYR/transcript/metadata.json" >/dev/null \
+jq -e '.preset == "study" and .flags.tool_output == "truncated"' "$STUDYR/transcript/metadata.json" >/dev/null \
     && ok "shipped study applies truncated tool output" || bad "shipped study meta"
 run export review >/dev/null
-jq -e '.preset == "review" and .reasoning == false and .sanitize == false' "$(last_meta transcript)" >/dev/null \
+jq -e '.preset == "review" and .flags.no_reasoning == true and .flags.sanitize == false' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'review' applies its transcript flags (no sanitize)" || bad "shipped review meta"
 [ -d "$(dirname "$(dirname "$(last_meta transcript)")")/faithful" ] \
     && ok "shipped 'review' also runs the faithful product" || bad "shipped review faithful dir"
 run export prompts >/dev/null
-jq -e '.preset == "prompts" and .role == "user"' "$(last_meta transcript)" >/dev/null \
+jq -e '.preset == "prompts" and .flags.role == "user"' "$(last_meta transcript)" >/dev/null \
     && ok "shipped 'prompts' renders user prompts only (role=user)" || bad "shipped prompts meta"
 run export conversation >/dev/null
 CONV="$(last_meta transcript)"
-jq -e '.preset == "conversation" and .tool_output == "omit" and .reasoning == false' "$CONV" >/dev/null \
+jq -e '.preset == "conversation" and .flags.tool_output == "omit" and .flags.no_reasoning == true' "$CONV" >/dev/null \
     && ok "shipped 'conversation' drops tools and reasoning (tool_output omit, reasoning off)" || bad "shipped conversation meta"
 grep -q '^| Reasoning | `off` |$' "${CONV%/metadata.json}/index.md" \
     && ok "shipped 'conversation' index records reasoning off" || bad "conversation index reasoning row"
@@ -1777,7 +1788,7 @@ LUNV=$(OCED_BACKUP_DIR="$CBK" run shrinks list --tsv)
 jq --argjson m "$MU_RESTORE" '.sessions.max_updated = $m' "$CBKNEWSJ" > "$CBKNEWSJ.bak" && mv "$CBKNEWSJ.bak" "$CBKNEWSJ"
 
 # An orphan dir (no valid shrink.json) is reported ONCE, as an orphan: never
-# re-listed as a stale copy, which is what o_shrink_stale would answer for a
+# re-listed as a stale copy, which is what o_shrink_freshness would answer for a
 # missing file (and that duplication is exactly why the loop skips orphans).
 ORPH="$CBK/shrink/20990101-000000"
 mkdir -p "$ORPH"
@@ -2106,9 +2117,9 @@ find "$UPD/$USTAMP" -name '*Fresh subagent*' | grep -q . \
 printf '%s' "$(runu exports verify)" | grep -q "All clean" \
     && ok "a refreshed run matches the live DB again (verify clean)" \
     || bad "post-update verify: $(runu exports verify)"
-printf '%s' "$(runu exports stale "$USTAMP" --json)" | jq -e 'length == 0' >/dev/null \
-    && ok "exports stale reports no rows for a fresh run" \
-    || bad "stale fresh: $(runu exports stale "$USTAMP" --json)"
+printf '%s' "$(runu exports freshness "$USTAMP" --json)" | jq -e 'length == 0' >/dev/null \
+    && ok "exports freshness reports no rows for a fresh run" \
+    || bad "stale fresh: $(runu exports freshness "$USTAMP" --json)"
 
 # 5) a refresh is re-runnable: nothing moved -> it says so and exits 0.
 printf '%s' "$(runu exports update "$USTAMP" --yes)" | grep -q "Nothing to do" \
@@ -2164,7 +2175,7 @@ printf '%s' "$(runu exports update "$NSTAMP" --dry-run --mode accumulative)" | g
 NSRUN=$(runu export transcript --no-subagents)
 NSSTAMP=$(stamp_of "$NSRUN")
 NSMETA="$UPD/$NSSTAMP/transcript/metadata.json"
-jq -e '(.excluded|length) == 0 and (.subagents_hidden // 0) > 0 and .no_subagents == true' "$NSMETA" >/dev/null \
+jq -e '(.excluded|length) == 0 and (.subagents_hidden // 0) > 0 and .flags.no_subagents == true' "$NSMETA" >/dev/null \
     && ok "a --no-subagents run records its drop in the flags, not in .excluded" \
     || bad "no-subagents meta: $(jq -c '{excluded,subagents_hidden,no_subagents}' "$NSMETA")"
 usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
@@ -2175,28 +2186,34 @@ printf '%s' "$NSPJ" | jq -e '.up_to_date == true and .counts.revived == 0 and .c
 printf '%s' "$(runu exports update "$NSSTAMP" --yes)" | grep -q "Nothing to do" \
     && ok "a --no-subagents run stays up to date after a dropped subagent is edited" \
     || bad "no-subagents idempotent: $(runu exports update "$NSSTAMP" --yes)"
-# A legacy run may still carry a policy drop in `.excluded`; the plan applies the
-# recorded flags defensively, so even that cannot re-add it.
+# A stray `.excluded` entry is not a policy drop: the recorded flags still make
+# the plan ignore it, so a dropped subagent can never be revived only to be
+# dropped again.
 jq '.excluded=[{"id":"ses_A0002","title":"Explore gaps (@explore subagent)"}]' "$NSMETA" > "$NSMETA.tmp" \
     && mv "$NSMETA.tmp" "$NSMETA"
 NSPJ2=$(runu exports update "$NSSTAMP" --dry-run --json)
 printf '%s' "$NSPJ2" | jq -e '.up_to_date == true and .counts.revived == 0 and (.target|length) == 3' >/dev/null \
-    && ok "a legacy .excluded policy drop is ignored by the update plan" \
-    || bad "legacy no-subagents plan: $NSPJ2"
+    && ok "a stray .excluded entry cannot revive a policy-dropped subagent" \
+    || bad "no-subagents stray excluded plan: $NSPJ2"
 
-# 8) a legacy run (no .scope/.flags, but .session_records) still refreshes.
-LRUN=$(runu export transcript)
-LSTAMP=$(stamp_of "$LRUN")
-LMETA="$UPD/$LSTAMP/transcript/metadata.json"
-jq 'del(.flags,.scope,.excluded)' "$LMETA" > "$LMETA.tmp" && mv "$LMETA.tmp" "$LMETA"
-usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
-printf '%s' "$(runu exports update "$LSTAMP" --dry-run)" | grep -qE "changed  : 1" \
-    && ok "an update falls back to the legacy top-level keys" \
-    || bad "legacy update: $(runu exports update "$LSTAMP" --dry-run)"
-runu exports update "$LSTAMP" --yes >/dev/null
-jq -e '.flags.tool_output == "truncated" and .scope.rule == "all"' "$LMETA" >/dev/null \
-    && ok "a legacy run gains .flags/.scope from the refresh" \
-    || bad "legacy meta: $(jq -c '.flags,.scope' "$LMETA")"
+# 8) `.flags` and `.scope` are REQUIRED: a run missing either is refused with a
+#    re-export instruction. The old top-level mirrors are never reconstructed.
+FLRUN=$(runu export transcript)
+FLSTAMP=$(stamp_of "$FLRUN")
+FLMETA="$UPD/$FLSTAMP/transcript/metadata.json"
+jq 'del(.flags)' "$FLMETA" > "$FLMETA.tmp" && mv "$FLMETA.tmp" "$FLMETA"
+FLOUT=$(runu exports update "$FLSTAMP" --dry-run 2>&1); flrc=$?
+[ "$flrc" -ne 0 ] && printf '%s' "$FLOUT" | grep -qE "missing (or invalid )?\.flags; re-export this run" \
+    && ok "update refuses a run without .flags (no legacy fallback)" \
+    || bad "missing .flags: rc=$flrc $(printf '%s' "$FLOUT" | head -1)"
+SCRUN=$(runu export transcript)
+SCSTAMP=$(stamp_of "$SCRUN")
+SCMETA="$UPD/$SCSTAMP/transcript/metadata.json"
+jq 'del(.scope)' "$SCMETA" > "$SCMETA.tmp" && mv "$SCMETA.tmp" "$SCMETA"
+SCOUT=$(runu exports update "$SCSTAMP" --dry-run 2>&1); scrc=$?
+[ "$scrc" -ne 0 ] && printf '%s' "$SCOUT" | grep -qE "missing (or invalid )?\.scope; re-export this run" \
+    && ok "update refuses a run without .scope (no legacy fallback)" \
+    || bad "missing .scope: rc=$scrc $(printf '%s' "$SCOUT" | head -1)"
 
 # 9) bundles: one shared stamp, per-product provenance, one bundle index.
 BOUT=$(runu export pair)
@@ -2218,11 +2235,12 @@ grep -q '^| Updated from |' "$UPD/$BSTAMP2/index.md" \
 # 10) refusals: unknown stamp, a run with no records, a bad mode.
 printf '%s' "$(runu exports update nope-stamp 2>&1)" | grep -q "Not found" \
     && ok "update refuses an unknown stamp" || bad "unknown stamp"
+LSTAMP=$(stamp_of "$(runu export transcript)")
 LEGRUN="$UPD/$LSTAMP"
 jq 'del(.session_records)' "$LEGRUN/transcript/metadata.json" > "$LEGRUN/transcript/metadata.json.t" \
     && mv "$LEGRUN/transcript/metadata.json.t" "$LEGRUN/transcript/metadata.json"
-printf '%s' "$(runu exports update "$LSTAMP" --dry-run 2>&1)" | grep -q "re-export it instead" \
-    && ok "update refuses a run that cannot say what it contains" || bad "legacy refusal"
+printf '%s' "$(runu exports update "$LSTAMP" --dry-run 2>&1)" | grep -qE "re-export (it instead|this run)" \
+    && ok "update refuses a run that cannot say what it contains" || bad "legacy refusal: $(runu exports update "$LSTAMP" --dry-run 2>&1 | head -1)"
 runu exports update "$USTAMP" --mode nope >/dev/null 2>&1 \
     && bad "update accepted a bad --mode" || ok "update refuses a bad --mode"
 

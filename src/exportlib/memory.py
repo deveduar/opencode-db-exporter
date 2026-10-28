@@ -10,6 +10,7 @@ from exportlib.util import (
     model_str,
     selection_label,
     selection_meta,
+    selection_phrase,
     session_record,
     sha256_file,
     ts_iso,
@@ -145,17 +146,14 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     # copy is metadata.json `.preset`); a plain product keyword has no preset.
     if getattr(args, "preset", None):
         idx_rows.insert(5, f"| Preset | `{args.preset}` |")
+    idx_rows.append(f"| Selection | {selection_label(args)} |")
+    sel_meta = selection_meta(args)
+    if sel_meta != scope:
+        idx_rows.append(f"| Scope | {selection_phrase({'selection': scope})} |")
     if getattr(args, "update_from", None):
-        # An updated run materializes its target set as --sessions, but the index
-        # must read like the base run it refreshes, not list hundreds of ids.
-        idx_rows.append(f"| Selection | {selection_label(args)} |")
         idx_rows.append(
             f"| Updated from | `{args.update_from}` ({args.update_mode or 'delta'}) |"
         )
-    elif args.sessions:
-        idx_rows.append(f"| Sessions | `{', '.join(args.sessions)}` |")
-    elif args.filter:
-        idx_rows.append(f"| Filter | `{args.filter}` |")
     idx_rows += [
         f"| Root sessions | {n_root} |",
         f"| Subagents (summarized inline) | {n_subs} |",
@@ -188,8 +186,6 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "db": str(db_path),
         "db_sha256": sha256_file(db_path),
-        "filter": args.filter,
-        "sessions_selected": args.sessions,
         "selection": selection_meta(args),
         "scope": scope,
         "excluded": excluded or [],
@@ -198,22 +194,14 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
            if getattr(args, "update_from", None) else {}),
         "profile": "memory",
         "preset": args.preset,
-        "sub": args.sub,
-        "no_subagents": bool(args.no_subagents),
-        "no_orphan_subagents": bool(args.no_orphan_subagents),
         "subagents_hidden": hidden,
-        "role": args.role,
-        "cap": args.cap or 0,
-        "touched_files": bool(args.files),
-        "sanitize": bool(args.sanitize),
         "tokens_backfilled": total_backfilled,
-        "sessions": {"total": len(sessions), "roots": n_root, "subagents": n_subs},
         "compactions": total_comp,
         "digests": total_digest,
         "session_records": records,
         "messages": total_msgs,
         "last_backup": lb,
-        "files": ["corpus.jsonl", "index.md"],
+        "artifacts": ["corpus.jsonl", "index.md"],
     }
     (out_dir / "metadata.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

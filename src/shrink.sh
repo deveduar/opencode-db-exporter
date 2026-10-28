@@ -28,9 +28,9 @@ o_sql_qlist() {
 # reported HERE — with the valid names — and falls back, instead of failing later
 # inside an export the user already confirmed.
 # o_shrink_discard_export <cascade-csv> -> stamp of the NEWEST export run whose
-# .sessions_selected exactly equals the discard cascade (the closed set the
-# offer/hint exports with `--sessions`), or "" when none. Set equality only: a
-# root-only export, an 'ALL sessions' run or anything else is a different set, so
+# `.selection` is exactly the discard cascade (the closed set the offer/hint
+# exports with `--sessions`), or "" when none. Set equality only: a root-only
+# export, an 'ALL sessions' run or anything else is a different set, so
 # it can never be linked. Reads only export metadata (never index.md), from the
 # same runs `exports list` iterates.
 o_shrink_discard_export() {
@@ -41,13 +41,23 @@ o_shrink_discard_export() {
     want=$(printf '%s' "$cascade" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
     local -a runs=()
     mapfile -t runs < <(exports_runs_find)
-    local run m
+    local run m selected
     for run in "${runs[@]}"; do
         [ -d "$run" ] || continue
         got=""
         while IFS= read -r m; do
             [ -f "$m" ] || continue
-            got="${got:+$got,}$(jq -r '.sessions_selected // [] | join(",")' "$m" 2>/dev/null)"
+            selected=$(jq -er '
+                if (.selection | type) != "object" then error("missing .selection")
+                elif .selection.rule == "sessions" then
+                    if (.selection.ids | type) != "array" then error("missing .selection.ids")
+                    else .selection.ids | join(",") end
+                else "" end
+            ' "$m") || {
+                echo "error: $m has incomplete canonical metadata; re-export this run" >&2
+                return 1
+            }
+            got="${got:+$got,}$selected"
         done < <(find "$run" -type f -name metadata.json 2>/dev/null)
         [ -n "$got" ] || continue
         got=$(printf '%s' "$got" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
@@ -478,7 +488,7 @@ oced_shrink() {
         discard_cascade="$disc_csv"
         # The offer/hint exports EXACTLY this closed set (`--sessions $disc_csv`),
         # so the moment the user (menu gate or README/CLI hint) accepted, that exact
-        # run is the newest one whose .sessions_selected equals the cascade; link it
+        # run is the newest one whose `.selection` equals the cascade; link it
         # into shrink.json so the shrink itself keeps the reference. No export -> no
         # key (the CLI user may have declined; the command hint stays enough).
         discard_exported=$(o_shrink_discard_export "$disc_csv")
@@ -675,7 +685,7 @@ shrinks_stamp_human() {
 # three numbers that matter. One size expression (before -> after, -%) instead of
 # three repetitions of it, and the copy's own state only when it is anomalous
 # ((swapped/no copy), or a (stale)/(unverifiable) freshness tag from the ONE
-# o_shrink_stale helper — default live_max costs one query per row, so
+# o_shrink_freshness helper — default live_max costs one query per row, so
 # `oced_shrinks_list` computes it once and passes it).
 shrinks_run_row() {
     local run="$1" live_max="${2:-}" local_mode="${3:-}" stamp j
@@ -730,7 +740,7 @@ shrinks_run_row() {
         else
             db_state="$(o_human_size "$size")"
         fi
-        # Freshness tag, from the SAME o_shrink_stale that view/verify/swap use: a
+        # Freshness tag, from the SAME o_shrink_freshness that view/verify/swap use: a
         # column cannot carry the sentence, only the verdict. Legacy copies without
         # sessions.max_updated are unverifiable (flagged, never silently trusted);
         # a list that passes live_max runs one DB query for all rows.
@@ -739,7 +749,7 @@ shrinks_run_row() {
             jmaxupd=$(jq -r '.sessions.max_updated // 0' "$j" 2>/dev/null || echo 0)
             if [ "$jmaxupd" -eq 0 ]; then
                 db_state="$db_state (unverifiable)"
-            elif ! o_shrink_stale "$j" "$live_max" >/dev/null 2>&1; then
+            elif ! o_shrink_freshness "$j" "$live_max" >/dev/null 2>&1; then
                 db_state="$db_state (stale)"
             fi
         fi
@@ -864,7 +874,7 @@ oced_shrinks_view() {
     printf '  %-11s %s\n' "integrity:" "$integrity · foreign keys $fkeys"
     # Freshness here, by the same rule as `backups view`: a detail screen must not
     # show an artifact nobody validated. Same helper as verify/swap/remove.
-    if fresh=$(o_shrink_stale "$j" 2>&1); then
+    if fresh=$(o_shrink_freshness "$j" 2>&1); then
         printf '  %-11s %s\n' "freshness:" "ok — nothing in the live DB is newer than this copy"
     else
         printf '  %-11s %s\n' "freshness:" "STALE — $fresh"
@@ -945,13 +955,13 @@ oced_shrinks_prune() {
     echo "Prune: removed $n run(s); keeping $keep."
 }
 
-# o_shrink_stale <shrink.json> [live_max] — compares the live DB against a shrink
+# o_shrink_freshness <shrink.json> [live_max] — compares the live DB against a shrink
 # copy (read-only). Echoes a warning (or nothing when clean/up to date) and returns
 # 0 = up to date, 1 = stale or unverifiable. This is the single stale-check for
 # guides, pickers and verify so the logic changes in one place. `live_max` skips
 # the DB query: a `shrinks list` computes the live max ONCE and hands it to every
 # row, so N copies cost one query instead of N (view/verify still query per call).
-o_shrink_stale() {
+o_shrink_freshness() {
     local j="$1"
     local live_max=0 shrink_max=0
     [ -f "$j" ] || { echo "shrink.json missing: $j"; return 1; }
@@ -972,13 +982,13 @@ o_shrink_stale() {
     return 0
 }
 
-# o_preshrink_stale <record-json> [live_max] — the SAME freshness rule as
-# o_shrink_stale, applied to the `.pre_shrink` manifest record (the rollback
+# o_preshrink_freshness <record-json> [live_max] — the SAME freshness rule as
+# o_shrink_freshness, applied to the `.pre_shrink` manifest record (the rollback
 # snapshot of the last --swap). Echoes a warning (or nothing) and returns
 # 0 = fresh, 1 = stale/unverifiable. The pre-shrink holds the PRE-swap DB, so
 # "fresh" means the live DB has not moved past it (nothing newer to lose when
 # you keep it as a rollback). `live_max` skips the query (one read for `status`).
-o_preshrink_stale() {
+o_preshrink_freshness() {
     local rec="$1" live_max=0 pre_max=0
     [ -n "$rec" ] || return 0
     if [ -n "${2:-}" ]; then
@@ -1054,7 +1064,7 @@ oced_shrinks_preshrink() {
         MISMATCH) echo "  [FAIL]      sha256 MISMATCH (manifest $expect / file $actual)" ;;
         *)        echo "  [MISSING]   $OCED_BACKUP_DIR/$file" ;;
     esac
-    if fresh=$(o_preshrink_stale "$rec" 2>&1); then
+    if fresh=$(o_preshrink_freshness "$rec" 2>&1); then
         echo "  [OK]        the live DB has not moved past it (a valid rollback of the last swap)"
     else
         echo "  [!]         $fresh"
@@ -1073,7 +1083,7 @@ oced_shrinks_preshrink() {
 # shrink counts and one removed with `exports remove` stops counting. A legacy
 # copy has no cascade to re-check, so its only evidence is the stamp it DID
 # record: run still there = covered, run gone = flagged, no stamp = unknown.
-# One helper, asked only by `shrinks verify` (like o_shrink_stale for freshness).
+# One helper, asked only by `shrinks verify` (like o_shrink_freshness for freshness).
 o_shrink_unexported() {
     local j="${1:-}" cascade n rec d
     [ -f "$j" ] || return 0
@@ -1098,7 +1108,7 @@ o_shrink_unexported() {
 
 # oced_shrinks_verify — audits the produced copies: orphan run dirs (no valid
 # shrink.json), old pre-shrink files, and the freshness of EVERY copy vs the
-# live DB (o_shrink_stale, once per run — not once for the newest).
+# live DB (o_shrink_freshness, once per run — not once for the newest).
 oced_shrinks_verify() {
     local yes=0
     [ "${1:-}" = "--yes" ] && yes=1
@@ -1132,12 +1142,12 @@ oced_shrinks_verify() {
     fi
 
     # 3) Two answers per valid copy, from the SAME walk: freshness vs the live DB
-    # (o_shrink_stale — EVERY copy, not just the newest: 1 and 2 already walk
+    # (o_shrink_freshness — EVERY copy, not just the newest: 1 and 2 already walk
     # every run dir, so a 3-run shelf must not report the orphan in the third dir
     # but never that copies 1 and 2 were stale) and the discard-export coverage
     # (o_shrink_unexported — whose discarded cascade no export run records).
     # Each entry is "stamp<TAB>message". An orphan is NOT re-reported here
-    # (o_shrink_stale would answer "shrink.json missing" for it and
+    # (o_shrink_freshness would answer "shrink.json missing" for it and
     # o_shrink_unexported has no json to read either), so a broken dir shows up
     # exactly once, as an orphan.
     local -a stale_copies=() unexp_copies=()
@@ -1148,7 +1158,7 @@ oced_shrinks_verify() {
             [ "$od" = "$run" ] && { is_orphan=1; break; }
         done
         [ "$is_orphan" -eq 1 ] && continue
-        sc=$(o_shrink_stale "$run/shrink.json") || true
+        sc=$(o_shrink_freshness "$run/shrink.json") || true
         [ -n "$sc" ] && stale_copies+=("${run##*/}"$'\t'"$sc")
         ue=$(o_shrink_unexported "$run/shrink.json") || true
         [ -n "$ue" ] && unexp_copies+=("${run##*/}"$'\t'"$ue")

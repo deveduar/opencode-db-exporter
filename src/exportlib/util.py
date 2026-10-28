@@ -53,21 +53,13 @@ SELECTION_LABELS = {
 
 
 def selection_rule(args) -> tuple[str, object]:
-    """(rule, value) for the effective selection of this run, in the fixed
-    precedence the CLI mutex already enforces.
+    """(rule, value) for the selection this run actually materializes, in the
+    fixed precedence the CLI mutex already enforces.
 
-    `scope_json` is the internal hand-off `exports update` uses: the child run is
-    invoked with an explicit `--sessions` target set, but its PROVENANCE is the
-    base run's scope, so metadata `.selection` / the index phrase keep describing
-    the rule the run still follows (not the hundreds of ids the update happened
-    to materialize). It is hidden, never a preset key."""
-    override = getattr(args, "scope_json", None)
-    if override:
-        meta = override if isinstance(override, dict) else json.loads(override)
-        rule = meta.get("rule")
-        if rule == "sessions":
-            return "sessions", list(meta.get("ids") or [])
-        return rule, meta.get("value")
+    `scope_json` is deliberately NOT read here: it describes the broader set the
+    run was drawn from (metadata `.scope`), not what it contains. Keeping the two
+    separate is what lets an update record a narrowed target without pretending
+    the base scope is its selection."""
     if getattr(args, "filter", None) is not None:
         return "filter", args.filter
     if getattr(args, "sessions", None):
@@ -125,29 +117,22 @@ def selection_phrase(meta) -> str:
     selection_meta(). This is the one description of a stored selection, so the
     export confirm, the index row and `exports view` can never disagree.
 
-    Read `.selection` and NOT `.filter`/`.sessions_selected`: those two only
-    describe a filter or an explicit id list, so a run selected by `--last N` or
-    `--since DATE` reads as "sessions: all" — flatly wrong, and wrong in the
-    screen whose whole job is to say what a run contains. Runs written before
-    `.selection` existed have none, and are labelled as legacy.
+    `.selection` is the canonical, complete selection record. A missing key is
+    unrecoverable because legacy fields cannot express every rule, so callers
+    must ask the user to re-export rather than reconstruct it.
     """
     meta = meta or {}
     sel = meta.get("selection")
     if not isinstance(sel, dict) or "rule" not in sel:
-        # Legacy run (pre-.selection): reconstruct what we can, and say so.
-        if meta.get("filter"):
-            return f"filter {meta['filter']} (legacy record)"
-        ids = meta.get("sessions_selected")
-        if ids:
-            n = len(ids) if isinstance(ids, list) else 0
-            return SELECTION_LABELS["sessions"].format(n=n) + " (legacy record)"
-        return "all sessions (legacy record)"
+        die("metadata is missing .selection; re-export this run")
     rule = sel["rule"]
     if rule == "sessions":
         return SELECTION_LABELS[rule].format(n=len(sel.get("ids") or []))
     if rule == "all":
         return SELECTION_LABELS[rule]
-    return SELECTION_LABELS.get(rule, rule).format(value=sel.get("value"))
+    if rule not in SELECTION_LABELS:
+        die(f"metadata has unknown selection rule: {rule!r}; re-export this run")
+    return SELECTION_LABELS[rule].format(value=sel.get("value"))
 
 
 def model_str(model) -> str:

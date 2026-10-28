@@ -195,9 +195,9 @@ def load_effective_scope(meta: dict, con: sqlite3.Connection) -> tuple[dict, dic
     `.selection` says what was materialized; `.scope` is the larger rule a refresh
     follows. The returned id set is the exact set this run's flags/layout can write.
     """
-    scope = meta.get("scope") or meta.get("selection") or {"rule": "all"}
+    scope = meta.get("scope")
     if not isinstance(scope, dict) or "rule" not in scope:
-        scope = {"rule": "all"}
+        die("metadata is missing .scope; re-export this run")
     rule = scope.get("rule")
     sessions = load_sessions(
         con,
@@ -206,13 +206,15 @@ def load_effective_scope(meta: dict, con: sqlite3.Connection) -> tuple[dict, dic
         scope.get("value") if rule == "last" else None,
         scope.get("value") if rule == "since" else None,
     )
-    flags = meta.get("flags") if isinstance(meta.get("flags"), dict) else {}
+    flags = meta.get("flags")
+    if not isinstance(flags, dict):
+        die("metadata is missing .flags; re-export this run")
     effective = filter_subagent_policy(
         sessions,
         all_session_ids(con),
-        bool(meta.get("no_subagents") or flags.get("no_subagents")),
-        bool(meta.get("no_orphan_subagents") or flags.get("no_orphan_subagents")),
-        meta.get("sub") or flags.get("sub"),
+        bool(flags.get("no_subagents")),
+        bool(flags.get("no_orphan_subagents")),
+        flags.get("sub"),
     )
     return scope, effective
 

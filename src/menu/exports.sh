@@ -37,10 +37,16 @@ oc_exports_rows() {
     mapfile -t runs < <(exports_runs_find "$dorder")
     for run in "${runs[@]}"; do
         mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        [ "${#metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
+        local m
+        for m in "${metas[@]}"; do
+            oced_export_require_meta "$m" || return 1
+        done
         recmeta=$(oced_export_rec_meta "${metas[@]}")
-        [ -n "$recmeta" ] && stale_metas+=("$recmeta")
+        [ -n "$recmeta" ] || return 1
+        stale_metas+=("$recmeta")
     done
-    freshness_json=$(oced_exports_stale_batch "${stale_metas[@]}" 2>/dev/null) || freshness_json='{}'
+    freshness_json=$(oced_exports_freshness_batch "${stale_metas[@]}" 2>/dev/null) || freshness_json='{}'
     for run in "${runs[@]}"; do
         [ -d "$run" ] || continue
         oc_exports_run_row "${run##*/}" "$freshness_json"
@@ -73,13 +79,17 @@ oc_exports_run_row() {
     local kept total nex
     local -a metas
     mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+    [ "${#metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
+    for m in "${metas[@]}"; do
+        oced_export_require_meta "$m" || return 1
+    done
     for m in "${metas[@]}"; do
         [ -f "$m" ] || continue
         found=1
         p=$(jq -r '.profile // "?"' "$m")
         profiles="${profiles:+$profiles+}$p"
-        r=$(jq -r '.sessions.roots // 0' "$m")
-        s=$(jq -r '.sessions.subagents // 0' "$m")
+        r=$(jq -r '[.session_records[] | select(.kind == "root")] | length' "$m")
+        s=$(jq -r '[.session_records[] | select(.kind == "subagent")] | length' "$m")
         [ "$r" -gt "$roots" ] && roots="$r"
         [ "$s" -gt "$subs" ] && subs="$s"
         msgs=$((msgs + $(jq -r '.messages // 0' "$m")))
@@ -91,9 +101,8 @@ oc_exports_run_row() {
         # (the `.excluded` it left out is the difference), else just `N`. The root/sub
         # breakdown always rides along, short (`3 root 19 sub`), so a narrowed run
         # never looks full.
-        nex=$(jq -r '(.excluded // []) | length' "$m" 2>/dev/null || echo 0)
-        kept=$(jq -r '(.session_records // []) | length' "$m" 2>/dev/null || echo 0)
-        [ "$kept" -gt 0 ] || kept=$((r + s))
+        nex=$(jq -r '.excluded | length' "$m")
+        kept=$(jq -r '.session_records | length' "$m")
         if [ "${nex:-0}" -gt 0 ]; then
             sess_cell="$kept/$((kept + nex)) kept · ${r} root ${s} sub"
         else
@@ -117,17 +126,15 @@ oc_exports_run_row() {
             refresh=" ⟳"
         fi
     fi
-    # The freshness tag: the same `o_export_stale` verdict `exports list`/`verify`
+    # The freshness tag: the same `o_export_freshness` verdict `exports list`/`verify`
     # use, so the menu can never disagree with the CLI about a run being behind.
     recmeta=$(oced_export_rec_meta "${metas[@]}")
     if [ -n "$recmeta" ]; then
         if [ -n "$freshness_json" ]; then
             tag=$(printf '%s' "$freshness_json" | jq -r --arg path "$recmeta" '.[$path].tag // empty')
         else
-            tag=$(o_export_stale "$recmeta" --tag 2>/dev/null || true)
+            tag=$(o_export_freshness "$recmeta" --tag 2>/dev/null || true)
         fi
-    elif [ "$found" -eq 1 ]; then
-        tag="unverifiable"
     fi
     [ -n "$tag" ] && tag=" ($tag)"
     local size

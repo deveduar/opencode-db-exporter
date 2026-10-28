@@ -66,7 +66,7 @@ exports list         list past export runs (date/profile/counts/size);
   exports remove <stamp> [--yes]   delete one export run (all its profiles)
   exports prune <N> [--yes]   keep only the N most recent export runs
   exports view <stamp> [--files] [--json]   show details of an export run (config, sessions, files; --json = raw)
-  exports stale <stamp> [--tsv|--json]   per-session snapshot changes and new in-scope
+  exports freshness <stamp> [--tsv|--json]   per-session snapshot changes and new in-scope
                        sessions (stale/missing/unverifiable/new; --json = array)
   exports verify [--tsv]   check snapshot changes and new sessions in each run's scope
   exports update <stamp>   refresh a run in place from the live DB (delta by

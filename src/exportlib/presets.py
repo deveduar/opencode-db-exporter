@@ -89,10 +89,18 @@ def scope_meta(args) -> dict:
     narrowed a preset (`--sessions` marks a subset of the scope), and that gap is
     what `exports update` re-opens (the gap itself is recorded as `.excluded`).
 
-    The rules are the same four as `.selection`, so `selection_phrase()` reads a
+    The rules are the same as `.selection`, so `selection_phrase()` reads a
     `.scope` too without any new vocabulary."""
-    if getattr(args, "scope_json", None):
-        return selection_meta(args)  # explicit hand-off from `exports update`
+    explicit = getattr(args, "scope_json", None)
+    if explicit:
+        meta = explicit if isinstance(explicit, dict) else json.loads(explicit)
+        if not isinstance(meta, dict) or "rule" not in meta:
+            die("invalid --scope-json: expected a selection object")
+        if meta["rule"] == "sessions":
+            return {"rule": "sessions", "ids": list(meta.get("ids") or [])}
+        if meta["rule"] == "all":
+            return {"rule": "all"}
+        return {"rule": meta["rule"], "value": meta.get("value")}
     if flag_in_argv("--sessions"):
         name = getattr(args, "preset_name", None) or getattr(args, "preset", None)
         if name:

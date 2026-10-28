@@ -710,24 +710,21 @@ printf '%s\n' "$ER_REM" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${A
 reset
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
 for d in aaa bbb ccc; do
-    echo '{"profile":"full","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/$d/metadata.json"
+    echo '{"profile":"full","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/$d/metadata.json"
 done
-# `bbb` carries a preset so the row's preset column can be asserted. The order is
-# `size · preset · stale-tag · refresh-mark`: the preset rides right after the
-# size, and the tag (here `unverifiable`, the run has no session_records) comes
-# AFTER it — so the row must read `0B  notes (unverifiable)`, not end on `notes`.
-echo '{"profile":"transcript","preset":"notes","sessions":{"roots":1,"subagents":0},"messages":3}' > "$OUT/bbb/metadata.json"
-oc_exports_run_row bbb | grep -qE 'notes \(unverifiable\)$' \
-    && ok "the run row names the preset, then the stale tag (size · preset · tag)" \
+# `bbb` carries a preset so the row's preset column can be asserted. Canonical
+# metadata is sufficient even for an empty run; it must not need a legacy tag.
+echo '{"profile":"transcript","preset":"notes","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/bbb/metadata.json"
+oc_exports_run_row bbb '{}' | grep -qE 'notes$' \
+    && ok "the run row names the preset without a legacy fallback tag" \
     || bad "preset column: $(oc_exports_run_row bbb)"
 # `aaa` has profile `full` and NO preset: the preset column (right after the
-# size) must be empty — the product lives in its own column, never here. The row
-# ends `... 3 msg · 0B  (unverifiable)`, so no bare `full` may follow the size.
-oc_exports_run_row aaa | grep -qE '[0-9]B +\(unverifiable\)$' \
-    && ok "a run with no preset leaves the preset column empty" \
+# size) must be empty — the product lives in its own column, never here.
+oc_exports_run_row aaa '{}' | grep -qE '[0-9]B +$' \
+    && ok "a canonical run with no preset leaves the preset column empty" \
     || bad "preset column not empty: $(oc_exports_run_row aaa)"
 mkdir -p "$OUT/newrow"
-echo '{"profile":"transcript","sessions":{"roots":1,"subagents":0},"messages":1,"session_records":[{"id":"ses_A0001","updated":"2026-01-01T00:00:00Z"}]}' > "$OUT/newrow/metadata.json"
+echo '{"profile":"transcript","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[{"id":"ses_A0001","kind":"root","updated":"2026-01-01T00:00:00Z"}],"excluded":[],"artifacts":[],"messages":1}' > "$OUT/newrow/metadata.json"
 NEW_STATE=$(jq -cn --arg path "$OUT/newrow/metadata.json" \
     '{($path): {tag:"new",counts:{new:1},reason:"1 new session(s) in scope since this export.",clean:false,new:[{id:"ses_NEW01",state:"new",kind:"root",updated:"2026-10-27T00:00:00Z",live_updated:"2026-10-27T00:00:00Z",title:"New session"}]}}')
 oc_exports_run_row newrow "$NEW_STATE" | grep -qE '\(new\)$' \
@@ -1081,13 +1078,13 @@ qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 [ "$(count_meta transcript)" -eq $((before + 1)) ] && ok "preset flow exports the transcript" || bad "preset flow export transcript missing"
 ME=$(newest_meta transcript)
-jq -e '.sessions_selected[0] == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
+jq -e '.selection.ids[0] == "ses_A0001"' "$ME" >/dev/null && ok "real run applied the session filter" || bad "real run filter"
 
 qset "__ALL__" "__MAKE__" "__PRESET_notes"
 oc_export_sessions_pick >/dev/null
 MA=$(newest_meta transcript)
-jq -e '.sessions_selected == null' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
-jq -e '.sessions.total == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '.sessions.total' "$MA")"
+jq -e '.selection.rule == "all"' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
+jq -e '(.session_records | length) == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '(.session_records | length)' "$MA")"
 
 qset "__ALL__" "__MAKE__" "__PRESET_rag"
 oc_export_sessions_pick >/dev/null
@@ -1230,9 +1227,9 @@ oc_export_sessions_pick >/dev/null
 MH=$(newest_meta transcript)
 # Untouched hidden: the preset runs as configured (whole DB), no --sessions and
 # no --no-subagents; all 6 sessions are on disk.
-jq -e '.no_subagents == false and .sessions.total == 6
-       and .sessions.subagents == 3' "$MH" >/dev/null \
-    && ok "real untouched hidden run exports the whole DB (3 roots + 3 subagents)" || bad "hidden run: $(jq -c '{n:.no_subagents,h:.subagents_hidden,s:.sessions}' "$MH")"
+jq -e '.flags.no_subagents == false and (.session_records | length) == 6
+       and ([.session_records[] | select(.kind == "subagent")] | length) == 3' "$MH" >/dev/null \
+    && ok "real untouched hidden run exports the whole DB (3 roots + 3 subagents)" || bad "hidden run: $(jq -c '{n:.flags.no_subagents,h:.subagents_hidden,s:.session_records}' "$MH")"
 MH="${MH%/metadata.json}"
 [ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run" || bad "subagents folder missing"
 # A NARROWED hidden run: the cascade is named in the confirm.

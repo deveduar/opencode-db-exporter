@@ -377,7 +377,7 @@ oc_shrinks_swap_pick() {
         echo "   copy not found: $snap"
         return 0
     fi
-    stale=$(o_shrink_stale "$OCED_BACKUP_DIR/shrink/$key/shrink.json")
+    stale=$(o_shrink_freshness "$OCED_BACKUP_DIR/shrink/$key/shrink.json")
     if [ -n "$stale" ]; then
         echo ""
         echo "⚠️  WARNING: $stale"
@@ -465,7 +465,7 @@ oc_shrinks_picker() {
                 fi
                 # Remove mode: check if this shrink is stale vs live DB
                 local stale
-                stale=$(o_shrink_stale "$OCED_BACKUP_DIR/shrink/$key/shrink.json")
+                stale=$(o_shrink_freshness "$OCED_BACKUP_DIR/shrink/$key/shrink.json")
                 if [ -n "$stale" ]; then
                     echo ""
                     echo "⚠️  WARNING: $stale"

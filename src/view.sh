@@ -172,7 +172,7 @@ oced_status() {
     echo ""
     echo "   Shrinks:"
     # The shrink copies are the other "snapshot" family: report the newest one
-    # and whether the live DB has moved on (the SAME o_shrink_stale that
+    # and whether the live DB has moved on (the SAME o_shrink_freshness that
     # list/view/verify/swap use). One live max(time_updated): cheap enough for a
     # status screen, and it is the one fact that says "this copy is behind".
     local -a sh_runs=()
@@ -190,7 +190,7 @@ oced_status() {
         shsize=$(o_human_size "$(stat -c %s "$shrun/opencode.shrunk.db" 2>/dev/null || echo 0)")
         echo "      Copies: ${#sh_runs[@]} (in $shdir)"
         printf '      %-18s %s\n' "Newest:" "$shstamp — $shkeep/$shtot kept — $shsize"
-        if shfresh=$(o_shrink_stale "$shj" 2>&1); then
+        if shfresh=$(o_shrink_freshness "$shj" 2>&1); then
             echo "      [OK]  fresh — nothing in the live DB is newer than it."
         else
             echo "      [!]  $shfresh"
@@ -208,7 +208,7 @@ oced_status() {
         psdate=$(printf '%s' "$psrec" | jq -r '.date // "-"')
         pssize=$(o_human_size "$(printf '%s' "$psrec" | jq -r '.size // 0')")
         printf '      %-18s %s\n' "Safety:" "$psfile ($pssize, $(o_human_iso "$psdate"))"
-        if psfresh=$(o_preshrink_stale "$psrec" 2>&1); then
+        if psfresh=$(o_preshrink_freshness "$psrec" 2>&1); then
             echo "      [OK]  fresh — the live DB has not moved past it (a valid rollback of the last swap)."
         else
             echo "      [!]  $psfresh"

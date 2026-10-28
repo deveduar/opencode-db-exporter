@@ -5,7 +5,7 @@ from pathlib import Path
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir
-from exportlib.util import safe_filename, selection_label
+from exportlib.util import safe_filename, selection_label, selection_meta, selection_phrase
 
 
 def make_outdir_final(base, profile: str, stamp: str | None = None):
@@ -20,7 +20,7 @@ def make_outdir_final(base, profile: str, stamp: str | None = None):
 
 
 def write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
-                total_digest=0, n_backfilled=0):
+                total_digest=0, n_backfilled=0, scope=None):
     with index_path.open("w", encoding="utf-8") as f:
         f.write("# opencode session export\n\n")
         f.write("| Field | Value |\n|---|---|\n")
@@ -37,6 +37,12 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         # (filter / ids / last N / since DATE / all) — the same phrase as
         # metadata.json's `selection` and the "matched nothing" error.
         f.write(f"| Selection | {selection_label(args)} |\n")
+        # A narrowed run has two facts worth keeping: what it contains
+        # (`.selection`) and the wider set it was drawn from (`.scope`). They are
+        # identical for a plain run, so the row only appears when it adds
+        # information.
+        if scope is not None and selection_meta(args) != scope:
+            f.write(f"| Scope | {selection_phrase({'selection': scope})} |\n")
         # Provenance of a refreshed run (exports update): the base run it came
         # from and the axis it used, next to the selection it still follows.
         if getattr(args, "update_from", None):

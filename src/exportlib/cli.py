@@ -42,6 +42,7 @@ from exportlib.util import (
     safe_filename,
     selection_label,
     selection_meta,
+    selection_phrase,
     session_record,
     sha256_file,
 )
@@ -72,6 +73,7 @@ def _iso_date(v: str) -> str:
 
 def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
     sel = selection_label(args)
+    scope = scope_meta(args)
     lines = [
         "# opencode-db export bundle",
         "",
@@ -81,6 +83,8 @@ def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
         f"| Date | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} |",
         f"| Source DB | `{db_path}` |",
         f"| Selection | {sel} |",
+        *([f"| Scope | {selection_phrase({'selection': scope})} |"]
+          if selection_meta(args) != scope else []),
         # Same provenance row the per-product index.md writes for a refreshed
         # run (exports update): the base run and the axis it used.
         *([f"| Updated from | `{args.update_from}` "
@@ -195,8 +199,8 @@ def _session_records(written: list, sessions: dict) -> list[dict]:
     Derived from `written` — the very list of `(root, subs, folder)` tuples that
     created the directories — so the records cannot disagree with what is on
     disk, and a run that cascaded or dropped subagents records exactly the
-    result. This is also why it is NOT `sessions_selected`, which records what
-    was REQUESTED (and only when `--sessions` was passed at all).
+    result. Requested explicit ids belong to `.selection.ids`; all other rules
+    are represented by their `.selection.rule` and value.
     """
     out: list[dict] = []
     for root, subs, _folder in written:
@@ -584,7 +588,7 @@ def main() -> None:
     # ------- index -------
     index_path = out_dir / "index.md"
     write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
-                total_digest, n_backfilled)
+                total_digest, n_backfilled, scope=scope)
 
     # ------- metadata -------
     meta_sha = sha256_file(db_path)
@@ -595,8 +599,6 @@ def main() -> None:
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "db": str(db_path),
         "db_sha256": meta_sha,
-        "filter": args.filter,
-        "sessions_selected": args.sessions,
         "session_records": _session_records(written, sessions),
         "selection": selection_meta(args),
         "scope": scope,
@@ -606,21 +608,8 @@ def main() -> None:
            if getattr(args, "update_from", None) else {}),
         "profile": args.profile,
         "preset": args.preset,
-        "sub": args.sub,
-        "no_subagents": bool(args.no_subagents),
-        "no_orphan_subagents": bool(args.no_orphan_subagents),
         "subagents_hidden": n_hidden,
-        "tool_output": args.tool_output,
-        "reasoning": renderer.reasoning,
-        "summary_diffs": args.summary_diffs,
-        "sanitize": bool(args.sanitize),
-        "role": args.role,
         "tokens_backfilled": n_backfilled,
-        "sessions": {
-            "total": len(sessions),
-            "roots": len(written),
-            "subagents": sum(len(s[1]) for s in written),
-        },
         # Two different things, never interchangeable: `compactions` counts the
         # markers opencode wrote (part.data.type='compaction'), `digests` the
         # summary texts it produced for them (message.data.mode='compaction').
@@ -628,7 +617,7 @@ def main() -> None:
         "digests": total_digest,
         "messages": total_msgs,
         "last_backup": last_bkp,
-        "files": [str(p.relative_to(out_dir)) for p in sorted(out_dir.rglob("*")) if p.is_file()],
+        "artifacts": [str(p.relative_to(out_dir)) for p in sorted(out_dir.rglob("*")) if p.is_file()],
     }
     (out_dir / "metadata.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

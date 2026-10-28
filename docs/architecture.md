@@ -97,7 +97,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   product; if it is a known preset, `apply_preset()` applies its keys over the argparse
   `args` (validating `choices`/types with `die()` on an invalid value); otherwise
   `ap.error` lists the known products and presets. `metadata.json` records `"preset"`
-  and `sessions_selected` for provenance.
+  and canonical `selection` provenance.
 - **The CLI wins over the preset**: a `--filter`/`--sessions` on the command line voids
   the whole preset selection (`cli_selection`), and any explicit flag (e.g. `--cap`)
   beats the preset value. Detected with `flag_in_argv()`, not with the argparse default.
@@ -454,22 +454,22 @@ it say "nothing has moved" and stop.
 
 **Freshness has one per-session rule, and one run-level verdict.** A backup or a shrink
 records a single `max_updated`; an export records each session's own `updated` in
-`.session_records`. `exportlib/stale.py` is the shared source for snapshot integrity and
-scope coverage: `stale_ids` detects `stale`/`missing`/`unverifiable` recorded sessions, and
+`.session_records`. `exportlib/freshness.py` is the shared source for snapshot integrity and
+scope coverage: `snapshot_changes` detects `stale`/`missing`/`unverifiable` recorded sessions, and
 `new_sessions` detects live sessions in the effective scope that are neither written nor
-deliberately excluded. It feeds `exports stale <stamp> [--tsv|--json]`, the `== Changed
+deliberately excluded. It feeds `exports freshness <stamp> [--tsv|--json]`, the `== Changed
 since export ==` and `== New in scope ==` blocks of `exports view`, and `exports update`.
 On top of it,
-`o_export_stale <meta> [--tag]` is a Bash formatting wrapper around
-`exportlib/stale.py --summary`; the `exports list` row, `view`'s `freshness:` line,
+`o_export_freshness <meta> [--tag]` is a Bash formatting wrapper around
+`exportlib/freshness.py --summary`; the `exports list` row, `view`'s `freshness:` line,
 `exports verify [--tsv]`, and the menu all consume that same result. List, verify, and the
 menu send their metadata paths in one `--summary-batch` call, sharing one read-only DB
 connection rather than starting Python once per run. It distinguishes
 **stale** (live `time_updated` is later than the recorded value), **missing** (the session
 no longer exists), **unverifiable** (a timestamp is absent or invalid), and **new** (live
-session in scope, not recorded and not deliberately excluded). `exports stale --json|--tsv`
-reports recorded and live timestamps; comparisons are at second resolution. A legacy run
-without `.session_records` is unverifiable, never silently called fresh. `new` is a coverage
+session in scope, not recorded and not deliberately excluded). `exports freshness --json|--tsv`
+reports recorded and live timestamps; comparisons are at second resolution. A run without
+the canonical metadata contract is rejected and must be re-exported. `new` is a coverage
 status, not a snapshot-integrity failure, and can coexist with stale/missing statuses. A
 direct `--sessions ID` run stores exactly those IDs as `.scope`; preset/menu flows may
 preserve a broader scope when that broader selection was explicit.
@@ -504,7 +504,7 @@ menu row that would look like a hang.
 offers `[>] create shrink copy` (a **3-step wizard**: sessions → recipe → read-only
 plan, see §5; LIVE DB, own snapshot), a `[>] swap a copy into the LIVE DB` row
 (`__SWAP__`) that swaps the picked copy into the LIVE DB behind
-`oc_confirm_typed "confirm"` (staleness checked via `o_shrink_stale` first), a
+`oc_confirm_typed "confirm"` (staleness checked via `o_shrink_freshness` first), a
 `[?] verify` row, a `[>] details of all copies` row (view mode only), plus a
 `[*] view  →  remove` toggle with per-run rows and the
 `[delete all]` / `[delete olds]` bulk rows. Rows come from the shrink.sh helpers
@@ -518,7 +518,7 @@ remove mode, then one row per backup). In view mode a row runs `backups view <fi
 which prints the manifest record *and performs the sha256 check*, because a details screen
 that displays a backup nobody validated is a trap. `oc_backup_sha_state` is the one
 implementation of that check — it backs `backups view` and `backups verify` alike, in the
-same spirit as `o_shrink_stale` being the one staleness check for shrinks — and the view
+same spirit as `o_shrink_freshness` being the one staleness check for shrinks — and the view
 adds the `vs live DB` line from `o_backup_aligned <file> -v`. The alignment helper took an
 optional file for that: no argument keeps the "last backup" default every other caller
 wants, a file makes the view of a *non-newest* copy correct. The check is not a separate
@@ -708,7 +708,7 @@ time (a root-only export is a different set, so it never clears the flag). The e
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
 | export from a stored backup instead of the live DB | `--from-backup <file>` | every read command honors it |
 | refresh an existing run after the DB moved on | `exports update <stamp>` (menu: `[>] update`) | keeps the stamp; `--mode delta` (+new/−gone) or `--mode accumulative` (all in scope — re-sync the whole scope); `--sticky never` keeps a dropped session dropped; `--dry-run` shows the plan, `--keep-history` keeps the old state; the menu offers each as its own row, plan printed before the gate |
-| check whether a run is still current | `exports verify` (or the tag on `exports list`) | per-session: `stale` (a recorded session was edited) / `missing` (a recorded session is gone) / `unverifiable` (a legacy run); a narrowed run's size reads `K/N kept · R root S sub` (the excluded count is the difference) |
+| check whether a run is still current | `exports verify` (or the tag on `exports list`) | per-session: `stale` (a recorded session was edited) / `missing` (a recorded session is gone) / `unverifiable` (a recorded timestamp is malformed); a narrowed run's size reads `K/N kept · R root S sub` (the excluded count is the difference) |
 | see what a run left out | `exports view <stamp>` | `scope:` (the wider set) + an `== Excluded (N kept out of scope) ==` block (id + title, capped at 8) |
 
 ## 8. Precedence and safety

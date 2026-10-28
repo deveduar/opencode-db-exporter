@@ -136,8 +136,6 @@ the same conditional `Preset` row.
   "tool": "opencode-db/exportlib", "version": "0.x.0",
   "date": "YYYY-MM-DDTHH:MM:SSZ",
   "db": "/…/opencode.db", "db_sha256": "…",
-  "filter": null,                       // or SQL LIKE pattern
-  "sessions_selected": null,            // or ["ses_…", …] — the REQUESTED ids, only when --sessions was passed
   "session_records": [                  // WHICH sessions this run actually CONTAINS (never a cap)
     {"id": "ses_a", "title": "Project Alpha", "kind": "root",
      "parent_id": null, "created": "…Z", "updated": "…Z"},
@@ -150,31 +148,26 @@ the same conditional `Preset` row.
   "excluded": [                         // `effective_scope - written`: what was in scope but deliberately left out (the
     {"id": "ses_x", "title": "…"}       // menu's marks / a narrower --sessions). The selection gap `exports update` can
   ],                                    // revive; policy/layout drops are recorded by their flags, never here.
-  "flags": {"sub": "full", "…": "…"},   // the EFFECTIVE content flags of the run (the recipe `exports update` replays), from
-                                        // flags.effective_flags(args): every FLAGS key with its resolved value. Always present.
+  "flags": {"sub": "separate", "…": "…"}, // the EFFECTIVE content flags of the run (the recipe `exports update` replays), from
+                                         // flags.effective_flags(args): every FLAGS key with its resolved value. Always present.
   "updated_from": "2026-10-19_13-36",   // R?: present only on a REFRESHED run — the stamp it was refreshed from (== its own)
   "update_mode": "delta",               // R?: present only on a refreshed run — delta | accumulative
   "profile": "transcript",              // product keyword: transcript | memory | digest | faithful (never a preset name)
   "preset": "archive",              // R?: preset/plan name that produced this run, else null
-  "sub": "inline", "tool_output": "full", "reasoning": true, "summary_diffs": false,
-  "sanitize": false, "role": "all",
-  "no_subagents": false,            // --no-subagents: subagents excluded from the set
-  "no_orphan_subagents": false,     // --no-orphan-subagents: closed set (a subagent whose parent is not exported was dropped)
   "subagents_hidden": 0,            // how many subagents those two flags actually dropped from the MATCHED set
                                    // (0 for an exact --sessions selection: a subagent that was never selected cannot be dropped)
   "tokens_backfilled": 0,               // number of sessions whose token/cost rows were summed from step-finish parts
-  "sessions": {"total": 6, "roots": 1, "subagents": 5},
   "compactions": 2, "digests": 2, "messages": 21,
   "last_backup": {"file": "…", "date": "…"},   // R?: latest entry of the backup manifest, else null
-  "files": ["transcript/index.md", "transcript/ses_….md"]
+  "artifacts": ["index.md", "01-session/ses_….md"]
 }
 ```
 
-The `faithful` product writes a **subset** of these keys (`sub`/`role`/`reasoning`/
-`tool_output` are display concerns it never applies), same as `memory`:
+Every product uses this canonical shape. Product-specific behavior is represented
+only by its effective `flags` values and `artifacts`.
 
-`selection` records which of the four mutually exclusive selection rules ran, so a
-run is self-describing even when `filter`/`sessions_selected` are both `null`:
+`selection` records which of the mutually exclusive selection rules ran. It is the
+only persisted selection provenance, so every run is self-describing:
 
 | `rule` | shape | meaning |
 |---|---|---|
@@ -204,15 +197,12 @@ opencode's own two vocabularies, not ours. The `digest` **product** exports the 
 transcript. Both keys are always present in every product's `metadata.json`, so a
 consumer never has to guess which of the two it is reading.
 
-### `session_records` vs `sessions` vs `sessions_selected`
+### `session_records`
 
-Three keys, one job each — they are deliberately not redundant:
-
-| key | answers | shape |
-|---|---|---|
-| `session_records` | **which sessions the run contains** | array, one entry per written session (roots + subagents), export order, **never capped** |
-| `sessions` | how many | `{total, roots, subagents}` — the *summary* of `session_records`, derived from the same list |
-| `sessions_selected` | what was **requested** | the `--sessions` ids, or `null` when a rule like `filter`/`last`/`since` chose the set |
+`session_records` is the single source of truth for **which sessions the run
+contains**: an array with one identity record per written session (roots and
+subagents), in export order, never capped. Counts shown by consumers are derived
+from this array; metadata never carries a duplicate `sessions` summary.
 
 The gap `session_records` fills is real: with `filter`/`last`/`since` (or any
 subagent flag) nothing in `metadata.json` recorded the resulting set, so
@@ -283,24 +273,21 @@ describe the same set:
 
 ### memory `metadata.json`
 
-Same header keys, then product-specific: `"profile": "memory"` always, plus
-`"cap"`, `"touched_files"` (bool; whether the `--files` key was requested for the
-corpus) and `"files": ["corpus.jsonl", "index.md"]` (the produced files — same
-shape as the transcript `files` list). No `sub`/`tool_output`/`reasoning`/
-`summary_diffs`. The subagent inclusion keys (`no_subagents`,
-`no_orphan_subagents`, `subagents_hidden`) ARE present: memory folds each
-subagent into its root's corpus line, so `--no-subagents` empties the
+Same canonical header keys, with `"profile": "memory"` and an `artifacts` list
+such as `["corpus.jsonl", "index.md"]`. Product behavior is recorded in the
+common `flags` object; it is not mirrored as top-level `cap`, `touched_files`,
+or display-flag keys. Memory folds each subagent into its root's corpus line, so
+`--no-subagents` empties the
 `subagents` array of every entry (`index.md` also carries a
 `Subagents excluded` row).
 
 ### faithful `metadata.json`
 
-Same header keys, then product-specific: `"profile": "faithful"` always, plus
-`"sanitize"` and the produced `"files"` list (the `.json` files + `index.md`).
-No `sub`/`tool_output`/`reasoning`/`role`/`summary_diffs` — the faithful product
-is the raw record and applies none of the display filters. The subagent
-inclusion keys ARE present (`--no-subagents` drops the subagent `.json` files
-and `index.md` carries the `Subagents excluded` row).
+Same canonical header keys, with `"profile": "faithful"` and an `artifacts`
+list (the `.json` files plus `index.md`). Its effective settings remain in
+`flags`; it is the raw record and applies none of the display filters.
+`--no-subagents` drops the subagent `.json` files and `index.md` carries the
+`Subagents excluded` row.
 
 ---
 
@@ -538,7 +525,7 @@ finishes; `--dry-run` writes nothing):
                        //   descendants — what `shrinks verify` re-checks later (the live
                        //   DB may no longer have them after --swap)
   "discard_exported": "20261006-150000"[,   // R?: the stamp of the newest export run whose
-                       //   .sessions_selected EQUALS the discarded cascade (order-insensitive);
+                       //   .selection.ids EQUALS the discarded cascade (order-insensitive);
                        //   auto-detected by o_shrink_discard_export after a discard run,
                        //   absent when no run matches — never a hand-written key
   "sessions": {"total": 20, "kept": 10, "deleted": 10, "max_updated": 1790293022000},
@@ -581,7 +568,7 @@ identical in `metadata.json`.
 
 When the cascade export is actually done before the shrink (the hint command, or the
 menu's offer), the run records it: `shrink.json.discard_exported` = the stamp of the
-newest export run whose `metadata.json`.`sessions_selected` list is exactly the
+newest export run whose `metadata.json`.`selection.ids` list is exactly the
 discarded cascade (any order); the run notes `(recorded: the cascade export is <stamp>
 — see: opencode-db shrinks view <stamp>)` and `shrinks view` prints the
 `discard export:` line. The key is absent when no matching run exists — a discard
@@ -611,7 +598,7 @@ needs to know. The `--tsv` rows are `type<TAB>key<TAB>display`:
 | `stale` | **the copy's stamp** | that copy is stale or unverifiable vs the live DB |
 | `unexported` | **the copy's stamp** | its discarded cascade has no covering export run |
 
-Coverage (`o_shrink_unexported <shrink.json>`, the sibling of `o_shrink_stale`,
+Coverage (`o_shrink_unexported <shrink.json>`, the sibling of `o_shrink_freshness`,
 asked only by `verify`) is a **live** re-check: the stored cascade is matched
 against the exports shelf at verify time, so an export made AFTER the shrink
 clears the flag and one removed with `exports remove` brings it back. A root-only
@@ -624,7 +611,7 @@ construction — its json carries no cascade — so a non-discard copy is never
 flagged.
 
 An orphan dir is reported **once**, as an orphan: it is never also a `stale` or
-`unexported` row (`o_shrink_stale` would answer "shrink.json missing" for it,
+`unexported` row (`o_shrink_freshness` would answer "shrink.json missing" for it,
 which would count the same broken dir twice).
 
 ---
@@ -656,20 +643,20 @@ with ` ⟳` instead of the `<mode>` sentence the CLI keeps.
 The two trailing decoration fields are both optional and answer two different
 questions:
 
-- `(<tag>)` is the **freshness** verdict from `o_export_stale … --tag`: `stale` (a
+- `(<tag>)` is the **freshness** verdict from `o_export_freshness … --tag`: `stale` (a
   recorded session was edited since the run), `missing` (a recorded session is gone
-  from the live DB) or `unverifiable` (no `.session_records` — a legacy run). Absent =
-  fresh.
+  from the live DB) or `unverifiable` (a recorded timestamp is malformed). Absent =
+  fresh. A run missing canonical metadata is an error requiring re-export, not a tag.
 - `refreshed <date> (<mode>)` names the refresh, read from `.update_mode`/`.date`. It
   exists because a refresh keeps the stamp, so without it a real update would read as
   "same run, same date".
 
 `exports verify [--tsv]` audits every run against the same snapshot-and-coverage summary
-(`--tsv` emits `stamp<TAB>tag<TAB>reason` rows). `exports stale <stamp> [--tsv|--json]`
+(`--tsv` emits `stamp<TAB>tag<TAB>reason` rows). `exports freshness <stamp> [--tsv|--json]`
 returns per-session records (`id`, `state`, `kind`, recorded `updated`, `live_updated`,
 `title`; `state` is `stale`, `missing`, `unverifiable`, or `new`). The first three describe
 snapshot integrity; `new` means live and in effective scope, but neither recorded nor
-deliberately excluded. `exportlib/stale.py` backs both `== Changed since export ==` and
+deliberately excluded. `exportlib/freshness.py` backs both `== Changed since export ==` and
 `== New in scope ==` and is shared with `exports update`. A direct `--sessions ID` run
 records that exact ID set as `.scope`; preset/menu narrowing can still preserve their
 explicitly broader scope so refresh reopens only that intended gap.
@@ -682,23 +669,16 @@ metadata subsection above).
 with one field block per `metadata.json` (blank-line separated). Three rules worth
 naming because the data shapes are not uniform:
 
-- `selection:` is rendered by `util.selection_phrase()` from **`.selection`**, not
-  from `.filter`/`.sessions_selected`: those two only describe a filter or an
-  explicit id list, so a run selected by `--last N` would read as "all sessions" —
-  flatly wrong in the screen whose whole job is to say what the run contains. Runs
-  written before `.selection` existed are labelled `(legacy record)`. It is a
+- `selection:` is rendered by `util.selection_phrase()` from **`.selection`**.
+  A run selected by `--last N` or `--since DATE` must retain its rule rather than
+  be rendered as "all sessions". A run missing this canonical key must be
+  re-exported. It is a
   **run-level** fact, so a bundle prints it once (read from the first product's
   metadata), not once per product.
-- `.sessions_selected` is an **array**, never concatenated as a string (a `// "all"`
-  default with no `join` breaks on real runs).
-- `Sessions:` shows `total (roots · subagents)`; when a legacy run has no
-  `.sessions.total` it is derived as `roots + subagents`. A field block prints only
-  the keys its metadata actually has (`cap: 0`/`touched_files: false` were rendered
-  for every transcript before), and the sessions a run contains come from
-  `.session_records`.
-- `scope:` (when `.scope` is present) is the wider set the run was drawn from, rendered
-  by the **same** `util.selection_phrase()` that names `.selection` (a legacy run has no
-  `.scope`, so the line is absent). It differs from `selection:` exactly when the run was
+- `Sessions:` derives `total (roots · subagents)` from `.session_records`. A field
+  block prints only canonical metadata; top-level flag mirrors are never invented.
+- `scope:` is the wider set the run was drawn from, rendered by the **same**
+  `util.selection_phrase()` that names `.selection`. It differs from `selection:` exactly when the run was
   narrowed — printing both is what makes the gap legible.
 - `updated:` appears only on a refreshed run (`<mode> mode (refreshed in place)`),
   read from `.update_mode`; the `date:` above it is already the refresh time, so
@@ -711,7 +691,7 @@ naming because the data shapes are not uniform:
   dedicated `== Changed since export ==` block follow, naming each affected session
   (id, kind, recorded/live dates, the bare word `stale`/`missing`/`unverifiable`, title),
   stale first, then missing and unverifiable. The block
-  reads `exportlib/stale.py` — the same per-session rule `exports stale` serves and
+  reads `exportlib/freshness.py` — the same per-session rule `exports freshness` serves and
   `exports update` uses — so the block and the run-level `freshness:` line cannot
   disagree. A separate summary (`N new session(s) in scope`) and `== New in scope ==`
   section list coverage additions; exclusions are removed from that calculation, so
@@ -762,7 +742,7 @@ as the tag, so the column never empties.
   db:         <source path from shrink.json>
   integrity:  <integrity_check> · foreign keys <foreign_key_check>
   freshness:  ok — nothing in the live DB is newer than this copy
-              STALE — <reason from o_shrink_stale>
+              STALE — <reason from o_shrink_freshness>
   ids (<n>):  ses_... (first 8)
               … N more (--json has all of them)
   removed:    <removed_total> row(s) total
@@ -777,7 +757,7 @@ as the tag, so the column never empties.
   fact a third time on one screen (`--json` keeps `.selection` untouched).
 - The `criteria` sentence is the full parenthetical text from `shrink.json` — the list
   column only carries the compact tag (same fact, two formats).
-- The `freshness` line is the **same check** `shrinks verify` uses (`o_shrink_stale`), so
+- The `freshness` line is the **same check** `shrinks verify` uses (`o_shrink_freshness`), so
   a detail screen can never show a copy nobody validated. A legacy shrink.json without
   `sessions.max_updated` prints `STALE — shrink.json has no sessions.max_updated; cannot verify freshness`.
 - IDs are capped at 8 with `… N more`; the real count is the `ids (<n>):` header.
