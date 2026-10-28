@@ -108,16 +108,22 @@ oced_exports_list() {
     local -a freshness_metas=()
     local -a run_metas=()
     local freshness_json
+    local -a broken_runs=()
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
         mapfile -t run_metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
-        [ "${#run_metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
+        if [ "${#run_metas[@]}" -eq 0 ]; then
+            # Partial run (e.g. an aborted export whose output dir was created but never written).
+            broken_runs+=("$stamp")
+            continue
+        fi
+        local meta_ok=1
         for meta in "${run_metas[@]}"; do
-            oced_export_require_meta "$meta" || return 1
+            oced_export_require_meta "$meta" 2>/dev/null || { meta_ok=0; broken_runs+=("$stamp"); break; }
         done
+        [ "$meta_ok" -eq 0 ] && continue
         lrmeta=$(oced_export_rec_meta "${run_metas[@]}")
         [ -n "$lrmeta" ] && freshness_metas+=("$lrmeta")
-        [ -n "$lrmeta" ] || return 1
     done
     freshness_json=$(oced_exports_freshness_batch "${freshness_metas[@]}" 2>/dev/null) || freshness_json='{}'
     for run in "${runs[@]}"; do

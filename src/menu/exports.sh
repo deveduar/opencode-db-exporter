@@ -239,19 +239,44 @@ oc_exports_update_runs() {
     [ "${#runs[@]}" -gt 0 ] || { echo "   (no export runs yet; create one first)"; return 1; }
     local sel key
     while true; do
+        local -a stale_metas=() run_metas=()
+        local r recmeta freshness_json
+        for r in "${runs[@]}"; do
+            mapfile -t run_metas < <(find "$r" -type f -name metadata.json 2>/dev/null | sort)
+            recmeta=$(oced_export_rec_meta "${run_metas[@]}")
+            [ -n "$recmeta" ] && stale_metas+=("$recmeta")
+        done
+        freshness_json=$(oced_exports_freshness_batch "${stale_metas[@]}" 2>/dev/null) || freshness_json='{}'
+        local n_behind=0
+        if [ -n "$freshness_json" ] && [ "$freshness_json" != "{}" ]; then
+            n_behind=$(printf '%s' "$freshness_json" | jq -r '[.[] | select(.clean == false)] | length' 2>/dev/null || echo 0)
+        fi
+
         local -a rows=()
         if [ "${#runs[@]}" -gt 1 ]; then
-            rows+=( "$(printf '__UPDATE_ALL__\t[>] update all runs')" )
+            if [ "${n_behind:-0}" -gt 0 ]; then
+                rows+=( "$(printf '__UPDATE_ALL__\t[>] update all runs (%d need refresh)' "$n_behind")" )
+            else
+                rows+=( "$(printf '__UPDATE_ALL__\t[>] update all runs (all up to date)')" )
+            fi
         fi
-        local r
         for r in "${runs[@]}"; do
-            rows+=( "$(oc_exports_run_row "${r##*/}")" )
+            rows+=( "$(oc_exports_run_row "${r##*/}" "$freshness_json")" )
         done
         sel=$(printf '%s\n' "${rows[@]}" \
               | oc_fzf_sel "exports (update)" "Refresh a run in place — pick the run (ESC: back)") || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
-            __UPDATE_ALL__) _oc_exports_update_all "${runs[@]}"; continue ;;
+            __UPDATE_ALL__)
+                if [ "${n_behind:-0}" -eq 0 ]; then
+                    echo ""
+                    echo "   All ${#runs[@]} export runs already match the live DB (nothing to update)."
+                    menu_pause "Update all" || return 0
+                    continue
+                fi
+                _oc_exports_update_all "${runs[@]}"
+                continue
+                ;;
             __NONE__|"")    continue ;;
             *)              oc_exports_update_modes "$key"; continue ;;
         esac
@@ -409,6 +434,7 @@ _oc_exports_update_all() {
         echo "--- $stamp ---"
         run_oced_tool_spin "Refreshing" exports update "$stamp" --yes
     done
+    menu_pause "Update all" || return 0
     return 0
 }
 

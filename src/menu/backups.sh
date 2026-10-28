@@ -6,6 +6,13 @@
 oc_backups_rows() {
     local mode="$1" order="${2:-newest}"
     local m="$OCED_BACKUP_DIR/manifest.json"
+    local last_f=""
+    if [ -f "$m" ]; then
+        last_f=$(jq -r '.backups[-1].file // empty' "$m" 2>/dev/null)
+        if [ -n "$last_f" ]; then
+            printf '__SYNC__\t[>] sync backup with live DB\n'
+        fi
+    fi
     printf '__CREATE__\t[>] create backup\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$order" = "newest" ]; then
@@ -70,6 +77,26 @@ oc_backups_picker() {
             # used to ask its own [y/N] on stdin from inside a captured call: the
             # prompt never reached the screen and the menu looked frozen until a
             # keypress arrived, which (being an empty line) cancelled the backup.
+            __SYNC__)
+                if o_backup_aligned >/dev/null 2>&1; then
+                    echo ""
+                    echo "   The newest backup is already aligned with the live DB (nothing to sync)."
+                    menu_pause "Sync backup" || return 0
+                    continue
+                fi
+                echo ""
+                echo "   The newest backup is out of sync with the live DB."
+                local oldest_f=""
+                oldest_f=$(jq -r '.backups[-1].file // empty' "$OCED_BACKUP_DIR/manifest.json" 2>/dev/null)
+                confirm_action "Update backup to match live DB? (Creates fresh snapshot and removes previous '$oldest_f')" || { echo "   cancelled."; continue; }
+                run_oced_tool_spin "Creating fresh backup" backup --yes
+                if [ -n "$oldest_f" ]; then
+                    run_oced_tool backups remove "$oldest_f" --yes >/dev/null 2>&1 || true
+                fi
+                echo "[OK] Backup synchronized with live DB."
+                menu_pause "Sync backup" || return 0
+                continue
+                ;;
             __CREATE__)
                 run_oced_tool backup --dry-run
                 confirm_action "Create this backup now?" || { echo "   cancelled."; return 0; }
