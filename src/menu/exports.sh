@@ -432,13 +432,16 @@ _oc_exports_update_one() {
             current_notes=$(jq -r '.notes // empty' "${metas[0]}" 2>/dev/null)
             current_notes_kind=$(jq -r '.notes_kind // empty' "${metas[0]}" 2>/dev/null)
         fi
-        printf '   Update title (blank keeps current: %s): ' "${current_title:-(none)}"
+        printf '   Current title: %s\n' "${current_title:-(none)}"
+        printf '   New title (Enter keeps current): '
         IFS= read -r answer || answer=""
         [ -n "$answer" ] && meta_args+=(--title "$answer")
         if [ "$current_notes_kind" = "auto-shrink-discard" ]; then
-            printf '   Update notes (automatic; blank recalculates for the updated sessions): %s ' "$current_notes"
+            printf '   Current automatic notes: %s\n' "${current_notes:-(none)}"
+            printf '   New notes (Enter recalculates for the updated sessions): '
         else
-            printf '   Update notes (blank keeps current: %s): ' "${current_notes:-(none)}"
+            printf '   Current notes: %s\n' "${current_notes:-(none)}"
+            printf '   New notes (Enter keeps current): '
         fi
         IFS= read -r answer || answer=""
         [ -n "$answer" ] && meta_args+=(--notes "$answer")
