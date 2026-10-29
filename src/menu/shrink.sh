@@ -87,7 +87,7 @@ oc_shrink_discard_rows() {
 # offer expands to the full cascade (oc_export_expand_subs, the same helper the
 # export wizard uses for its hidden-subagent mode).
 # Profile: o_shrink_discard_profile ($OCED_SHRINK_DISCARD_EXPORT_PROFILE, default
-# archive = transcript + memory) — a config choice, not another menu row.
+# review) — a config choice, not another menu row.
 oc_shrink_discard_offer() {
     local roots="$1"
     [ -n "$roots" ] || return 0
@@ -125,7 +125,7 @@ oc_shrink_discard_offer() {
             printf '   Export title (blank = %s): ' "$title"
             IFS= read -r answer || answer=""
             [ -n "$answer" ] && title="$answer"
-            printf '   Export notes (blank = default): '
+            printf '   Export notes (blank = %s): ' "$notes"
             IFS= read -r answer || answer=""
             if [ -n "$answer" ]; then
                 notes="$answer"

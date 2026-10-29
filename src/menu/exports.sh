@@ -468,8 +468,10 @@ _oc_exports_update_one() {
         [ -n "$answer" ] && meta_args+=(--notes "$answer")
     fi
     confirm_action "Apply this update to $stamp now?" || return 1
-    run_oced_tool_spin "Refreshing" exports update "$stamp" --yes "$@" "${meta_args[@]}"
-    return 0
+    local update_rc=0
+    run_oced_tool_spin "Refreshing" exports update "$stamp" --yes "$@" "${meta_args[@]}" || update_rc=$?
+    menu_pause "Update" || return 0
+    return "$update_rc"
 }
 
 # _oc_exports_update_all <run…> -> refresh every run with the same mode, ONE

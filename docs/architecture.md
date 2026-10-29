@@ -588,7 +588,7 @@ pruned copy is made; the menu makes it an actual offer. The hint and the offer b
 carry the **cascade**, not the listed roots: `--discard-sessions` drops the roots and
 every descendant, while `export --sessions` matches EXACT ids, so the roots alone
 exported part of what was about to be deleted — silently, because the export
-succeeded. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE` (default `archive`). That
+succeeded. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE` (default `review`). That
 resolver also warns, before the y/N gate, when the profile would silently drop the
 subagents the cascade contains — a warning, never a veto (dropping them on purpose is
 legitimate). The field-level rules — defaults, validation, the exact warning — are in

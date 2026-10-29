@@ -1467,7 +1467,7 @@ grep -q '^__TOGGLE__.*\[\*\] newest first  →  old first$' "$TMP/sessions_rows.
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink > "$TMP/offer.txt"
-grep -q '^export archive --sessions ' "$CALLS" && ok "unmarked roots are offered for export first (archive bundle)" || bad "sessions export offer: $(cat "$CALLS")"
+grep -q '^export review --sessions ' "$CALLS" && ok "unmarked roots are offered for export first (review preset)" || bad "sessions export offer: $(cat "$CALLS")"
 grep -q '^shrink --discard-sessions ' "$CALLS" && ok "unmarked roots -> --discard-sessions" || bad "sessions discard: $(cat "$CALLS")"
 [ "$(grep '^shrink --discard-sessions ' "$CALLS" | tail -1 | grep -o ',' | wc -l)" = "1" ] \
     && ok "sessions picker: 2 unmarked roots (1 kept of 3) -> 1 comma" || bad "sessions discard csv count"
@@ -1477,7 +1477,7 @@ grep -q '^shrink --discard-sessions ' "$CALLS" && ok "unmarked roots -> --discar
 # --discard-sessions drops the roots AND their descendants. Offering the roots
 # alone exported 2 of the 3 sessions about to be deleted — and looked like it
 # worked, because the export succeeded with plausible counts.
-EXCSV=$(grep '^export archive --sessions ' "$CALLS" | tail -1 | sed 's/^export archive --sessions //')
+EXCSV=$(grep '^export review --sessions ' "$CALLS" | tail -1 | sed 's/^export review --sessions //')
 [ "$(printf '%s' "$EXCSV" | tr ',' '\n' | sort | paste -sd, -)" = "ses_B0001,ses_B0002,ses_ORPHAN01" ] \
     && ok "the discard offer exports the cascade (ses_B0002 comes along)" || bad "offer csv: $EXCSV"
 grep -qx "shrink --discard-sessions $(printf '%s' 'ses_ORPHAN01,ses_B0001')" "$CALLS" \
@@ -1512,7 +1512,7 @@ reset; call_log; confirm_action() { return 0; }
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 OCED_SHRINK_DISCARD_EXPORT_PROFILE="archve" oc_pick_shrink > "$TMP/offer_bad.txt" 2>&1
 grep -q "is not a valid export profile" "$TMP/offer_bad.txt" && grep -q "Valid: archive" "$TMP/offer_bad.txt" \
-    && grep -q "Using 'archive' instead" "$TMP/offer_bad.txt" \
+    && grep -q "Using 'review' instead" "$TMP/offer_bad.txt" \
     && ok "an invalid OCED_SHRINK_DISCARD_EXPORT_PROFILE is reported + falls back" || bad "bad profile: $(grep -E '\[!\]|Valid|Using' "$TMP/offer_bad.txt")"
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"

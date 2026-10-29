@@ -20,7 +20,7 @@ o_sql_qlist() {
 
 # o_shrink_discard_profile -> the export profile that protects what a shrink is
 # about to drop: $OCED_SHRINK_DISCARD_EXPORT_PROFILE (any product or preset from
-# o_export_profiles) or `archive` (transcript + memory) by default.
+# o_export_profiles) or `review` by default.
 #
 # It lives here, not in the menu, because BOTH the menu offer and the engine's own
 # post-build hint print the same `export <profile> --sessions …` command and must
@@ -69,10 +69,12 @@ o_shrink_discard_export() {
 }
 
 o_shrink_discard_profile() {
-    local p="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-archive}"
+    local p="${OCED_SHRINK_DISCARD_EXPORT_PROFILE:-review}"
     local fallback=""
     if ! o_export_profile_known "$p"; then
-        if o_export_profile_known archive; then
+        if o_export_profile_known review; then
+            fallback=review
+        elif o_export_profile_known archive; then
             fallback=archive
         else
             # No presets file at all: `archive` cannot resolve, and the transcript

@@ -568,7 +568,7 @@ Keep rules (`oced_shrink`, last one wins — exactly ONE applies):
 before the pruned copy is made. The hint lists the **cascade** (the selected ids plus
 every descendant that travels with them), because `--sessions` matches exact ids and
 the discard set does not. `<profile>` is `$OCED_SHRINK_DISCARD_EXPORT_PROFILE`
-(default `archive`); an unknown value is reported with the valid product/preset names
+(default `review`); an unknown value is reported with the valid product/preset names
 and falls back instead of failing inside the export. A profile that would NOT preserve
 the subagents of that cascade (`no_subagents`, `no_orphan_subagents`, `sub: omit`) is
 warned about on screen first — `roots/subagents/total` cannot distinguish "exported with

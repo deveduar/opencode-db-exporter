@@ -99,9 +99,9 @@ fi
 # full/bare always exist — this file extends/overrides them).
 : "${OCED_SHRINK_PRESETS:=$(o_cfg_default shrink-presets.json)}"
 # Export profile used when shrink offers to export discarded sessions first.
-# Default: archive (transcript + memory). Set to "memory" for corpus-only, or any
+# Default: review. Set to "memory" for corpus-only, or any
 # valid export product/profile.
-: "${OCED_SHRINK_DISCARD_EXPORT_PROFILE:=archive}"
+: "${OCED_SHRINK_DISCARD_EXPORT_PROFILE:=review}"
 
 # o_log <message> -> append one line to the activity log (only when OCED_LOG=1).
 o_log() {
