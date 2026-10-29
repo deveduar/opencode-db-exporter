@@ -872,12 +872,10 @@ oced_shrinks_view() {
     local run_title run_notes
     run_title=$(jq -r '.title // empty' "$j")
     run_notes=$(jq -r '.notes // empty' "$j")
-    if [ -n "$run_title" ]; then
-        printf '  %-11s %s\n' "title:" "$run_title"
-    fi
-    if [ -n "$run_notes" ]; then
-        printf '  %-11s %s\n' "notes:" "$run_notes"
-    fi
+    [ -n "$run_title" ] || run_title="(none)"
+    [ -n "$run_notes" ] || run_notes="(none)"
+    printf '  %-11s %s\n' "title:" "$run_title"
+    printf '  %-11s %s\n' "notes:" "$run_notes"
     printf '  %-11s %s\n' "sessions:" "$total total · $kept kept · $del deleted"
     if [ "$before" -gt 0 ] && [ "$after" -gt 0 ]; then
         printf '  %-11s %s -> %s (freed %s%s)\n' "size:" \

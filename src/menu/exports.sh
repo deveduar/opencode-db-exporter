@@ -426,15 +426,20 @@ _oc_exports_update_one() {
     local -a meta_args=() metas=()
     if [ -t 0 ]; then
         mapfile -t metas < <(find "$OCED_OUT/$stamp" -type f -name metadata.json 2>/dev/null | sort)
-        local current_title="" current_notes="" answer
+        local current_title="" current_notes="" current_notes_kind="" answer
         if [ "${#metas[@]}" -gt 0 ]; then
             current_title=$(jq -r '.title // empty' "${metas[0]}" 2>/dev/null)
             current_notes=$(jq -r '.notes // empty' "${metas[0]}" 2>/dev/null)
+            current_notes_kind=$(jq -r '.notes_kind // empty' "${metas[0]}" 2>/dev/null)
         fi
         printf '   Update title (blank keeps current: %s): ' "${current_title:-(none)}"
         IFS= read -r answer || answer=""
         [ -n "$answer" ] && meta_args+=(--title "$answer")
-        printf '   Update notes (blank keeps current: %s): ' "${current_notes:-(none)}"
+        if [ "$current_notes_kind" = "auto-shrink-discard" ]; then
+            printf '   Update notes (automatic; blank recalculates for the updated sessions): %s ' "$current_notes"
+        else
+            printf '   Update notes (blank keeps current: %s): ' "${current_notes:-(none)}"
+        fi
         IFS= read -r answer || answer=""
         [ -n "$answer" ] && meta_args+=(--notes "$answer")
     fi

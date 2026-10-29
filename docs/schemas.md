@@ -135,6 +135,10 @@ the same conditional `Preset` row.
 {
   "tool": "opencode-db/exportlib", "version": "0.x.0",
   "date": "YYYY-MM-DDTHH:MM:SSZ",
+  "title": "…" | null,                 // R?: optional run label
+  "notes": "…" | null,                 // R?: optional run notes
+  "notes_kind": "auto-shrink-discard", // R?: marks the generated shrink-discard note; updates recalculate it
+  "source": "direct",                  // direct | shrink-discard | update
   "db": "/…/opencode.db", "db_sha256": "…",
   "session_records": [                  // WHICH sessions this run actually CONTAINS (never a cap)
     {"id": "ses_a", "title": "Project Alpha", "kind": "root",
@@ -165,6 +169,10 @@ the same conditional `Preset` row.
 
 Every product uses this canonical shape. Product-specific behavior is represented
 only by its effective `flags` values and `artifacts`.
+
+`notes_kind` is present only for the generated shrink-discard note. On refresh, that
+note is recalculated from the sessions the updated export actually writes; an
+explicit `--notes` replaces it with user-authored notes and removes the marker.
 
 `selection` records which of the mutually exclusive selection rules ran. It is the
 only persisted selection provenance, so every run is self-describing:
@@ -516,6 +524,7 @@ finishes; `--dry-run` writes nothing):
 {
   "tool": "opencode-db/shrink", "date": "…", "source": "/…/opencode.db",
   "stamp": "YYYY-MM-DD_HH-MM-SS", "criteria": "keep the 10 most recent session(s) + strip reasoning",
+  "title": null, "notes": null,       // R?: optional values entered when creating the shrink
   "selection": {"rule": "keep", "value": 10},
                        // the rule that produced the run: keep|older_than|since|keep_all|
                        //   keep_sessions|discard_sessions; scalar rules carry "value",
@@ -734,6 +743,8 @@ as the tag, so the column never empties.
 **Human mode (default):** leads with `== Shrink copy: <stamp> ==` then one fact per line:
 
 ```
+  title:      <title or (none)>
+  notes:      <notes or (none)>
   sessions:   <total> total · <kept> kept · <deleted> deleted
   size:       <before> -> <after> (freed <freed>, -<pct>%)
   criteria:   <full criteria sentence from shrink.json>

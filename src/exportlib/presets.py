@@ -250,6 +250,8 @@ def bundle_child_argv(args, product: str) -> list[str]:
         argv += ["--title", args.title]
     if getattr(args, "notes", None) is not None:
         argv += ["--notes", args.notes]
+    if getattr(args, "notes_kind", None):
+        argv += ["--notes-kind", args.notes_kind]
     cfg = args.bundle.get(product, {})
     for k, v in cfg.items():
         if flag_in_argv("--" + _flag(k)):

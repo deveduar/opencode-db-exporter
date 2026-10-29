@@ -91,7 +91,7 @@ oc_shrink_discard_rows() {
 oc_shrink_discard_offer() {
     local roots="$1"
     [ -n "$roots" ] || return 0
-    local profile cascade rows shown=0 total title notes nids
+    local profile cascade rows shown=0 total title notes notes_kind nids
     profile=$(o_shrink_discard_profile)
     cascade=$(oc_export_expand_subs "$roots")
     [ -n "$cascade" ] || cascade="$roots"
@@ -119,6 +119,7 @@ oc_shrink_discard_offer() {
         nids=$(printf '%s' "$cascade" | awk -F, '{print NF}')
         title="Shrink discard export"
         notes="Exported before shrink; discarded sessions: $nids"
+        notes_kind="auto-shrink-discard"
         if [ -t 0 ]; then
             local answer
             printf '   Export title (blank = %s): ' "$title"
@@ -126,10 +127,14 @@ oc_shrink_discard_offer() {
             [ -n "$answer" ] && title="$answer"
             printf '   Export notes (blank = default): '
             IFS= read -r answer || answer=""
-            [ -n "$answer" ] && notes="$answer"
+            if [ -n "$answer" ]; then
+                notes="$answer"
+                notes_kind=""
+            fi
         fi
-        run_oced_tool_spin "Exporting" export "$profile" --sessions "$cascade" \
-            --source shrink-discard --title "$title" --notes "$notes"
+        local -a metadata_args=(--source shrink-discard --title "$title" --notes "$notes")
+        [ -n "$notes_kind" ] && metadata_args+=(--notes-kind "$notes_kind")
+        run_oced_tool_spin "Exporting" export "$profile" --sessions "$cascade" "${metadata_args[@]}"
         echo ""
     else
         echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $cascade --source shrink-discard --title 'Shrink discard export'"

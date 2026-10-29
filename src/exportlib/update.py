@@ -338,9 +338,14 @@ def execute(plan: dict, args) -> str:
                     "--update-mode", plan["mode"],
                     "--source", args.source or "update",
                     "--title", args.title if args.title is not None
-                    else (meta.get("title") or ""),
-                    "--notes", args.notes if args.notes is not None
-                    else (meta.get("notes") or "")]
+                    else (meta.get("title") or "")]
+            if args.notes is not None:
+                # Explicit input makes the note user-owned, even when empty.
+                argv += ["--notes", args.notes]
+            elif meta.get("notes_kind") == "auto-shrink-discard":
+                argv += ["--notes-kind", "auto-shrink-discard"]
+            else:
+                argv += ["--notes", meta.get("notes") or ""]
             if preset:
                 argv.append(f"--preset-name={preset}")
             argv += _flags_argv(meta)

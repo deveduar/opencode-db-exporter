@@ -162,6 +162,7 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
         "db_sha256": sha256_file(db_path),
         "title": getattr(args, "title", None) or None,
         "notes": getattr(args, "notes", None) or None,
+        **({"notes_kind": args.notes_kind} if getattr(args, "notes_kind", None) else {}),
         "source": getattr(args, "source", None) or "direct",
         "selection": selection_meta(args),
         "scope": scope,
