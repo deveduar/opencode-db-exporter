@@ -692,6 +692,7 @@ shrinks_run_row() {
     local run="$1" live_max="${2:-}" local_mode="${3:-}" stamp j
     local rule rvalue nids tag db_state size pct
     local jtotal jkept jbefore jafter jstrip
+    local meta_title="" meta_notes="" meta_suffix=""
     stamp="${run##*/}"
     j="$run/shrink.json"
     tag=""   # `local` does not initialise: under set -u an unset local is fatal
@@ -711,6 +712,8 @@ shrinks_run_row() {
         jbefore=$(jq -r '.size.before // 0' "$j")
         jafter=$(jq -r '.size.after // 0' "$j")
         jstrip=$(jq -r '.stripped_reasoning // 0' "$j")
+        meta_title=$(jq -r '.title // empty' "$j" 2>/dev/null)
+        meta_notes=$(jq -r '.notes // empty' "$j" 2>/dev/null)
     else
         rule=""; rvalue=""; nids=0
         jtotal=0; jkept="?"; jbefore=0; jafter=0; jstrip=0
@@ -732,6 +735,22 @@ shrinks_run_row() {
     # tag but it is a fact about THIS copy, while "?" says nothing at all.
     [ -n "$tag" ] || tag=$(jq -r '.criteria // "?"' "$j" 2>/dev/null | cut -c1-24)
     [ -n "$tag" ] || tag="?"
+    # Metadata is useful in the picker, but this is still a column: flatten
+    # line breaks and cap both fields so one long note cannot dominate the row.
+    meta_title=${meta_title//$'\t'/ }
+    meta_title=${meta_title//$'\r'/ }
+    meta_title=${meta_title//$'\n'/ }
+    meta_notes=${meta_notes//$'\t'/ }
+    meta_notes=${meta_notes//$'\r'/ }
+    meta_notes=${meta_notes//$'\n'/ }
+    if [ -n "$meta_title" ]; then
+        [ "${#meta_title}" -le 28 ] || meta_title="${meta_title:0:28}…"
+        meta_suffix=" · $meta_title"
+    fi
+    if [ -n "$meta_notes" ]; then
+        [ "${#meta_notes}" -le 30 ] || meta_notes="${meta_notes:0:30}…"
+        meta_suffix+=" · $meta_notes"
+    fi
     if [ -f "$run/opencode.shrunk.db" ]; then
         size=$(stat -c %s "$run/opencode.shrunk.db" 2>/dev/null || echo 0)
         if [ "$jbefore" -gt 0 ] && [ "$jafter" -gt 0 ]; then
@@ -760,8 +779,8 @@ shrinks_run_row() {
     # kept/total (not kept/del): the two are one subtraction apart and the total is
     # what you compare against the DB you are looking at afterwards.
     printf '%s\t%s\n' "$stamp" \
-        "$(printf '%-22s  %-22s  %s/%s kept  %s' \
-            "$(shrinks_stamp_human "$stamp" "$local_mode")" "$tag" "$jkept" "$jtotal" "$db_state")"
+        "$(printf '%-22s  %-22s  %s/%s kept  %s%s' \
+            "$(shrinks_stamp_human "$stamp" "$local_mode")" "$tag" "$jkept" "$jtotal" "$db_state" "$meta_suffix")"
 }
 
 oced_shrinks() {

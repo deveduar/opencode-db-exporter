@@ -242,6 +242,14 @@ def bundle_child_argv(args, product: str) -> list[str]:
         argv.append(f"--cap={args.cap}")
     if flag_in_argv("--out"):
         argv.append(f"--out={args.out}")
+    # Run-level metadata must match across every product in the bundle, just as
+    # it does for a single-product export.
+    if getattr(args, "source", None):
+        argv += ["--source", args.source]
+    if getattr(args, "title", None) is not None:
+        argv += ["--title", args.title]
+    if getattr(args, "notes", None) is not None:
+        argv += ["--notes", args.notes]
     cfg = args.bundle.get(product, {})
     for k, v in cfg.items():
         if flag_in_argv("--" + _flag(k)):

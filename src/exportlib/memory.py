@@ -188,6 +188,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "db_sha256": sha256_file(db_path),
         "title": getattr(args, "title", None) or None,
         "notes": getattr(args, "notes", None) or None,
+        "source": getattr(args, "source", None) or "direct",
         "selection": selection_meta(args),
         "scope": scope,
         "excluded": excluded or [],

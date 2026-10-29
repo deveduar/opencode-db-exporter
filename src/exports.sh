@@ -457,6 +457,9 @@ oced_exports_view() {
         local run_title run_notes
         run_title=$(jq -r '.title // empty' "$first_meta")
         run_notes=$(jq -r '.notes // empty' "$first_meta")
+        local run_source
+        run_source=$(jq -r '.source // empty' "$first_meta")
+        [ -n "$run_source" ] && printf '  %-11s %s\n' "source:" "$run_source"
         if [ -n "$run_title" ]; then
             printf '  %-11s %s\n' "title:" "$run_title"
         fi

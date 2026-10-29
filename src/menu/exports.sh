@@ -420,8 +420,26 @@ oc_exports_update_modes() {
 _oc_exports_update_one() {
     local stamp="$1"; shift
     run_oced_tool exports update "$stamp" --dry-run "$@"
+
+    # A single-run refresh can update its run-level label. Blank input keeps
+    # the existing value; omitting the flags lets update.py preserve metadata.
+    local -a meta_args=() metas=()
+    if [ -t 0 ]; then
+        mapfile -t metas < <(find "$OCED_OUT/$stamp" -type f -name metadata.json 2>/dev/null | sort)
+        local current_title="" current_notes="" answer
+        if [ "${#metas[@]}" -gt 0 ]; then
+            current_title=$(jq -r '.title // empty' "${metas[0]}" 2>/dev/null)
+            current_notes=$(jq -r '.notes // empty' "${metas[0]}" 2>/dev/null)
+        fi
+        printf '   Update title (blank keeps current: %s): ' "${current_title:-(none)}"
+        IFS= read -r answer || answer=""
+        [ -n "$answer" ] && meta_args+=(--title "$answer")
+        printf '   Update notes (blank keeps current: %s): ' "${current_notes:-(none)}"
+        IFS= read -r answer || answer=""
+        [ -n "$answer" ] && meta_args+=(--notes "$answer")
+    fi
     confirm_action "Apply this update to $stamp now?" || return 1
-    run_oced_tool_spin "Refreshing" exports update "$stamp" --yes "$@"
+    run_oced_tool_spin "Refreshing" exports update "$stamp" --yes "$@" "${meta_args[@]}"
     return 0
 }
 

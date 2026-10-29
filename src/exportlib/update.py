@@ -335,7 +335,12 @@ def execute(plan: dict, args) -> str:
                     "--stamp", stamp, "--out", str(tmp),
                     "--scope-json", scope_json,
                     "--update-from", stamp,
-                    "--update-mode", plan["mode"]]
+                    "--update-mode", plan["mode"],
+                    "--source", args.source or "update",
+                    "--title", args.title if args.title is not None
+                    else (meta.get("title") or ""),
+                    "--notes", args.notes if args.notes is not None
+                    else (meta.get("notes") or "")]
             if preset:
                 argv.append(f"--preset-name={preset}")
             argv += _flags_argv(meta)
@@ -413,6 +418,11 @@ def build_argparser() -> argparse.ArgumentParser:
                          "session use --mode accumulative")
     ap.add_argument("--keep-history", action="store_true",
                     help="keep the previous state as <stamp>~<date> (hardlinks)")
+    ap.add_argument("--title", help="Short human label for this refreshed export run")
+    ap.add_argument("--notes", help="Optional freeform context for this refreshed export run")
+    ap.add_argument("--source", choices=("direct", "update", "shrink-discard"),
+                    default="update",
+                    help="Origin of this refreshed export run")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan and write nothing")
     ap.add_argument("--json", action="store_true", help="print the plan as JSON")

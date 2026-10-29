@@ -91,7 +91,7 @@ oc_shrink_discard_rows() {
 oc_shrink_discard_offer() {
     local roots="$1"
     [ -n "$roots" ] || return 0
-    local profile cascade rows shown=0 total
+    local profile cascade rows shown=0 total title notes nids
     profile=$(o_shrink_discard_profile)
     cascade=$(oc_export_expand_subs "$roots")
     [ -n "$cascade" ] || cascade="$roots"
@@ -116,10 +116,23 @@ oc_shrink_discard_offer() {
         printf '     … and %s more (all of them: %s)\n' "$((total - DISCARD_LIST_MAX))" "$cascade"
     fi
     if confirm_action "Export them first (opencode-db export $profile --sessions)? This is the SAFE order (backup -> export $profile -> shrink)."; then
-        run_oced_tool_spin "Exporting" export "$profile" --sessions "$cascade"
+        nids=$(printf '%s' "$cascade" | awk -F, '{print NF}')
+        title="Shrink discard export"
+        notes="Exported before shrink; discarded sessions: $nids"
+        if [ -t 0 ]; then
+            local answer
+            printf '   Export title (blank = %s): ' "$title"
+            IFS= read -r answer || answer=""
+            [ -n "$answer" ] && title="$answer"
+            printf '   Export notes (blank = default): '
+            IFS= read -r answer || answer=""
+            [ -n "$answer" ] && notes="$answer"
+        fi
+        run_oced_tool_spin "Exporting" export "$profile" --sessions "$cascade" \
+            --source shrink-discard --title "$title" --notes "$notes"
         echo ""
     else
-        echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $cascade"
+        echo "   Skipping the export. You can also run: opencode-db export $profile --sessions $cascade --source shrink-discard --title 'Shrink discard export'"
     fi
 }
 
@@ -132,6 +145,7 @@ oc_shrink_discard_offer() {
 # 0 = the shrink ran, other = the run's own rc.
 oc_shrink_confirm_run() {
     local runargs="$1" strip="$2" selargs="$3" recipe="${4:-}" recipe_purpose
+    local shrink_title="" shrink_notes=""
     local disc_sql keep_sql n t db_sz total=0
     local keep_n disc_n keep_roots disc_roots keep_subs disc_subs
     # the discard set = the unmarked roots + every descendant (what the engine
@@ -206,10 +220,17 @@ oc_shrink_confirm_run() {
     fi
     echo ""
     [ "$disc_n" -gt 0 ] && oc_shrink_discard_offer "$(printf '%s' "$selargs" | sed -n 's/^--discard-sessions //p')"
+    if [ -t 0 ]; then
+        printf '   Shrink title (optional, blank = none): '
+        IFS= read -r shrink_title || shrink_title=""
+        printf '   Shrink notes (optional, blank = none): '
+        IFS= read -r shrink_notes || shrink_notes=""
+    fi
     confirm_action "Build this shrink copy? The live DB is never modified; export memory first to keep its knowledge." \
         || { echo "   declined — back to the recipe step (ESC there cancels the flow)."; return 2; }
     # shellcheck disable=SC2086  # runargs must split ("--discard-sessions a,b")
-    run_oced_tool_spin "Building shrink copy" shrink $runargs
+    OCED_RUN_TITLE="$shrink_title" OCED_RUN_NOTES="$shrink_notes" \
+        run_oced_tool_spin "Building shrink copy" shrink $runargs
     return $?
 }
 
