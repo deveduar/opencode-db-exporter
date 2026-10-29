@@ -34,14 +34,12 @@ oc_exports_rows() {
     local dorder="desc"
     [ "$order" = "old" ] && dorder="asc"
     local -a runs=() metas=() stale_metas=()
+    local -A meta_files_by_run=()
     mapfile -t runs < <(exports_runs_find "$dorder")
     for run in "${runs[@]}"; do
         mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
-        [ "${#metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
-        local m
-        for m in "${metas[@]}"; do
-            oced_export_require_meta "$m" || return 1
-        done
+        [ "${#metas[@]}" -gt 0 ] || continue
+        meta_files_by_run["${run##*/}"]=$(printf '%s\n' "${metas[@]}")
         recmeta=$(oced_export_rec_meta "${metas[@]}")
         [ -n "$recmeta" ] || return 1
         stale_metas+=("$recmeta")
@@ -49,7 +47,13 @@ oc_exports_rows() {
     freshness_json=$(oced_exports_freshness_batch "${stale_metas[@]}" 2>/dev/null) || freshness_json='{}'
     for run in "${runs[@]}"; do
         [ -d "$run" ] || continue
-        oc_exports_run_row "${run##*/}" "$freshness_json"
+        stamp="${run##*/}"
+        [ -n "${meta_files_by_run[$stamp]:-}" ] || {
+            echo "error: $run has no metadata.json; re-export this run" >&2
+            return 1
+        }
+        mapfile -t metas <<< "${meta_files_by_run[$stamp]}"
+        oc_exports_run_row "$stamp" "$freshness_json" "${metas[@]}"
     done
 }
 
@@ -74,35 +78,53 @@ oc_stamp_human() {
 oc_exports_run_row() {
     local stamp="$1"
     local freshness_json="${2:-}"
+    shift 2 2>/dev/null || true
     local run="$OCED_OUT/$stamp"
-    local meta profiles="" roots=0 subs=0 msgs=0 found=0 m p r s refresh="" tag="" shown_date="" sess_cell="" preset=""
-    local kept total nex
-    local -a metas
-    mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+    local profiles="" roots=0 subs=0 msgs=0 found=0 meta_fields p r s m m_msgs mp nex kept mt mn mmode mdate refresh="" tag="" shown_date="" sess_cell="" preset=""
+    local row_title="" row_notes="" rm="" rdate=""
+    local -a metas=("$@")
+    if [ "${#metas[@]}" -eq 0 ]; then
+        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+    fi
     [ "${#metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
     for m in "${metas[@]}"; do
-        oced_export_require_meta "$m" || return 1
-    done
-    for m in "${metas[@]}"; do
         [ -f "$m" ] || continue
+        meta_fields=$(jq -er '
+            if ((.selection | type) == "object") and
+               ((.scope | type) == "object") and
+               ((.flags | type) == "object") and
+               ((.session_records | type) == "array") and
+               ((.excluded | type) == "array") and
+               ((.artifacts | type) == "array") then
+                [(.profile // "?"),
+                 ([.session_records[] | select(.kind == "root")] | length),
+                 ([.session_records[] | select(.kind == "subagent")] | length),
+                 (.messages // 0), (.preset // ""), (.excluded | length),
+                 (.session_records | length), (.title // ""), (.notes // ""),
+                 (.update_mode // ""), (.date // "")]
+                | @tsv
+            else error("incomplete canonical metadata") end' "$m" 2>/dev/null) || {
+                echo "error: $m has incomplete canonical metadata; re-export this run" >&2
+                return 1
+            }
+        IFS=$'\x1f' read -r p r s m_msgs mp nex kept mt mn mmode mdate \
+            <<< "${meta_fields//$'\t'/$'\x1f'}"
+        if [ "$found" -eq 0 ]; then
+            row_title="$mt"; row_notes="$mn"; rm="$mmode"; rdate="$mdate"
+        fi
         found=1
-        p=$(jq -r '.profile // "?"' "$m")
         profiles="${profiles:+$profiles+}$p"
-        r=$(jq -r '[.session_records[] | select(.kind == "root")] | length' "$m")
-        s=$(jq -r '[.session_records[] | select(.kind == "subagent")] | length' "$m")
         [ "$r" -gt "$roots" ] && roots="$r"
         [ "$s" -gt "$subs" ] && subs="$s"
-        msgs=$((msgs + $(jq -r '.messages // 0' "$m")))
+        msgs=$((msgs + m_msgs))
         # The preset the run was produced by: the recipe is what the refresh
         # replays, so the row names it (bundle metadata carries it too). A run
         # with no preset (a bare product keyword) leaves the column empty.
-        [ -z "$preset" ] && preset=$(jq -r '.preset // empty' "$m" 2>/dev/null)
+        [ -z "$preset" ] && preset="$mp"
         # Size of the run, not just its roots: `K/N kept` when the run is a subset
         # (the `.excluded` it left out is the difference), else just `N`. The root/sub
         # breakdown always rides along, short (`3 root 19 sub`), so a narrowed run
         # never looks full.
-        nex=$(jq -r '.excluded | length' "$m")
-        kept=$(jq -r '.session_records | length' "$m")
         if [ "${nex:-0}" -gt 0 ]; then
             sess_cell="$kept/$((kept + nex)) kept · ${r} root ${s} sub"
         else
@@ -114,21 +136,16 @@ oc_exports_run_row() {
     # its stamp (its place in the list), so the stamp date would keep saying the
     # old creation time after an update — the metadata `.date` is the honest one.
     shown_date=$(oc_stamp_human "$stamp")
-    local rm rdate recmeta
-    if [ -n "${metas[0]:-}" ]; then
-        rm=$(jq -r '.update_mode // empty' "${metas[0]}" 2>/dev/null)
-        rdate=$(jq -r '.date // empty' "${metas[0]}" 2>/dev/null)
-        if [ -n "$rm" ] && [ -n "$rdate" ]; then
-            # `.date` is ISO UTC ("2026-10-19T18:19:30Z") -> the menu's local human form.
-            shown_date=$(o_local_ts "${rdate%Z}" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || printf '%s' "$stamp")
-            # A refreshed run wears a mark, not a sentence: the mode (`delta`/
-            # `accumulative`) still lives in `exports view`, so the row stays a row.
-            refresh=" ⟳"
-        fi
+    if [ -n "$rm" ] && [ -n "$rdate" ]; then
+        # `.date` is ISO UTC ("2026-10-19T18:19:30Z") -> the menu's local human form.
+        shown_date=$(o_local_ts "${rdate%Z}" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || printf '%s' "$stamp")
+        # A refreshed run wears a mark, not a sentence: the mode (`delta`/
+        # `accumulative`) still lives in `exports view`, so the row stays a row.
+        refresh=" ⟳"
     fi
     # The freshness tag: the same `o_export_freshness` verdict `exports list`/`verify`
     # use, so the menu can never disagree with the CLI about a run being behind.
-    recmeta=$(oced_export_rec_meta "${metas[@]}")
+    recmeta="${metas[0]:-}"
     if [ -n "$recmeta" ]; then
         if [ -n "$freshness_json" ]; then
             tag=$(printf '%s' "$freshness_json" | jq -r --arg path "$recmeta" '.[$path].tag // empty')
@@ -139,13 +156,9 @@ oc_exports_run_row() {
     [ -n "$tag" ] && tag=" ($tag)"
     local size
     size=$(du -sb "$run" 2>/dev/null | cut -f1); size=${size:-0}
-    local title="" notes="" meta_title meta_notes
-    if [ -n "${metas[0]:-}" ]; then
-        meta_title=$(jq -r '.title // empty' "${metas[0]}" 2>/dev/null)
-        meta_notes=$(jq -r '.notes // empty' "${metas[0]}" 2>/dev/null)
-        [ -n "$meta_title" ] && title=" • $meta_title"
-        [ -n "$meta_notes" ] && notes=" • ${meta_notes:0:32}"
-    fi
+    local title="" notes=""
+    [ -n "$row_title" ] && title=" • $row_title"
+    [ -n "$row_notes" ] && notes=" • ${row_notes:0:32}"
     printf '%s\t%s\n' "$stamp" "$(printf '%-16s  %-30s  %-34s  %s msg · %s  %s%s%s%s%s' \
         "$shown_date" "$profiles" "${sess_cell:-$roots root}" "$msgs" "$(o_human_size "$size")" "$preset" "$tag" "$refresh" "$title" "$notes")"
 }
@@ -177,7 +190,9 @@ oc_exports_picker() {
     while true; do
         local header
         header="Export runs — [>] create export, or inspect a run · mode: $mode"
-        sel=$(oc_exports_rows "$mode" "$order" | oc_fzf_sel "exports ($mode)" "$header") || return $?
+        # Use process substitution so an early fzf selection does not make the
+        # row producer's SIGPIPE override fzf's successful status under pipefail.
+        sel=$(oc_fzf_sel "exports ($mode)" "$header" < <(oc_exports_rows "$mode" "$order")) || return $?
         key=$(oc_sel_key "$sel")
         case "$key" in
             __CREATE__)
@@ -247,9 +262,12 @@ oc_exports_update_runs() {
     local sel key
     while true; do
         local -a stale_metas=() run_metas=()
+        local -A meta_files_by_run=()
         local r recmeta freshness_json
         for r in "${runs[@]}"; do
             mapfile -t run_metas < <(find "$r" -type f -name metadata.json 2>/dev/null | sort)
+            [ "${#run_metas[@]}" -gt 0 ] || continue
+            meta_files_by_run["${r##*/}"]=$(printf '%s\n' "${run_metas[@]}")
             recmeta=$(oced_export_rec_meta "${run_metas[@]}")
             [ -n "$recmeta" ] && stale_metas+=("$recmeta")
         done
@@ -268,7 +286,10 @@ oc_exports_update_runs() {
             fi
         fi
         for r in "${runs[@]}"; do
-            rows+=( "$(oc_exports_run_row "${r##*/}" "$freshness_json")" )
+            local stamp="${r##*/}"
+            [ -n "${meta_files_by_run[$stamp]:-}" ] || continue
+            mapfile -t run_metas <<< "${meta_files_by_run[$stamp]}"
+            rows+=( "$(oc_exports_run_row "$stamp" "$freshness_json" "${run_metas[@]}")" )
         done
         sel=$(printf '%s\n' "${rows[@]}" \
               | oc_fzf_sel "exports (update)" "Refresh a run in place — pick the run (ESC: back)") || return $?

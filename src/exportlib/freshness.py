@@ -134,8 +134,8 @@ def _records(meta: dict) -> list:
     return meta["session_records"]
 
 
-def _live_for(con, records: list) -> dict:
-    ids = [r.get("id") for r in records if r.get("id")]
+def _live_for_ids(con, ids) -> dict:
+    ids = sorted(set(ids))
     if not ids:
         return {}
     live = {}
@@ -148,13 +148,31 @@ def _live_for(con, records: list) -> dict:
     return live
 
 
+def _live_for(con, records: list) -> dict:
+    return _live_for_ids(con, (r.get("id") for r in records or []))
+
+
 def snapshot_changes_for_meta(meta: dict, con) -> list[dict]:
     recs = _records(meta)
     return snapshot_changes(recs, _live_for(con, recs))
 
 
-def coverage_for_meta(meta: dict, con) -> list[dict]:
-    _, effective = load_effective_scope(meta, con)
+def _scope_cache_key(meta: dict) -> str:
+    flags = meta["flags"]
+    return json.dumps(
+        [meta["scope"], bool(flags.get("no_subagents")),
+         bool(flags.get("no_orphan_subagents")), flags.get("sub")],
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def coverage_for_meta(meta: dict, con, effective_cache=None, all_ids=None) -> list[dict]:
+    key = _scope_cache_key(meta) if effective_cache is not None else None
+    if key is not None and key in effective_cache:
+        effective = effective_cache[key]
+    else:
+        _, effective = load_effective_scope(meta, con, all_ids=all_ids)
+        if key is not None:
+            effective_cache[key] = effective
     live_ids = set(effective)
     return new_sessions(_records(meta), meta.get("excluded") or [], effective, live_ids)
 
@@ -261,15 +279,27 @@ def main(argv=None) -> int:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         try:
-            results = {}
+            metas = []
+            all_record_ids = set()
             for raw_path in args.summary_batch:
                 path = Path(raw_path)
                 if not path.is_file():
                     die(f"metadata.json missing: {path}; re-export this run")
                 meta = _read_meta(path)
                 _require_canonical(meta, str(path))
+                metas.append((raw_path, meta))
+                all_record_ids.update(r.get("id") for r in _records(meta) if r.get("id"))
+
+            # A run shelf often contains overlapping snapshots of the same
+            # sessions. Fetch their live timestamps once for the whole batch.
+            live = _live_for_ids(con, all_record_ids)
+            all_ids = {row[0] for row in con.execute("SELECT id FROM session")}
+            effective_cache = {}
+            results = {}
+            for raw_path, meta in metas:
                 results[raw_path] = summarize(
-                    snapshot_changes_for_meta(meta, con), coverage_for_meta(meta, con))
+                    snapshot_changes(_records(meta), live),
+                    coverage_for_meta(meta, con, effective_cache, all_ids))
         finally:
             con.close()
         json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
