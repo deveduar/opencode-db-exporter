@@ -139,8 +139,15 @@ oc_exports_run_row() {
     [ -n "$tag" ] && tag=" ($tag)"
     local size
     size=$(du -sb "$run" 2>/dev/null | cut -f1); size=${size:-0}
-    printf '%s\t%s\n' "$stamp" "$(printf '%-16s  %-30s  %-34s  %s msg · %s  %s%s%s' \
-        "$shown_date" "$profiles" "${sess_cell:-$roots root}" "$msgs" "$(o_human_size "$size")" "$preset" "$tag" "$refresh")"
+    local title="" notes="" meta_title meta_notes
+    if [ -n "${metas[0]:-}" ]; then
+        meta_title=$(jq -r '.title // empty' "${metas[0]}" 2>/dev/null)
+        meta_notes=$(jq -r '.notes // empty' "${metas[0]}" 2>/dev/null)
+        [ -n "$meta_title" ] && title=" • $meta_title"
+        [ -n "$meta_notes" ] && notes=" • ${meta_notes:0:32}"
+    fi
+    printf '%s\t%s\n' "$stamp" "$(printf '%-16s  %-30s  %-34s  %s msg · %s  %s%s%s%s%s' \
+        "$shown_date" "$profiles" "${sess_cell:-$roots root}" "$msgs" "$(o_human_size "$size")" "$preset" "$tag" "$refresh" "$title" "$notes")"
 }
 
 # Bulk removals from the exports picker (all / keep newest only).

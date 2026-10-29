@@ -58,6 +58,24 @@ oc_export_presets_picker() {
     done
 }
 
+# oc_prompt_run_meta -> optional title/notes for a menu-created export.
+# Blank input is accepted and treated as "no metadata"; non-TTY runs skip the
+# prompt so CLI scripts and tests keep working without a terminal attached.
+oc_prompt_run_meta() {
+    local title="" notes=""
+    if [ ! -t 0 ]; then
+        OCED_RUN_TITLE=""
+        OCED_RUN_NOTES=""
+        return 0
+    fi
+    printf 'Optional title (blank = none): '
+    IFS= read -r title || title=""
+    printf 'Optional notes (blank = none): '
+    IFS= read -r notes || notes=""
+    OCED_RUN_TITLE="$title"
+    OCED_RUN_NOTES="$notes"
+}
+
 # oc_preset_run <preset> <csv> [hide_subs] -> confirm and run.
 # If the user did NOT narrow the selection (every row the picker rendered is
 # still marked), the preset runs AS CONFIGURED — its own filter/sessions apply
@@ -66,6 +84,13 @@ oc_export_presets_picker() {
 # --no-subagents, since a hidden subagent follows its root).
 oc_preset_run() {
     local name="$1" csv="$2" hide="${3:-0}"
+
+    # Guard the run metadata values for both interactive menu flows and CLI
+    # invocations that may set them externally. The prompt itself is only asked in
+    # TTY mode, so headless runs remain silent and deterministic.
+    OCED_RUN_TITLE="${OCED_RUN_TITLE:-}"
+    OCED_RUN_NOTES="${OCED_RUN_NOTES:-}"
+    oc_prompt_run_meta
 
     # snapshot: fresh — offer a backup when not aligned.
     if [ "$(oc_plan_py snapshot "$name" 2>/dev/null)" = "fresh" ]; then
@@ -166,12 +191,12 @@ oc_preset_run() {
         esac
     fi
 
-    if [ "$all_marked" = 1 ]; then
+    if [ "$all_marked" = "1" ]; then
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool_spin "Exporting" export "$name" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" --title "$OCED_RUN_TITLE" --notes "$OCED_RUN_NOTES" "${extra[@]}"
     else
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool_spin "Exporting" export "$name" --sessions "$run_csv" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" --title "$OCED_RUN_TITLE" --notes "$OCED_RUN_NOTES" --sessions "$run_csv" "${extra[@]}"
     fi
     return 0
 }
@@ -204,7 +229,7 @@ oc_export_picker() {
         return $?   # 0 = ran, 130 = ESC'd out; the caller pauses
     fi
     # No presets file: the menu wizard is preset-only. The CLI still accepts
-    # raw product keywords and flags. rc 0 so __CREATE__ pauses and lets the
+    # raw product keywords and flags. rc 0 so __CREATE__ pauses and lets the rc
     # user read this before redrawing the list.
     echo "Export from the menu needs a presets file (named plans = the source of truth)."
     echo "   missing: $OCED_PRESETS"
@@ -350,10 +375,14 @@ oc_export_confirm() {
     [ -f "$OPENCODE_DB-wal" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-wal"))) || true
     [ -f "$OPENCODE_DB-shm" ] && db_est=$((db_est + $(stat -c %s "$OPENCODE_DB-shm"))) || true
     db_est=$((db_est + $(stat -c %s "$OPENCODE_DB")))
+    OCED_RUN_TITLE="${OCED_RUN_TITLE:-}"
+    OCED_RUN_NOTES="${OCED_RUN_NOTES:-}"
     echo ""
     echo "-> Export plan"
     printf '%-10s %s\n' "Source:" "$OPENCODE_DB"
     printf '%-10s %s\n' "Preset:" "$name"
+    [ -n "${OCED_RUN_TITLE:-}" ] && printf '%-10s %s\n' "Title:" "$OCED_RUN_TITLE"
+    [ -n "${OCED_RUN_NOTES:-}" ] && printf '%-10s %s\n' "Notes:" "$OCED_RUN_NOTES"
     printf '%-10s %s\n' "Sessions:" "$sess"
     printf '%-10s %s\n' "Menu adds:" "$menu_adds"
     [ -n "$note" ] && printf '%-10s %s\n' "Note:" "$note"

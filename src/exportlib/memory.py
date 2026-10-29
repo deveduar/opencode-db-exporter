@@ -186,6 +186,8 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "db": str(db_path),
         "db_sha256": sha256_file(db_path),
+        "title": getattr(args, "title", None) or None,
+        "notes": getattr(args, "notes", None) or None,
         "selection": selection_meta(args),
         "scope": scope,
         "excluded": excluded or [],

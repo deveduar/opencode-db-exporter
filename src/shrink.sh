@@ -598,6 +598,7 @@ oced_shrink() {
 
     jq -n --arg tool "opencode-db/shrink" --arg date "$(o_now_utc)" --arg criteria "$criteria" \
         --arg source "$OPENCODE_DB" --arg stamp "$stamp" \
+        --arg title "${OCED_RUN_TITLE:-}" --arg notes "${OCED_RUN_NOTES:-}" \
         --argjson total "$total" --argjson kept "$keptcnt" --argjson deleted "$deleted" \
         --arg max_updated "$max_updated" \
         --argjson selection "$selection_json" \
@@ -607,7 +608,7 @@ oced_shrink() {
         --argjson removed_ob "$removed_json" --argjson removed_total "$removed_total" \
         --argjson stripped_reasoning "$stripped_reasoning" \
         --arg integrity "$integrity" --arg fk "$fk_status" \
-        '{tool: $tool, date: $date, source: $source, stamp: $stamp, criteria: $criteria,
+        '{tool: $tool, date: $date, id: $stamp, stamp: $stamp, title: ($title | if . == "" then null else . end), notes: ($notes | if . == "" then null else . end), source: $source, criteria: $criteria,
           selection: $selection,
           discard_exported: $discard_exported,
           sessions: {total: $total, kept: $kept, deleted: $deleted, max_updated: ($max_updated | tonumber)},
@@ -686,7 +687,7 @@ shrinks_stamp_human() {
 # three repetitions of it, and the copy's own state only when it is anomalous
 # ((swapped/no copy), or a (stale)/(unverifiable) freshness tag from the ONE
 # o_shrink_freshness helper — default live_max costs one query per row, so
-# `oced_shrinks_list` computes it once and passes it).
+# `oced_shrinks_list` computes it once and passes it once.
 shrinks_run_row() {
     local run="$1" live_max="${2:-}" local_mode="${3:-}" stamp j
     local rule rvalue nids tag db_state size pct
@@ -849,6 +850,15 @@ oced_shrinks_view() {
 
     echo "== Shrink copy: $stamp =="
     echo ""
+    local run_title run_notes
+    run_title=$(jq -r '.title // empty' "$j")
+    run_notes=$(jq -r '.notes // empty' "$j")
+    if [ -n "$run_title" ]; then
+        printf '  %-11s %s\n' "title:" "$run_title"
+    fi
+    if [ -n "$run_notes" ]; then
+        printf '  %-11s %s\n' "notes:" "$run_notes"
+    fi
     printf '  %-11s %s\n' "sessions:" "$total total · $kept kept · $del deleted"
     if [ "$before" -gt 0 ] && [ "$after" -gt 0 ]; then
         printf '  %-11s %s -> %s (freed %s%s)\n' "size:" \
@@ -1025,8 +1035,16 @@ oced_shrinks_preshrink() {
         printf '%s' "$rec" | jq .
         return 0
     fi
-    local file date size sess msgs parts src live_max state expect actual fresh
+    local file date size sess msgs parts src
+
     file=$(printf '%s' "$rec" | jq -r '.file // "-"')
+    date=$(printf '%s' "$rec" | jq -r '.date // "-"')
+    size=$(printf '%s' "$rec" | jq -r '.size // 0')
+    sess=$(printf '%s' "$rec" | jq -r '.sessions // 0')
+    msgs=$(printf '%s' "$rec" | jq -r '.messages // 0')
+    parts=$(printf '%s' "$rec" | jq -r '.parts // 0')
+    src=$(printf '%s' "$rec" | jq -r '.source // "-"')
+
     if [ "$cmd" = "remove" ]; then
         local yes=0
         [ "${2:-}" = "--yes" ] && yes=1
@@ -1042,13 +1060,6 @@ oced_shrinks_preshrink() {
         echo "Removed: $file"
         return 0
     fi
-
-    date=$(printf '%s' "$rec" | jq -r '.date // "-"')
-    size=$(printf '%s' "$rec" | jq -r '.size // 0')
-    sess=$(printf '%s' "$rec" | jq -r '.sessions // 0')
-    msgs=$(printf '%s' "$rec" | jq -r '.messages // 0')
-    parts=$(printf '%s' "$rec" | jq -r '.parts // 0')
-    src=$(printf '%s' "$rec" | jq -r '.source // "-"')
 
     echo "== Pre-shrink safety copy =="
     echo ""

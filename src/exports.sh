@@ -350,6 +350,8 @@ oced_export_meta_pairs() {   # $1 = metadata.json
         | [
           pair("Product";             (.profile // "-")),
           pair("Preset";              (.preset // "-")),
+          (if (.title // empty) != "" then pair("Title"; .title) else empty end),
+          (if (.notes // empty) != "" then pair("Notes"; .notes) else empty end),
           pair("Sub";                 ($f.sub // "-")),
           (if (($f.role // "all") != "all") then pair("Role"; $f.role) else empty end),
           pair("Sanitize";            ($f.sanitize // false)),
@@ -452,6 +454,15 @@ oced_exports_view() {
     if [ -n "$first_meta" ]; then
         # The selection is a RUN-level fact (shared by a bundle), so it is
         # printed once here and not repeated in every product block.
+        local run_title run_notes
+        run_title=$(jq -r '.title // empty' "$first_meta")
+        run_notes=$(jq -r '.notes // empty' "$first_meta")
+        if [ -n "$run_title" ]; then
+            printf '  %-11s %s\n' "title:" "$run_title"
+        fi
+        if [ -n "$run_notes" ]; then
+            printf '  %-11s %s\n' "notes:" "$run_notes"
+        fi
         printf '  %-11s %s\n' "selection:" "$(oced_export_selection_phrase "$first_meta")"
         # The scope is the WIDER set the run was drawn from; it differs from
         # `selection` exactly when the run was narrowed, so the gap between the

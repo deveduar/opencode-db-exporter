@@ -170,6 +170,8 @@ def build_argparser() -> argparse.ArgumentParser:
 
     # Hidden/internal args
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
+    ap.add_argument("--title", help="Short human label for this export run")
+    ap.add_argument("--notes", help="Optional freeform context for this export run")
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
     # `exports update` hand-off: the target set is materialized as --sessions, but
     # the run's provenance stays the base run's scope; the update itself is named
@@ -597,6 +599,10 @@ def main() -> None:
         "tool": "opencode-db/exportlib",
         "version": TOOL_VERSION,
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "id": (args.stamp or Path(out_dir).name),
+        "stamp": (args.stamp or Path(out_dir).name),
+        "title": getattr(args, "title", None) or None,
+        "notes": getattr(args, "notes", None) or None,
         "db": str(db_path),
         "db_sha256": meta_sha,
         "session_records": _session_records(written, sessions),
