@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from exportlib import TOOL_VERSION
 from exportlib.flags import effective_flags
-from exportlib.db import load_faithful
+from exportlib.db import load_faithful, walk_subagents
 from exportlib.sanitize import sanitize_json
 from exportlib.util import (
     model_str,
@@ -75,9 +75,9 @@ def _write_session_json(con, s: dict, json_path, sanitize_on: bool) -> dict:
 
 def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0,
                     scope: dict | None = None, excluded: list | None = None) -> None:
-    """The `faithful` product: one `.json` per root session, with its subagents
-    under `subagents/`. The session hierarchy mirrors `transcript` (numbered
-    session folders) so the two products correlate, but only JSON is written."""
+    """Write one `.json` per session. All descendants live under the root's
+    `subagents/` folder; each payload keeps its own parent id. Root session folder
+    numbering matches the transcript product, but only JSON is written."""
     n_root = 0
     n_subs = 0
     total_msgs = 0
@@ -87,7 +87,7 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     records: list = []
     for rid in roots:
         root = sessions[rid]
-        subs = children_of.get(rid, [])
+        subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
         stem = safe_filename(root["title"] or root["slug"])
         rfolder = out_dir / f"{n_root + 1:02d}-{stem}_{rid[:8]}"
         rfolder.mkdir()
@@ -151,6 +151,29 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
         "the filtered, human-readable counterpart.",
         "",
     ]
+    idx_rows += ["## Sessions", ""]
+    for root_index, rid in enumerate(roots, 1):
+        root = sessions[rid]
+        rstem = safe_filename(root["title"] or root["slug"])
+        rfolder_name = f"{root_index:02d}-{rstem}_{rid[:8]}"
+        idx_rows.append(
+            f"- [{root['title'] or root['slug']}]"
+            f"({rfolder_name}/{rstem}.json)  `{rid}`"
+        )
+
+        def append_children(parent_id: str, depth: int) -> None:
+            for child_id in children_of.get(parent_id, []):
+                child = sessions[child_id]
+                cstem = safe_filename(child["title"] or child["slug"])
+                rel = f"{rfolder_name}/subagents/{cstem}_{child_id[:8]}.json"
+                idx_rows.append(
+                    f"{'  ' * (depth + 1)}- [{child['title'] or child['slug']}]"
+                    f"({rel})  `{child_id}`"
+                )
+                append_children(child_id, depth + 1)
+
+        append_children(rid, 0)
+    idx_rows.append("")
     (out_dir / "index.md").write_text("\n".join(idx_rows), encoding="utf-8")
 
     lb = last_backup_info()

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from exportlib import TOOL_VERSION
 from exportlib.flags import effective_flags
-from exportlib.db import digests_for, load_messages, load_todos, touched_files
+from exportlib.db import digests_for, load_messages, load_todos, touched_files, walk_subagents
 from exportlib.sanitize import sanitize
 from exportlib.util import (
     model_str,
@@ -85,7 +85,7 @@ def memory_session_entry(con, s: dict, cap: int = 0, files: bool = False, saniti
     return e
 
 
-def memory_subagent_ref(sessions, sid: str) -> dict:
+def memory_subagent_ref(sessions, sid: str, children_of: dict) -> dict:
     s = sessions[sid]
     return {
         "id": sid,
@@ -93,6 +93,10 @@ def memory_subagent_ref(sessions, sid: str) -> dict:
         "agent": s["agent"] or None,
         "directory": s["directory"],
         "created": ts_iso(s["time_created"]) or None,
+        "subagents": [
+            memory_subagent_ref(sessions, child, children_of)
+            for child in children_of.get(sid, [])
+        ],
     }
 
 
@@ -112,9 +116,12 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     with (out_dir / "corpus.jsonl").open("w", encoding="utf-8") as corpus:
         for rid in roots:
             root = sessions[rid]
-            subs = children_of.get(rid, [])
+            subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
             e = memory_session_entry(con, root, cap=args.cap or 0, files=args.files, sanitize_on=args.sanitize)
-            e["subagents"] = [memory_subagent_ref(sessions, s) for s in subs]
+            e["subagents"] = [
+                memory_subagent_ref(sessions, child, children_of)
+                for child in children_of.get(rid, [])
+            ]
             corpus.write(json.dumps(e, ensure_ascii=False) + "\n")
             corpus.flush()
             n_root += 1

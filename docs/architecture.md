@@ -74,7 +74,7 @@ guarantees seeing everything).
 
 | Product | Document |
 |---|---|
-| `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers), split into chronological ~1 MB files by default when needed. `full` is an accepted alias |
+| `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers), split near the 1 MB target between complete rendered messages by default when needed. A single oversized message stays whole. `full` is an accepted alias |
 | `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
 | `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
 | `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |
@@ -144,6 +144,11 @@ parent row still exists** (`all_session_ids()`); a session whose parent is gone 
 *orphan*, i.e. a root for every purpose here — nothing to hide behind, and a parent that
 can never be exported. If the flags leave nothing to export, the run dies with an
 explanatory message instead of writing an empty artifact.
+
+After inclusion, writers walk every selected descendant recursively. Transcript and
+faithful files for all levels live under the root's `subagents/` directory; the run
+index nests their links by `parent_id`, and memory nests child references in the root
+corpus record. A fork has no subagent `parent_id`, so it remains an independent root.
 
 In the menu this is the sessions picker's `subagents: shown ⇄ hidden` row
 (`get_sub_ids` in the generic picker), which **starts hidden** so browse and export both

@@ -304,7 +304,8 @@ PRODUCT_HELP: Dict[str, str] = {
         "the conversation in markdown: text + reasoning + tool calls +\n"
         "               patches + step markers (tool output is truncated by default:\n"
         "               use --tool-output full for the complete output). Long sessions\n"
-        "               are split into ~1 MB chronological files by default. For the raw\n"
+        "               split near 1 MB between whole messages by default; a large\n"
+        "               message stays intact. For the raw\n"
         "               session use the 'faithful' product (native JSON, lossless)."
     ),
     "memory": (

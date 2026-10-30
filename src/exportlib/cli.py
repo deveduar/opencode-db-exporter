@@ -32,6 +32,7 @@ from exportlib.db import (
     filter_subagent_policy,
     load_sessions,
     since_ms,
+    walk_subagents,
 )
 from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
@@ -546,12 +547,12 @@ def main() -> None:
     for c in children_of.values():
         c.sort(key=lambda k: sessions[k]["time_created"])
 
-    # The written set is predictable here (the same roots + children_of every
+    # The written set is predictable here (the same roots + recursive descendants every
     # product writes), so `.scope`/`.excluded` can be computed ONCE, before the
     # product branches, and handed to a product that writes its own metadata.
     written_ids = set(roots)
     for rid in roots:
-        written_ids.update(children_of.get(rid, []))
+        written_ids.update(sid for sid, _depth in walk_subagents(rid, children_of))
     scope, excluded = _scope_excluded(con, args, written_ids, db_ids)
 
     if args.profile == "memory":
@@ -571,14 +572,18 @@ def main() -> None:
     total_msgs = 0
     for root_id in roots:
         root = sessions[root_id]
-        subs = children_of.get(root_id, [])
+        sub_tree = list(walk_subagents(root_id, children_of))
+        subs = [sid for sid, _depth in sub_tree]
+        sub_depth = dict(sub_tree)
         rfolder = out_dir / f"{len(written) + 1:02d}-{safe_filename(root['title'] or root['slug'])}_{root_id[:8]}"
         rfolder.mkdir()
 
         stem = safe_filename(root['title'] or root['slug'])
         rfile = rfolder / f"{stem}.md"
+        message_sizes = []
         n_msgs, n_comp = write_transcript(
-            con, renderer, root, rfile, chunk=args.sub != "inline")
+            con, renderer, root, rfile, chunk=args.sub != "inline",
+            message_sizes=message_sizes)
         total_msgs += n_msgs
         total_comp += n_comp
         total_digest += root.get("digests") or 0
@@ -596,20 +601,26 @@ def main() -> None:
         elif args.sub == "inline":
             for sid_ in subs:
                 sub = sessions[sid_]
-                block_head = f"### Subagent: {sub['title'] or sub['slug']}  (`{sid_[:8]}`)\n\n"
-                m, c = append_transcript_inline(con, renderer, sub, rfile, block_head=block_head)
+                heading_level = min(2 + sub_depth[sid_], 6)
+                block_head = (
+                    f"{'#' * heading_level} Subagent: "
+                    f"{sub['title'] or sub['slug']}  (`{sid_[:8]}`)\n\n"
+                )
+                m, c = append_transcript_inline(
+                    con, renderer, sub, rfile, block_head=block_head,
+                    message_sizes=message_sizes)
                 total_msgs += m
                 total_comp += c
                 total_digest += sub.get("digests") or 0
             if renderer.profile == "transcript" and args.chunk_mb > 0:
-                chunk_markdown_file(rfile, args.chunk_mb, stem, root_id)
+                chunk_markdown_file(rfile, args.chunk_mb, stem, root_id, message_sizes)
 
         written.append((root, subs, rfolder))
 
     # ------- index -------
     index_path = out_dir / "index.md"
     write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
-                total_digest, n_backfilled, scope=scope)
+                total_digest, n_backfilled, scope=scope, children_of=children_of)
 
     # ------- metadata -------
     meta_sha = sha256_file(db_path)

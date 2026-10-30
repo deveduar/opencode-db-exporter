@@ -91,34 +91,46 @@ list` aggregates it as `transcript+memory`.
   index.md                       (bundle tie-in)                  also:  index.md
   transcript/index.md                                        (single product: one dir)
   transcript/metadata.json
-  transcript/<session>.md        subagents/<sub>_<id>.md  (per --sub layout)
+  transcript/<session>.md        subagents/<sub>_<id>.md  (per --sub layout;
+                                                          all nested descendants are included)
   transcript/<session>.parts/    chronological parts when a transcript exceeds chunk_mb
-    part-001.md ... part-NNN.md  each stays below the configured MB target
+    <session>-part-001.md ...    one file per whole rendered message group
   memory/index.md
   memory/metadata.json
   memory/corpus.jsonl
   faithful/index.md              the lossless JSON product
   faithful/metadata.json
   faithful/01-<title>_<id>/<title>.json
-  faithful/01-<title>_<id>/subagents/<sub>_<id>.json
+  faithful/01-<title>_<id>/subagents/<descendant>_<id>.json
+                                 (all descendants; parent_id keeps hierarchy)
 ```
 
 The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
 old `metadatos.json` name are ignored by every reader (`exports list`/`view`,
 menu, the shrink discard-link).
 
-Long `transcript` Markdown is split by the rendered file size, after role and
-content filters (`--role`, `--no-reasoning`, `--patch`, tool-output mode, and
-related flags) have been applied. The default target is 1 MB per file; set
+Long `transcript` Markdown is split near the configured rendered file size,
+after role and content filters (`--role`, `--no-reasoning`, `--patch`,
+tool-output mode, and related flags) have been applied. Parts split only between
+complete rendered messages, so a user prompt or assistant response is never
+cut between files. The default target is 1 MB per file; set
 `OCED_TRANSCRIPT_CHUNK_MB` or the transcript preset key `chunk_mb` to another
 non-negative integer. `0` keeps one Markdown file. Explicit CLI `--chunk-mb`
 overrides both; an environment value overrides a preset. Parts are written in
 chronological order and the original `<session>.md` path becomes a small landing
-page linking to the newest part and the complete parts index. Each chunk stays
-within the target size, including continuation markers; long Markdown lines may
-be split at UTF-8 character boundaries and fenced code is closed and reopened
-across files. `metadata.json.artifacts` lists the landing page, parts, and the
-per-session parts index.
+page linking to the newest part and the complete parts index. A single message
+larger than the target stays intact and can make its part exceed the target.
+Continuation files include the session title and ID in their heading, while
+part filenames include the session title. `metadata.json.artifacts` lists the
+landing page, parts, and the per-session parts index.
+
+Subagent relationships are traversed recursively. Transcript and faithful
+exports place each descendant session in the root's `subagents/` directory;
+the run index displays the parent-child hierarchy, and each session record keeps
+its `parent_id`. Forks have no subagent parent relation and remain separate root
+sessions with their own numbered session directory. Multiple root sessions can
+belong to the same OpenCode project or working directory; they are still
+exported independently by session ID.
 
 ### `index.md` (human view of a run)
 
@@ -288,6 +300,13 @@ everywhere (it has no parent to hide behind, and its parent can never be
 exported). The two inclusion flags are applied to the selected set BEFORE the
 hierarchy is resolved, so `sessions`, the index and the printed counts always
 describe the same set:
+
+After inclusion, all selected descendants are walked recursively. Transcript and
+faithful exports write every descendant session under the root's `subagents/`
+folder, and the run index indents links by parent-child depth. Memory nests child
+references recursively inside each root record. Forks have no subagent `parent_id`
+and therefore stay independent root sessions.
+
 | Flag | Effect |
 |---|---|
 | `--no-subagents` | every subagent is dropped (all products); orphans stay |
@@ -339,7 +358,8 @@ file order is the only record order. Key shape (`exportlib/memory.py`,
             "done": ["…"]},             // "open" = in-flight list, "done" = completion record
   "files": ["src/a.py"],                 // R?, only with --files
   "subagents": [{"id": "ses_…", "title": "…", "agent": "…",
-                 "directory": "…", "created": "…"}]    // R? when present
+                 "directory": "…", "created": "…", "subagents": []}]
+                                                       // recursive child refs
 }
 ```
 

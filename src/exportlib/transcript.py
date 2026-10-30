@@ -13,14 +13,21 @@ def _transcript_msgs(renderer, con, session: dict):
         yield mdata, parts
 
 
-def write_transcript(con, renderer, session: dict, fpath, chunk=True):
+def _record_message(f, rendered: str, message_sizes: list[int]) -> None:
+    message_text = rendered + "\n\n---\n\n"
+    f.write(message_text)
+    message_sizes.append(len(message_text.encode("utf-8")))
+
+
+def write_transcript(con, renderer, session: dict, fpath, chunk=True, message_sizes=None):
     title = session["title"] or session["slug"]
     msgs = _transcript_msgs(renderer, con, session)
     n_comp = session["compactions"]
     n_digest = session.get("digests") or 0
     n_msgs = count_messages(con, session["id"], renderer.profile, renderer.role)
     model = model_str(session["model"])
-    with fpath.open("w", encoding="utf-8") as f:
+    message_sizes = message_sizes if message_sizes is not None else []
+    with fpath.open("w", encoding="utf-8", newline="") as f:
         f.write(f"# {title}\n\n")
         f.write(f"- **Session ID:** `{session['id']}`\n")
         f.write(f"- **Agent:** `{session['agent'] or '?'}`\n")
@@ -43,23 +50,30 @@ def write_transcript(con, renderer, session: dict, fpath, chunk=True):
             diffs_html = renderer.summary_diffs(mdata) if renderer.diffs else ""
             rendered = renderer.render_message(mdata, parts, diffs_html)
             if rendered:
-                f.write(rendered + "\n\n---\n\n")
+                _record_message(f, rendered, message_sizes)
     chunk_mb = getattr(renderer, "chunk_mb", 0)
     if chunk and renderer.profile == "transcript" and chunk_mb > 0:
-        chunk_markdown_file(fpath, chunk_mb, title, session["id"])
+        chunk_markdown_file(fpath, chunk_mb, title, session["id"], message_sizes)
     return n_msgs, n_comp
 
 
-def append_transcript_inline(con, renderer, session: dict, fpath, block_head: str):
+def append_transcript_inline(
+    con, renderer, session: dict, fpath, block_head: str, message_sizes=None
+):
     msgs = _transcript_msgs(renderer, con, session)
     n_msgs = count_messages(con, session["id"], renderer.profile, renderer.role)
-    with fpath.open("a", encoding="utf-8") as f:
-        f.write("\n\n---\n\n")
-        f.write(block_head)
-        f.write(f"*Subagent of `{session.get('id','')}` — agent `{session.get('agent') or '?'}`*\n\n")
+    with fpath.open("a", encoding="utf-8", newline="") as f:
+        prefix = "\n\n---\n\n" + block_head
+        prefix += (
+            f"*Subagent of `{session.get('parent_id') or '?'}` — "
+            f"agent `{session.get('agent') or '?'}`*\n\n"
+        )
+        first_rendered = True
+        sizes = message_sizes if message_sizes is not None else []
         for mdata, parts in msgs:
             diffs_html = renderer.summary_diffs(mdata) if renderer.diffs else ""
             rendered = renderer.render_message(mdata, parts, diffs_html)
             if rendered:
-                f.write(rendered + "\n\n---\n\n")
+                _record_message(f, (prefix if first_rendered else "") + rendered, sizes)
+                first_rendered = False
     return n_msgs, session["compactions"]

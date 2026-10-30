@@ -339,7 +339,7 @@ def _session_tree(product: str, cfg: dict) -> dict:
         return {
             "01-<title>_<id>": {
                 "<title>.json": None,
-                "subagents": {"<sub>_<id>.json": None},
+                "subagents": {"<descendant>_<id>.json": None},
             },
             "index.md": None,
             "metadata.json": None,
@@ -348,11 +348,11 @@ def _session_tree(product: str, cfg: dict) -> dict:
     session: dict = {"<title>.md": None}
     if product == "transcript" and cfg.get("chunk_mb", 1) > 0:
         session["<title>.parts (only when over limit)"] = {
-            "part-NNN.md": None,
+            "<title>-part-NNN.md": None,
             "index.md": None,
         }
     if cfg.get("sub", "separate") == "separate":
-        session["subagents"] = {"<sub>_<id>.md": None}
+        session["subagents"] = {"<descendant>_<id>.md": None}
     return {"01-<title>_<id>": session, "index.md": None, "metadata.json": None}
 
 

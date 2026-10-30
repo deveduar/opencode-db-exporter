@@ -152,6 +152,19 @@ def all_session_ids(con: sqlite3.Connection) -> set[str]:
     return {r[0] for r in con.execute("SELECT id FROM session")}
 
 
+def walk_subagents(parent_id: str, children_of: dict):
+    """Yield descendants as (session_id, depth), in chronological tree order."""
+    stack = [(sid, 1) for sid in reversed(children_of.get(parent_id, []))]
+    seen = {parent_id}
+    while stack:
+        sid, depth = stack.pop()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        yield sid, depth
+        stack.extend((child, depth + 1) for child in reversed(children_of.get(sid, [])))
+
+
 def filter_subagent_policy(sessions: dict, db_ids: set,
                            no_subagents: bool = False,
                            no_orphan_subagents: bool = False,

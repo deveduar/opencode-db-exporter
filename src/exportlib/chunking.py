@@ -1,77 +1,65 @@
-"""Split oversized transcript Markdown into ordered, size-bounded files."""
+"""Split oversized transcripts at complete rendered-message boundaries."""
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
 
 
-_FENCE = re.compile(rb"^\s*(`{3,}|~{3,})(.*?)(?:\r?\n)?$")
-_MESSAGE_DATE = re.compile(r"^## .+  · (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s*$")
+def chunk_markdown_file(
+    path: Path,
+    chunk_mb: int,
+    title: str,
+    session_id: str,
+    message_sizes: list[int],
+) -> list[dict]:
+    """Split a transcript between messages, keeping each message intact.
 
-
-def _fence_token(fence: bytes) -> bytes:
-    match = re.match(rb"(`+|~+)", fence)
-    return match.group(1) if match else fence
-
-
-def _utf8_end(data: bytes, start: int, limit: int) -> int:
-    """Choose a byte boundary no larger than limit without splitting UTF-8."""
-    end = min(len(data), start + limit)
-    while end > start and end < len(data) and (data[end] & 0xC0) == 0x80:
-        end -= 1
-    return end
-
-
-def chunk_markdown_file(path: Path, chunk_mb: int, title: str, session_id: str) -> list[dict]:
-    """Chunk an already-rendered transcript, preserving source order and text.
-
-    Small files keep their historical flat path. For oversized files, the
-    original path becomes a small entry point and ``<stem>.parts/`` contains
-    chronological chunks plus an index that links the newest chunk first.
+    The requested size is a target: a single message larger than the target is
+    kept whole in its own part. The source Markdown already contains the exact
+    rendered messages, and ``message_sizes`` records their UTF-8 byte lengths.
     """
     limit = int(chunk_mb) * 1_000_000
-    if limit <= 0 or path.stat().st_size <= limit:
+    file_size = path.stat().st_size
+    if limit <= 0 or file_size <= limit or not message_sizes:
         return []
 
+    message_bytes = sum(message_sizes)
+    if message_bytes > file_size:
+        raise ValueError("rendered message sizes exceed transcript size")
+    preamble_size = file_size - message_bytes
     tmp = Path(tempfile.mkdtemp(prefix=f".{path.stem}.parts-", dir=path.parent))
+    target = path.with_name(f"{path.stem}.parts")
+    target_created = False
+    landing = None
     parts: list[dict] = []
-    fence: bytes | None = None
     out = None
     size = 0
     part_start = ""
     part_end = ""
-    active_date = ""
-    target = path.with_name(f"{path.stem}.parts")
-    target_created = False
-    landing = None
+    has_message = False
+    source = None
 
     def start_part() -> None:
-        nonlocal out, size, part_start, part_end
+        nonlocal out, size, part_start, part_end, has_message
         number = len(parts) + 1
-        out = (tmp / f"part-{number:03d}.md").open("wb")
+        out = (tmp / f"{path.stem}-part-{number:03d}.md").open("wb")
         size = 0
-        part_start = active_date
-        part_end = active_date
+        part_start = ""
+        part_end = ""
+        has_message = False
         if number > 1:
-            header = f"<!-- Continued transcript for session {session_id}; chronological order. -->\n\n".encode()
-            out.write(header)
-            size += len(header)
-            if fence:
-                opening = fence + b"\n"
-                out.write(opening)
-                size += len(opening)
+            heading = f"# {title} — part {number:03d}\n\n"
+            session = f"- **Session ID:** `{session_id}`\n\n"
+            continuation = (heading + session).encode("utf-8")
+            out.write(continuation)
+            size += len(continuation)
 
     def finish_part() -> None:
         nonlocal out, size
         if out is None:
             return
-        if fence:
-            closing = b"\n" + _fence_token(fence) + b"\n"
-            out.write(closing)
-            size += len(closing)
         out.close()
-        part_path = tmp / f"part-{len(parts) + 1:03d}.md"
+        part_path = tmp / f"{path.stem}-part-{len(parts) + 1:03d}.md"
         parts.append({
             "name": part_path.name,
             "bytes": size,
@@ -80,62 +68,48 @@ def chunk_markdown_file(path: Path, chunk_mb: int, title: str, session_id: str) 
         })
         out = None
 
-    def split_part() -> None:
-        finish_part()
-        start_part()
-
     try:
-        start_part()
-        with path.open("r", encoding="utf-8", newline="") as source:
-            for line in source:
-                match = _MESSAGE_DATE.match(line.rstrip("\r\n"))
-                line_date = match.group(1) if match else ""
-                if match:
-                    active_date = line_date
-
-                data = line.encode("utf-8")
-                offset = 0
-                while offset < len(data):
-                    closing_size = len(b"\n" + _fence_token(fence) + b"\n") if fence else 0
-                    available = limit - size - closing_size
-                    if available <= 0:
-                        split_part()
-                        continue
-                    end = _utf8_end(data, offset, available)
-                    if end == offset:
-                        split_part()
-                        continue
-                    piece = data[offset:end]
-                    out.write(piece)
-                    size += len(piece)
-                    offset = end
-                    if offset < len(data):
-                        split_part()
-
-                fence_match = _FENCE.match(data)
-                if fence_match:
-                    token = fence_match.group(1)
-                    if fence is None:
-                        fence = token + fence_match.group(2)
-                    elif (
-                        not fence_match.group(2).strip()
-                        and token[:1] == fence[:1]
-                        and len(token) >= len(_fence_token(fence))
-                    ):
-                        fence = None
-                if line_date:
-                    if not part_start:
-                        part_start = line_date
-                    part_end = line_date
-        finish_part()
-
         if target.exists():
             raise FileExistsError(f"chunk directory already exists: {target}")
+
+        source = path.open("rb")
+        start_part()
+        preamble = source.read(preamble_size)
+        out.write(preamble)
+        size += len(preamble)
+
+        for message_size in message_sizes:
+            message = source.read(message_size)
+            if len(message) != message_size:
+                raise ValueError("transcript ended while reading a rendered message")
+            if has_message and size + message_size > limit:
+                finish_part()
+                start_part()
+            out.write(message)
+            size += message_size
+            has_message = True
+            message_heading = next(
+                (line.decode("utf-8", errors="replace")
+                 for line in message.splitlines() if line.startswith(b"## ")),
+                "",
+            )
+            if "  ·  " in message_heading:
+                date = message_heading.rsplit("  ·  ", 1)[-1].strip()
+                if not part_start:
+                    part_start = date
+                part_end = date
+
+        if source.read(1):
+            raise ValueError("rendered message sizes do not cover the transcript")
+        finish_part()
+        source.close()
+        source = None
+
         index_lines = [
             f"# {title} — transcript parts",
             "",
             f"- **Session ID:** `{session_id}`",
-            f"- **Target size:** {chunk_mb} MB per file",
+            f"- **Target size:** {chunk_mb} MB per file; individual messages stay whole",
             "- **Order:** files are chronological; start with the newest part below.",
             "",
             "## Newest first",
@@ -159,7 +133,7 @@ def chunk_markdown_file(path: Path, chunk_mb: int, title: str, session_id: str) 
         landing.write_text(
             f"# {title} — chunked transcript\n\n"
             f"- **Session ID:** `{session_id}`\n"
-            f"- **Chunks:** {len(parts)} · target {chunk_mb} MB each\n\n"
+            f"- **Chunks:** {len(parts)} · target {chunk_mb} MB; messages stay whole\n\n"
             f"**Latest context:** [{latest['name']}]({target.name}/{latest['name']})\n\n"
             f"[All parts, newest first]({target.name}/index.md)\n",
             encoding="utf-8",
@@ -171,6 +145,8 @@ def chunk_markdown_file(path: Path, chunk_mb: int, title: str, session_id: str) 
     except BaseException:
         if out is not None:
             out.close()
+        if source is not None:
+            source.close()
         if target_created:
             shutil.rmtree(target, ignore_errors=True)
         if landing is not None:
