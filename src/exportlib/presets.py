@@ -14,6 +14,7 @@
 # (e.g. --filter, --sessions, --cap) win over the preset values.
 # The menu reads the same file for its preset rows. Keys with no value = default.
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -35,6 +36,8 @@ _PRODUCTS = PRODUCTS
 _PRODUCT_FLAG_KEYS = {k: v for k, v in BUNDLE_PRODUCT_KEYS.items()}
 _PRESET_KEYS_CHOICES = {f.name: f.choices for f in FLAGS if f.flag_type == "choice"}
 _PRESET_KEYS_BOOL = [f.name for f in FLAGS if f.flag_type == "bool"]
+_PRESET_KEYS_INT = [f.name for f in FLAGS if f.name in ("cap", "chunk_mb")]
+_FLAG_ENV = {f.name: f.env_var for f in FLAGS if f.env_var}
 _PRESET_KEYS = SINGLE_PRESET_KEYS
 _PRESET_KEYS_BUNDLE = BUNDLE_PRESET_KEYS
 
@@ -63,6 +66,12 @@ def _flag(k: str) -> str:
 
 def flag_in_argv(flag: str) -> bool:
     return any(a == flag or a.startswith(flag + "=") for a in sys.argv)
+
+
+def flag_in_env(name: str) -> bool:
+    """Whether an environment setting explicitly overrides a preset value."""
+    env_var = _FLAG_ENV.get(name)
+    return bool(env_var and env_var in os.environ)
 
 
 def preset_selection(name) -> dict | None:
@@ -121,9 +130,9 @@ def _validate_value(name: str, k: str, v) -> None:
     elif k in _PRESET_KEYS_BOOL:
         if not isinstance(v, bool):
             die(f"preset '{name}': '{k}' must be true/false (got {v!r})")
-    elif k == "cap":
+    elif k in _PRESET_KEYS_INT:
         if isinstance(v, bool) or not isinstance(v, int) or v < 0:
-            die(f"preset '{name}': 'cap' must be a non-negative integer (got {v!r})")
+            die(f"preset '{name}': '{k}' must be a non-negative integer (got {v!r})")
 
 
 def _validate_description(name: str, pdata: dict) -> None:
@@ -170,14 +179,16 @@ def apply_preset(args, name: str, pdata: dict) -> None:
             setattr(args, k, pdata[k])
     for k in _PRESET_KEYS_BOOL:
         if k in pdata:
-            if flag_in_argv("--" + _flag(k)):
+            if flag_in_argv("--" + _flag(k)) or flag_in_env(k):
                 continue
             _validate_value(name, k, pdata[k])
             setattr(args, k, pdata[k])
-    if "cap" in pdata:
-        if not flag_in_argv("--cap"):
-            _validate_value(name, "cap", pdata["cap"])
-            args.cap = pdata["cap"]
+    for k in _PRESET_KEYS_INT:
+        if k in pdata:
+            if flag_in_argv("--" + _flag(k)) or flag_in_env(k):
+                continue
+            _validate_value(name, k, pdata[k])
+            setattr(args, k, pdata[k])
 
 
 def apply_bundle(args, name: str, pdata: dict) -> None:
@@ -238,8 +249,9 @@ def bundle_child_argv(args, product: str) -> list[str]:
     for k in _PRESET_KEYS_BOOL:
         if flag_in_argv("--" + _flag(k)):
             argv.append("--" + _flag(k))
-    if flag_in_argv("--cap"):
-        argv.append(f"--cap={args.cap}")
+    for k in _PRESET_KEYS_INT:
+        if flag_in_argv("--" + _flag(k)):
+            argv.append(f"--{_flag(k)}={getattr(args, k)}")
     if flag_in_argv("--out"):
         argv.append(f"--out={args.out}")
     # Run-level metadata must match across every product in the bundle, just as
@@ -254,7 +266,7 @@ def bundle_child_argv(args, product: str) -> list[str]:
         argv += ["--notes-kind", args.notes_kind]
     cfg = args.bundle.get(product, {})
     for k, v in cfg.items():
-        if flag_in_argv("--" + _flag(k)):
+        if flag_in_argv("--" + _flag(k)) or flag_in_env(k):
             continue
         if isinstance(v, bool):
             if v:

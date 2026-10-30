@@ -11,6 +11,7 @@
 # dependents manually until generator exists).
 # To add a new product: add to PRODUCTS list and register its flags.
 
+import os
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Literal
 
@@ -25,6 +26,7 @@ class Flag:
     default: Any
     choices: Optional[List[str]] = None
     min_value: Optional[int] = None
+    env_var: Optional[str] = None
     description: str = ""
     cli_help: str = ""
 
@@ -55,6 +57,8 @@ class Flag:
     def argparse_args(self) -> dict:
         """Return kwargs for argparse.add_argument()."""
         args = {"help": self.cli_help or self.description}
+        if self.env_var and self.env_var in os.environ:
+            args["default"] = os.environ[self.env_var]
         if self.flag_type == "bool":
             args["action"] = "store_true"
         elif self.flag_type == "choice":
@@ -62,7 +66,7 @@ class Flag:
             args["default"] = self.default
         elif self.flag_type == "int":
             args["type"] = int
-            args["default"] = self.default
+            args.setdefault("default", self.default)
         elif self.flag_type == "string":
             args["default"] = self.default
         return args
@@ -197,6 +201,16 @@ FLAGS: list[Flag] = [
         cli_help="Tool output char limit (0 = unlimited)"
     ),
     Flag(
+        name="chunk_mb",
+        flag_type="int",
+        products=["transcript"],
+        default=1,
+        min_value=0,
+        env_var="OCED_TRANSCRIPT_CHUNK_MB",
+        description="Target MB per transcript Markdown file (default 1; 0 = one file; env: OCED_TRANSCRIPT_CHUNK_MB)",
+        cli_help="Transcript chunk target in MB (default 1; 0 = one file)"
+    ),
+    Flag(
         name="patch",
         flag_type="choice",
         products=["transcript"],
@@ -289,7 +303,8 @@ PRODUCT_HELP: Dict[str, str] = {
     "transcript": (
         "the conversation in markdown: text + reasoning + tool calls +\n"
         "               patches + step markers (tool output is truncated by default:\n"
-        "               use --tool-output full for the complete output). For the raw\n"
+        "               use --tool-output full for the complete output). Long sessions\n"
+        "               are split into ~1 MB chronological files by default. For the raw\n"
         "               session use the 'faithful' product (native JSON, lossless)."
     ),
     "memory": (
@@ -343,6 +358,10 @@ FLAG_HELP: Dict[str, str] = {
     "tool_output": (
         "  --tool-output full|truncated|omit   tool output verbosity (default truncated;\n"
         "                       applies to transcripts/digest)"
+    ),
+    "chunk_mb": (
+        "  --chunk-mb N       split large transcript Markdown into chronological parts\n"
+        "                     (default 1 MB; 0 = one file; OCED_TRANSCRIPT_CHUNK_MB)"
     ),
     "patch": "  --patch full|omit   include patch parts (default full; transcripts only)",
     "mark_compactions": "  --mark-compactions   include compaction marker paragraphs (transcripts only)",
@@ -429,6 +448,8 @@ def effective_flags(args) -> dict:
     for f in FLAGS:
         if f.name in skip:
             continue
+        if f.name == "chunk_mb" and getattr(args, "profile", None) != "transcript":
+            continue
         v = getattr(args, f.name, None)
         out[f.name] = bool(v) if f.flag_type == "bool" else v
     return out
@@ -468,6 +489,7 @@ BUNDLE_PRESET_KEYS = ["products", "filter", "sessions", PRESET_DESCRIPTION_KEY]
 # ---- Human-readable annotation hints (menu.confirm/annotate) ----
 # value-aware phrases per key=value pair (CSV "key=value,key=value").
 ANNOTATE_HINTS: Dict[str, str] = {
+    "chunk_mb=0": "single Markdown file per session",
     "tool_output=full": "full tool outputs",
     "tool_output=truncated": "truncated tool outputs",
     "tool_output=omit": "no tool outputs",

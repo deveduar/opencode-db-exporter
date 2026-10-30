@@ -92,6 +92,8 @@ list` aggregates it as `transcript+memory`.
   transcript/index.md                                        (single product: one dir)
   transcript/metadata.json
   transcript/<session>.md        subagents/<sub>_<id>.md  (per --sub layout)
+  transcript/<session>.parts/    chronological parts when a transcript exceeds chunk_mb
+    part-001.md ... part-NNN.md  each stays below the configured MB target
   memory/index.md
   memory/metadata.json
   memory/corpus.jsonl
@@ -104,6 +106,19 @@ list` aggregates it as `transcript+memory`.
 The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
 old `metadatos.json` name are ignored by every reader (`exports list`/`view`,
 menu, the shrink discard-link).
+
+Long `transcript` Markdown is split by the rendered file size, after role and
+content filters (`--role`, `--no-reasoning`, `--patch`, tool-output mode, and
+related flags) have been applied. The default target is 1 MB per file; set
+`OCED_TRANSCRIPT_CHUNK_MB` or the transcript preset key `chunk_mb` to another
+non-negative integer. `0` keeps one Markdown file. Explicit CLI `--chunk-mb`
+overrides both; an environment value overrides a preset. Parts are written in
+chronological order and the original `<session>.md` path becomes a small landing
+page linking to the newest part and the complete parts index. Each chunk stays
+within the target size, including continuation markers; long Markdown lines may
+be split at UTF-8 character boundaries and fenced code is closed and reopened
+across files. `metadata.json.artifacts` lists the landing page, parts, and the
+per-session parts index.
 
 ### `index.md` (human view of a run)
 

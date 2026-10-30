@@ -9,6 +9,7 @@
 | `tool_output` | string | `full` \| `truncated` \| `omit` | transcript |
 | `tool_input_limit` | int | ≥ 0 | transcript |
 | `tool_output_limit` | int | ≥ 0 | transcript |
+| `chunk_mb` | int | ≥ 0 | transcript |
 | `patch` | string | `full` \| `omit` | transcript |
 | `no_reasoning` | bool | — | transcript, digest |
 | `mark_compactions` | bool | — | transcript, digest |

@@ -1,23 +1,24 @@
 # Transcript / digest writers (markdown files).
-from exportlib.db import load_messages
+from exportlib.chunking import chunk_markdown_file
+from exportlib.db import count_messages, iter_messages
 from exportlib.util import model_str, ts_iso
 
 
-def _transcript_msgs(renderer, con, session: dict) -> list:
-    msgs = load_messages(con, session["id"])
-    if renderer.profile == "digest":
-        msgs = [(m, p) for (m, p) in msgs if m.get("mode") == "compaction"]
-    if renderer.role != "all":
-        msgs = [(m, p) for (m, p) in msgs if renderer.include_message(m)]
-    return msgs
+def _transcript_msgs(renderer, con, session: dict):
+    for mdata, parts in iter_messages(con, session["id"]):
+        if renderer.profile == "digest" and mdata.get("mode") != "compaction":
+            continue
+        if renderer.role != "all" and not renderer.include_message(mdata):
+            continue
+        yield mdata, parts
 
 
-def write_transcript(con, renderer, session: dict, fpath):
+def write_transcript(con, renderer, session: dict, fpath, chunk=True):
     title = session["title"] or session["slug"]
     msgs = _transcript_msgs(renderer, con, session)
     n_comp = session["compactions"]
     n_digest = session.get("digests") or 0
-    n_msgs = len(msgs)
+    n_msgs = count_messages(con, session["id"], renderer.profile, renderer.role)
     model = model_str(session["model"])
     with fpath.open("w", encoding="utf-8") as f:
         f.write(f"# {title}\n\n")
@@ -43,11 +44,15 @@ def write_transcript(con, renderer, session: dict, fpath):
             rendered = renderer.render_message(mdata, parts, diffs_html)
             if rendered:
                 f.write(rendered + "\n\n---\n\n")
+    chunk_mb = getattr(renderer, "chunk_mb", 0)
+    if chunk and renderer.profile == "transcript" and chunk_mb > 0:
+        chunk_markdown_file(fpath, chunk_mb, title, session["id"])
     return n_msgs, n_comp
 
 
 def append_transcript_inline(con, renderer, session: dict, fpath, block_head: str):
     msgs = _transcript_msgs(renderer, con, session)
+    n_msgs = count_messages(con, session["id"], renderer.profile, renderer.role)
     with fpath.open("a", encoding="utf-8") as f:
         f.write("\n\n---\n\n")
         f.write(block_head)
@@ -57,4 +62,4 @@ def append_transcript_inline(con, renderer, session: dict, fpath, block_head: st
             rendered = renderer.render_message(mdata, parts, diffs_html)
             if rendered:
                 f.write(rendered + "\n\n---\n\n")
-    return len(msgs), session["compactions"]
+    return n_msgs, session["compactions"]

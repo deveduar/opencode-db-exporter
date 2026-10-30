@@ -21,6 +21,7 @@ class Renderer:
         self.role = args.role
         self.reasoning = not args.no_reasoning
         self.sanitize = args.sanitize
+        self.chunk_mb = getattr(args, "chunk_mb", 1)
 
     def w(self, s: str) -> str:
         return sanitize(s) if self.sanitize else s

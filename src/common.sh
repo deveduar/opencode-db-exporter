@@ -34,7 +34,8 @@ OCED_CONF="${OCED_CONF:-$(o_cfg_default opencode-db.conf)}"
 # Optional path config (no secrets): $OCED_CONF (permissions 600; the repo-shipped
 # portable conf is left as-is so git never sees a 644 -> 600 mode change per run).
 # Variables: OPENCODE_DB, OCED_OUT, OCED_BACKUP_DIR, OCED_COMPRESS, OCED_LOG,
-# OCED_TZ (display-only: the menu renders picker-row dates in local time).
+# OCED_TZ (display-only: the menu renders picker-row dates in local time),
+# OCED_TRANSCRIPT_CHUNK_MB (the transcript file-size target; 0 disables splitting).
 load_conf() {
     [ -f "$OCED_CONF" ] || return 0
     [ "$OCED_PORTABLE" = 1 ] || chmod 600 "$OCED_CONF" 2>/dev/null || true
@@ -43,7 +44,7 @@ load_conf() {
     # cannot clobber them (env wins over conf).
     local v
     local -A conf_env_set=() conf_env_val=()
-    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS OCED_SHRINK_DISCARD_EXPORT_PROFILE OCED_TZ; do
+    for v in OPENCODE_DB OCED_OUT OCED_BACKUP_DIR OCED_COMPRESS OCED_LOG OCED_ACTIVITY_LOG OCED_FROM_BACKUP OCED_PRESETS OCED_SHRINK_PRESETS OCED_SHRINK_DISCARD_EXPORT_PROFILE OCED_TRANSCRIPT_CHUNK_MB OCED_TZ; do
         if [ "${!v+x}" = x ]; then
             conf_env_set[$v]=1
             conf_env_val[$v]="${!v}"

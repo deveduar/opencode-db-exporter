@@ -24,6 +24,7 @@ if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)
 
 from exportlib import TOOL_VERSION
+from exportlib.chunking import chunk_markdown_file
 from exportlib.config import default_bkp_dir, default_db, default_out, default_presets
 from exportlib.db import (
     all_session_ids,
@@ -430,6 +431,9 @@ def main() -> None:
     if args.explain:
         sys.exit(_explain())
 
+    if args.chunk_mb < 0:
+        ap.error("--chunk-mb must be non-negative (0 disables chunking)")
+
     profile_arg = args.profile
     resolve_profile(args, ap)
 
@@ -573,7 +577,8 @@ def main() -> None:
 
         stem = safe_filename(root['title'] or root['slug'])
         rfile = rfolder / f"{stem}.md"
-        n_msgs, n_comp = write_transcript(con, renderer, root, rfile)
+        n_msgs, n_comp = write_transcript(
+            con, renderer, root, rfile, chunk=args.sub != "inline")
         total_msgs += n_msgs
         total_comp += n_comp
         total_digest += root.get("digests") or 0
@@ -596,6 +601,8 @@ def main() -> None:
                 total_msgs += m
                 total_comp += c
                 total_digest += sub.get("digests") or 0
+            if renderer.profile == "transcript" and args.chunk_mb > 0:
+                chunk_markdown_file(rfile, args.chunk_mb, stem, root_id)
 
         written.append((root, subs, rfolder))
 

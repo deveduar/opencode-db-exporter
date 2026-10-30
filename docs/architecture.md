@@ -74,7 +74,7 @@ guarantees seeing everything).
 
 | Product | Document |
 |---|---|
-| `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers). `full` is an accepted alias |
+| `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers), split into chronological ~1 MB files by default when needed. `full` is an accepted alias |
 | `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
 | `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
 | `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |

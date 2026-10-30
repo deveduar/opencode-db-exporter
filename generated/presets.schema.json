@@ -101,6 +101,11 @@
       "description": "Max chars of tool output to show (0 = unlimited)",
       "minimum": 0
     },
+    "flagChunk_mb": {
+      "type": "integer",
+      "description": "Target MB per transcript Markdown file (default 1; 0 = one file; env: OCED_TRANSCRIPT_CHUNK_MB)",
+      "minimum": 0
+    },
     "flagPatch": {
       "type": "string",
       "enum": [
@@ -186,6 +191,9 @@
         },
         "tool_output_limit": {
           "$ref": "#/definitions/flagTool_output_limit"
+        },
+        "chunk_mb": {
+          "$ref": "#/definitions/flagChunk_mb"
         },
         "patch": {
           "$ref": "#/definitions/flagPatch"
@@ -280,6 +288,9 @@
             "tool_output_limit": {
               "$ref": "#/definitions/flagTool_output_limit"
             },
+            "chunk_mb": {
+              "$ref": "#/definitions/flagChunk_mb"
+            },
             "patch": {
               "$ref": "#/definitions/flagPatch"
             },
@@ -359,6 +370,9 @@
                     },
                     "tool_output_limit": {
                       "$ref": "#/definitions/flagTool_output_limit"
+                    },
+                    "chunk_mb": {
+                      "$ref": "#/definitions/flagChunk_mb"
                     },
                     "patch": {
                       "$ref": "#/definitions/flagPatch"

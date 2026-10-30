@@ -222,10 +222,27 @@ def load_effective_scope(meta: dict, con: sqlite3.Connection,
 
 def load_messages(con: sqlite3.Connection, sid: str):
     """-> list[(mdata, parts)] with raw part dicts."""
+    return list(iter_messages(con, sid))
+
+
+def count_messages(con: sqlite3.Connection, sid: str, profile: str, role: str) -> int:
+    """Count messages selected by the transcript-level profile and role filters."""
+    clauses = ["session_id=?"]
+    params = [sid]
+    if profile == "digest":
+        clauses.append("json_extract(data, '$.mode')='compaction'")
+    if role != "all":
+        clauses.append("json_extract(data, '$.role')=?")
+        params.append(role)
+    query = "SELECT count(*) FROM message WHERE " + " AND ".join(clauses)
+    return int(con.execute(query, params).fetchone()[0])
+
+
+def iter_messages(con: sqlite3.Connection, sid: str):
+    """Yield messages in creation order without retaining the whole session."""
     msgs = con.execute(
         "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created", (sid,)
-    ).fetchall()
-    out = []
+    )
     for m in msgs:
         mdata = json.loads(m["data"])
         parts = [
@@ -235,8 +252,7 @@ def load_messages(con: sqlite3.Connection, sid: str):
                 (m["id"],),
             )
         ]
-        out.append((mdata, parts))
-    return out
+        yield mdata, parts
 
 
 def load_faithful(con: sqlite3.Connection, sid: str):
