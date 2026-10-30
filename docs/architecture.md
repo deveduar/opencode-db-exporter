@@ -79,6 +79,13 @@ guarantees seeing everything).
 | `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
 | `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |
 
+The Markdown products do not print the internal `step-start`/`step-finish` parts.
+They remain available in `faithful`, and `step-finish` still feeds token/cost
+backfill. After display filters run, a message with no visible body is omitted
+with its heading and timestamp. Messages are separated by headings and spacing,
+not a horizontal rule after every message; `--mark-compactions` keeps its
+separate, intentional compaction annotation.
+
 There is no `all` meta-profile; "all sessions" means selecting ALL in the picker (or an
 empty `--filter`). `--role` is a flag (`all|user|assistant`), not a preset; `memory`
 ignores it (documented in its `index.md`). The `faithful` product ignores every

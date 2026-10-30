@@ -34,6 +34,8 @@ class Renderer:
     def include_part(self, ptype: str) -> bool:
         if self.profile == "digest":
             return ptype == "text"
+        if ptype in ("step-start", "step-finish"):
+            return False
         # transcript
         if ptype == "tool":
             return self.tool_output != "omit"
@@ -92,8 +94,6 @@ class Renderer:
             if self.sanitize:
                 block = sanitize(block)
             out.append("```json\n" + block.rstrip() + "\n```")
-        elif t in ("step-start", "step-finish"):
-            out.append(f"<!-- {t} -->")
         elif t == "compaction":
             tail = p.get("tail_start_id", "")
             auto = p.get("auto", True)

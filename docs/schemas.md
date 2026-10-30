@@ -124,6 +124,13 @@ Continuation files include the session title and ID in their heading, while
 part filenames include the session title. `metadata.json.artifacts` lists the
 landing page, parts, and the per-session parts index.
 
+Markdown omits the internal `step-start` and `step-finish` parts, as well as any
+message left with no visible content after filtering. Its heading/timestamp is
+omitted with that empty message. These parts remain in the lossless `faithful`
+JSON, and `step-finish` continues to supply token/cost backfill. Visible messages
+are separated by whitespace; the transcript does not add a horizontal rule
+after every message.
+
 Subagent relationships are traversed recursively. Transcript and faithful
 exports place each descendant session in the root's `subagents/` directory;
 the run index displays the parent-child hierarchy, and each session record keeps

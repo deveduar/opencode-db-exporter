@@ -420,7 +420,33 @@ run export transcript --mark-compactions --summary-diffs --filter ses_A0001 >/de
 TC2=$(cat "$(last_transcript transcript 'Project Alpha')")
 echo "$TC2" | grep -q "Context compaction" && ok "compaction marker" || bad "compaction marker"
 echo "$TC2" | grep -q "Summary of changes" && ok "summary diffs" || bad "summary diffs"
-echo "$TC2" | grep -q "<!-- step-finish -->" && ok "step markers present" || bad "step markers"
+echo "$TC2" | grep -Eq '<!-- step-(start|finish) -->' && bad "structural step markers leaked into Markdown" || ok "structural step markers omitted from Markdown"
+
+echo "== conversation preset omits marker-only messages and separator noise =="
+sqlite3 "$FAKE" <<'SQL'
+INSERT INTO message VALUES
+ ('msg_A_structural','ses_A0001',1789000500000,1789000500000,
+  '{"role":"assistant","time":{"created":1789000500000},"agent":"build"}');
+INSERT INTO part VALUES
+ ('prt_A_struct_start','msg_A_structural','ses_A0001',1789000500001,1789000500001,
+  '{"type":"step-start","tool":"plan"}'),
+ ('prt_A_struct_finish','msg_A_structural','ses_A0001',1789000500002,1789000500002,
+  '{"type":"step-finish","reason":"tool-calls"}');
+SQL
+CONV_RUN=$(run export conversation --sessions ses_A0001)
+CONV_FILE=$(find "$(out_dir_of "$CONV_RUN")" -name 'Project Alpha.md' -type f -print -quit)
+if grep -Eq '<!-- step-(start|finish) -->' "$CONV_FILE"; then
+    bad "conversation includes structural step comments"
+else
+    ok "conversation omits internal step comments"
+fi
+[ "$(grep -c '^## Assistant' "$CONV_FILE")" -eq 4 ] \
+    && ok "marker-only assistant message has no empty timestamp heading" \
+    || bad "conversation assistant headings: $(grep -c '^## Assistant' "$CONV_FILE")"
+[ "$(grep -c '^---$' "$CONV_FILE")" -eq 1 ] \
+    && ok "conversation has only its metadata divider, no per-message separator noise" \
+    || bad "conversation horizontal rules: $(grep -c '^---$' "$CONV_FILE")"
+sqlite3 "$FAKE" "DELETE FROM part WHERE message_id='msg_A_structural'; DELETE FROM message WHERE id='msg_A_structural';"
 
 echo "== token backfill from step-finish (session row has 0 tokens) =="
 run export transcript --filter ses_A0001 >/dev/null
@@ -447,6 +473,8 @@ jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.b
     && ok "faithful info carries the backfilled tokens" || bad "faithful info tokens"
 jq -e '.messages | length == 6' "$FR" >/dev/null && ok "faithful keeps ALL messages (6)" || bad "faithful messages: $(jq '.messages | length' "$FR")"
 jq -e '.messages[0].parts[0].type == "text"' "$FR" >/dev/null && ok "faithful message shape {info, parts}" || bad "faithful shape"
+jq -e '[.messages[].parts[].type] | index("step-finish") != null' "$FR" >/dev/null \
+    && ok "faithful keeps raw step-finish parts" || bad "faithful lost step-finish parts"
 printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && ok "faithful keeps raw data when not sanitizing" || bad "faithful raw data missing"
 jq -e '.info.model == "model-a" and .info.parentId == null and .info.agent == "build" and (.info.time.created | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "$FR" >/dev/null \
     && ok "faithful info: plain model id, null parentId, ISO time" \

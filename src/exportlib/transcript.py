@@ -14,7 +14,7 @@ def _transcript_msgs(renderer, con, session: dict):
 
 
 def _record_message(f, rendered: str, message_sizes: list[int]) -> None:
-    message_text = rendered + "\n\n---\n\n"
+    message_text = rendered.rstrip("\n") + "\n\n"
     f.write(message_text)
     message_sizes.append(len(message_text.encode("utf-8")))
 
@@ -63,7 +63,7 @@ def append_transcript_inline(
     msgs = _transcript_msgs(renderer, con, session)
     n_msgs = count_messages(con, session["id"], renderer.profile, renderer.role)
     with fpath.open("a", encoding="utf-8", newline="") as f:
-        prefix = "\n\n---\n\n" + block_head
+        prefix = block_head
         prefix += (
             f"*Subagent of `{session.get('parent_id') or '?'}` — "
             f"agent `{session.get('agent') or '?'}`*\n\n"
