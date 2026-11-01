@@ -484,7 +484,7 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-    out_dir = make_outdir_final(out_base, args.profile, args.stamp)
+    out_dir = make_outdir_final(out_base, args.profile, args.stamp, getattr(args, 'preset', None))
     try:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row

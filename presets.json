@@ -1,6 +1,6 @@
 {
   "presets": {
-    "archive": {
+    "complete": {
       "description": "full backup — complete tool outputs and the raw session, with touched-file lists (heavy)",
       "products": {
         "transcript": {"tool_output": "full"},
@@ -8,7 +8,7 @@
         "faithful": {}
       }
     },
-    "quick": {
+    "source": {
       "description": "the raw session, losslessly — one native-JSON file per session (fast, compact)",
       "product": "faithful"
     },
@@ -22,13 +22,21 @@
     "review": {
       "description": "the readable log without reasoning, plus the raw session (does not redact)",
       "products": {
-        "transcript": {"no_reasoning": true},
+        "transcript": {"tool_output": "full", "no_reasoning": true},
         "faithful": {}
       }
     },
     "notes": {
       "description": "plain read — every message, tool output truncated to ~500 chars (light)",
-      "product": "transcript"
+      "product": "transcript",
+      "tool_output": "truncated"
+    },
+    "tool-output": {
+      "description": "tool calls and outputs only — reasoning and patches omitted",
+      "product": "transcript",
+      "tool_output": "full",
+      "patch": "omit",
+      "no_reasoning": true
     },
     "conversation": {
       "description": "the dialogue only — no tools, patches or reasoning (light)",

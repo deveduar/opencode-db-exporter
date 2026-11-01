@@ -125,7 +125,7 @@ Named **presets** (a product or bundle + config + optional selection) live in `O
 ```bash
 opencode-db export review                # run the named preset
 opencode-db export review --sanitize     # opt into best-effort redaction for one run
-opencode-db export archive               # bundle: transcript + memory under ONE stamp
+opencode-db export complete              # bundle: transcript + memory under ONE stamp
 opencode-db export transcript --last 5   # 5 most recently used roots (+ their subagents)
 opencode-db export rag --cap 3000        # per-run override
 ```
@@ -134,6 +134,7 @@ opencode-db export rag --cap 3000        # per-run override
 - **CLI wins over preset**: flags/selection on the command line override the preset.
 - `export --list-presets` / `--show <name>` / `--dry-run <name>` / `--explain` inspect plans without DB.
 - `--sanitize` redacts high-confidence secret prefixes — best-effort; review output before sharing.
+
 
 ## Managing export runs
 
@@ -165,7 +166,7 @@ opencode-db shrink --older-than 30         # keep sessions updated in the last 3
 opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
 opencode-db shrink --keep-sessions ID...   # keep ONLY the listed ids + their parents/subagents
 opencode-db shrink --discard-sessions ID...# keep everything EXCEPT the ids + their subagents
-                                           # (offers export archive --sessions <cascade> first)
+                                           # (offers export complete --sessions <cascade> first)
 opencode-db shrink lean --keep 30          # raw flags compose over a recipe
 opencode-db shrink lean --swap             # build copy AND replace live DB (safe)
 ```

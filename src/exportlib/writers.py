@@ -8,12 +8,24 @@ from exportlib.config import default_bkp_dir
 from exportlib.util import safe_filename, selection_label, selection_meta, selection_phrase
 
 
-def make_outdir_final(base, profile: str, stamp: str | None = None):
+def _preset_suffix_for_name(name: str | None) -> str:
+    """Short human suffix to append to the run folder, e.g. __review.
+    The suffix is only used for naming; the preset name is still recorded in metadata."""
+    if not name:
+        return ""
+    clean = str(name).strip().replace(" ", "-")
+    clean = ''.join(ch if ch.isalnum() or ch in "-_" else "-" for ch in clean)
+    clean = clean.strip("-")
+    return f"__{clean}" if clean else ""
+
+
+def make_outdir_final(base, profile: str, stamp: str | None = None, preset_name: str | None = None):
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
-    target = base / stamp / profile
+    suffix = _preset_suffix_for_name(preset_name)
+    target = base / f"{stamp}{suffix}" / profile
     n = 2
     while target.exists():
-        target = base / f"{stamp}@{n}" / profile
+        target = base / f"{stamp}{suffix}@{n}" / profile
         n += 1
     target.mkdir(parents=True, exist_ok=False)
     return target

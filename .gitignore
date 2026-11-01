@@ -1,7 +1,5 @@
-x/
-
 # Portable (repo-shipped conf active): the data dirs live in the repo and are
-# created on demand. Never part of the tool.
+# created on demand.
 /exports/
 /backups/
 /activity.log
@@ -13,7 +11,7 @@ __pycache__/
 .venv/
 .vscode/
 
-# Databases / archives (never part of the tool)
+# Databases / archives
 *.db
 *.db-wal
 *.db-shm
@@ -22,3 +20,8 @@ __pycache__/
 # Misc
 *.log
 .DS_Store
+
+# old documents
+/docs/archive/*
+x/
+notes.md

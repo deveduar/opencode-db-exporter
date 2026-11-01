@@ -29,7 +29,9 @@ def ts_iso(ms) -> str:
 
 def safe_filename(name: str, fallback: str = "session") -> str:
     s = re.sub(r"[^A-Za-z0-9_\- ]+", "", name or "").strip()
-    s = re.sub(r"\s+", " ", s)[:80]
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-+", "-", s)
+    s = s[:80]
     return s or fallback
 
 
