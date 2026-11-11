@@ -19,7 +19,7 @@ MODULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)
 
-from exportlib.config import default_db, default_out
+from exportlib.config import default_db, default_out, readonly_db_uri
 from exportlib.db import load_effective_scope
 from exportlib.util import die, ts_iso
 
@@ -276,7 +276,7 @@ def main(argv=None) -> int:
         db = Path(os.environ.get("OPENCODE_DB") or default_db())
         if not db.exists():
             die(f"Database not found: {db}")
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        con = sqlite3.connect(readonly_db_uri(db), uri=True)
         con.row_factory = sqlite3.Row
         try:
             metas = []
@@ -323,7 +323,7 @@ def main(argv=None) -> int:
     db = Path(os.environ.get("OPENCODE_DB") or default_db())
     if not db.exists():
         die(f"Database not found: {db}")
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con = sqlite3.connect(readonly_db_uri(db), uri=True)
     con.row_factory = sqlite3.Row
     try:
         entries = snapshot_changes_for_meta(meta, con)

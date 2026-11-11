@@ -50,6 +50,25 @@ grep_run() { # $1=pattern, rest=CLI args: capture output before grep (avoids SIG
     local out; out=$(run "$@")
     printf '%s' "$out" | grep -q "$pat"
 }
+
+echo "== Python-only export entry point =="
+python3 "$TESTS_DIR/test_exportlib_paths.py" \
+    && ok "Python database paths and read-only SQLite URI" \
+    || bad "Python database path tests"
+PRODUCTS=$(python3 "$TESTS_DIR/../opencode-db-export.py" --list-products 2>&1)
+printf '%s' "$PRODUCTS" | grep -q 'transcript' \
+    && ok "root Python entry point lists products without Bash" \
+    || bad "root Python entry point: $PRODUCTS"
+PY_PLAN=$(python3 "$TESTS_DIR/../opencode-db-export.py" transcript --dry-run 2>&1)
+printf '%s' "$PY_PLAN" | grep -q '^Matched: ' \
+    && ok "root Python entry point reads the fake DB directly" \
+    || bad "root Python export dry run: $PY_PLAN"
+PY_EXPORT=$(OCED_OUT="$TMP/python-out" python3 "$TESTS_DIR/../opencode-db-export.py" \
+    transcript --sessions ses_A0001 2>&1)
+PY_MD=$(find "$TMP/python-out" -type f -name '*.md' -print -quit)
+printf '%s' "$PY_EXPORT" | grep -q '\[OK\] Exported (transcript)' && [ -n "$PY_MD" ] \
+    && ok "root Python entry point writes a transcript without Bash" \
+    || bad "root Python export: $PY_EXPORT"
 last_transcript() { # $1=profile $2=title (newest by mtime)
     find "$OUT" -path "*/$1/*" -name "*$2*.md" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
 }

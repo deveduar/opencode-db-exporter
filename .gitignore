@@ -22,6 +22,6 @@ __pycache__/
 .DS_Store
 
 /docs/archive/*
-x/
+archive/
 notes.md
 notes-archive.md

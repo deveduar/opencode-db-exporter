@@ -5,15 +5,33 @@
 # An installed prefix ships no repo config at all, so it never triggers the
 # portable branch.
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 _MODULES = Path(__file__).resolve().parent  # .../src/exportlib
 _REPO_ROOT = _MODULES.parent  # .../src -> the checkout root
 
 
+class DatabasePathError(RuntimeError):
+    pass
+
+
+def _config_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "opencode-db"
+    return Path.home() / ".config" / "opencode-db"
+
+
+def _data_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "opencode-db-exporter"
+    return Path.home() / ".local" / "share" / "opencode-db-exporter"
+
+
 def _config_default(name: str) -> str:
-    """~/.config/opencode-db/<name> wins; the repo-shipped file is the fallback."""
-    home = Path.home() / ".config" / "opencode-db" / name
+    """The per-user config wins; the repo-shipped file is the fallback."""
+    home = _config_dir() / name
     if home.exists():
         return str(home)
     repo = _REPO_ROOT / name
@@ -25,12 +43,49 @@ def _config_default(name: str) -> str:
 def _portable() -> bool:
     """True when the bash `OCED_PORTABLE` branch would be active: the repo ships a
     real conf and no user conf exists (the user config wins when both exist)."""
-    home_conf = Path.home() / ".config" / "opencode-db" / "opencode-db.conf"
+    home_conf = _config_dir() / "opencode-db.conf"
     return not home_conf.exists() and (_REPO_ROOT / "opencode-db.conf").exists()
 
 
+def _windows_db_from_opencode() -> str:
+    # OpenCode's documented path command accounts for its channel and overrides.
+    # The command is constant; shell=True is needed for npm's .cmd shim on Windows.
+    try:
+        result = subprocess.run(
+            "opencode debug paths db",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DatabasePathError(
+            "Could not resolve OpenCode's database path; install the OpenCode CLI "
+            "or set OPENCODE_DB."
+        ) from exc
+    path = result.stdout.strip()
+    if result.returncode != 0 or not path:
+        detail = result.stderr.strip()
+        suffix = f" ({detail})" if detail else ""
+        raise DatabasePathError(
+            f"'opencode debug paths db' did not return a database path{suffix}; "
+            "set OPENCODE_DB to the database file."
+        )
+    return path
+
+
 def default_db() -> str:
-    return os.environ.get("OPENCODE_DB", str(Path.home() / ".local/share/opencode/opencode.db"))
+    override = os.environ.get("OPENCODE_DB")
+    if override:
+        return override
+    if sys.platform == "win32":
+        return _windows_db_from_opencode()
+    return str(Path.home() / ".local" / "share" / "opencode" / "opencode.db")
+
+
+def readonly_db_uri(path: str | Path) -> str:
+    """Build a percent-encoded SQLite URI that works with native Windows paths."""
+    return f"{Path(path).expanduser().resolve().as_uri()}?mode=ro"
 
 
 def default_out() -> str:
@@ -38,7 +93,7 @@ def default_out() -> str:
         return os.environ.get("OCED_OUT") or ""
     if _portable():
         return str(_REPO_ROOT / "exports")
-    return str(Path.home() / ".local/share/opencode-db-exporter/exports")
+    return str(_data_dir() / "exports")
 
 
 def default_bkp_dir() -> str:
@@ -46,7 +101,7 @@ def default_bkp_dir() -> str:
         return os.environ.get("OCED_BACKUP_DIR") or ""
     if _portable():
         return str(_REPO_ROOT / "backups")
-    return str(Path.home() / ".local/share/opencode-db-exporter/backups")
+    return str(_data_dir() / "backups")
 
 
 def default_presets() -> str:

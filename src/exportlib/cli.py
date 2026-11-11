@@ -25,7 +25,14 @@ if MODULES_DIR not in sys.path:
 
 from exportlib import TOOL_VERSION
 from exportlib.chunking import chunk_markdown_file
-from exportlib.config import default_bkp_dir, default_db, default_out, default_presets
+from exportlib.config import (
+    DatabasePathError,
+    default_bkp_dir,
+    default_db,
+    default_out,
+    default_presets,
+    readonly_db_uri,
+)
 from exportlib.db import (
     all_session_ids,
     backfill_session_tokens,
@@ -276,7 +283,7 @@ def _backup_aligned(db_path: Path) -> str:
     if msess is None or mmess is None or mu is None:
         return "no backups"
     try:
-        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
         tsess = con.execute("SELECT count(*) FROM session").fetchone()[0]
         tmess = con.execute("SELECT count(*) FROM message").fetchone()[0]
         tu = con.execute("SELECT max(time_updated) FROM session").fetchone()[0] or 0
@@ -388,7 +395,7 @@ def _dry_run(args, profile: str) -> int:
         print(f"(database not found at {db_path}; nothing was read or written)")
         return 0
 
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
     con.row_factory = sqlite3.Row
     try:
         sessions = _matched_sessions(con, args)
@@ -421,6 +428,13 @@ def _explain() -> int:
 
 
 def main() -> None:
+    try:
+        _main()
+    except DatabasePathError as exc:
+        die(str(exc))
+
+
+def _main() -> None:
     ap = build_argparser()
     args = ap.parse_args()
 
@@ -486,7 +500,7 @@ def main() -> None:
 
     out_dir = make_outdir_final(out_base, args.profile, args.stamp, getattr(args, 'preset', None))
     try:
-        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
         con.row_factory = sqlite3.Row
     except sqlite3.Error as e:
         die(f"Could not open the DB read-only: {e}")

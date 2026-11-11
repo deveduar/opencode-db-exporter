@@ -70,6 +70,14 @@ the opencode CLI (the CLI offers no `session export` and
 its environment filters would hide sessions; reading the DB directly in `mode=ro` is what
 guarantees seeing everything).
 
+The root `opencode-db-export.py` entry point exposes that same exporter without the Bash
+dispatcher or its external tools. On Windows, the Python config asks the installed OpenCode
+CLI for `opencode debug paths db` (unless `OPENCODE_DB` is set), so channel-specific and
+overridden database locations are respected. SQLite access builds a percent-encoded file URI
+with `mode=ro`; the Python export path does not require the `sqlite3`, `jq`, `gzip` or `fzf`
+executables. This is native Windows support for generating exports; export-run management,
+backups, shrink and the interactive menu remain part of the Bash/Linux/WSL command suite.
+
 ### Products
 
 | Product | Document |

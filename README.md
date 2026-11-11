@@ -2,7 +2,7 @@
 
 Read, back up and export the local SQLite database of **opencode** (the `opencode` CLI) to readable Markdown. It never writes to the opencode database.
 
-Intended for Linux with the **opencode CLI**. The database it reads is the shared store written by opencode at `~/.local/share/opencode/opencode.db`. If your opencode stores the DB elsewhere (other OS, custom `XDG_DATA_HOME`, or the desktop app using its own storage), set `OPENCODE_DB` to point at it.
+The Bash command suite is intended for Linux with the **opencode CLI**. The Python exporter also runs natively on Windows and reads the database in read-only mode. On Windows it asks `opencode debug paths db` for the active database path ([OpenCode path docs](https://opencode.ai/docs/cli/#paths)); set `OPENCODE_DB` to override it.
 
 ## Quick start
 
@@ -15,9 +15,14 @@ bash src/opencode-db.sh menu
 # or install:
 ./install.sh
 opencode-db menu
+
+# Python-only export (also works in native Windows PowerShell):
+python opencode-db-export.py archive --dry-run
+python opencode-db-export.py archive
 ```
 
 The menu covers everything: export, backups, shrink and session browsing.
+The Python entry point runs exports without Bash, `sqlite3`, `jq`, `gzip` or `fzf`.
 
 ## What it does
 
@@ -30,9 +35,10 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 
 ## Requirements
 
-- Linux (tested on Debian/Ubuntu) and the opencode CLI
+- Bash command suite: Linux (tested on Debian/Ubuntu) and the opencode CLI
 - `sqlite3`, `python3` (**>= 3.10**, uses `str | None` annotations), `jq`, `gzip` (core)
 - `fzf` (only for `opencode-db menu`)
+- Python-only exports: Python **>= 3.10** and the opencode CLI (standard library only)
 
 The tool can install its own missing dependencies idempotently:
 
@@ -241,7 +247,7 @@ auto-detecting the system one. It never affects files or the CLI.
 | Linux (Fedora, dnf) | Yes | `deps` installs via `dnf install -y`. |
 | WSL, opencode inside WSL | Yes | Defaults match; `deps` uses `apt`/`sudo`. |
 | WSL, opencode is native Windows | Yes, with config | Set `OPENCODE_DB=/mnt/c/Users/<user>/.local/share/opencode/opencode.db`. Residual risk: SQLite WAL file locking over `drvfs`. |
-| Native Windows | No | Bash-only (no `.bat`/`.ps1`); `sqlite3`, `python3`, `jq`, `gzip`, `fzf` are absent. Use WSL. |
+| Native Windows | Generate exports only | Use `python opencode-db-export.py <preset>`; the OpenCode CLI resolves its database path. Run management, backups, shrink and menu remain Bash/Linux/WSL. |
 | Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`/`pacman`/`dnf`). |
 | Portable (no install) | Yes | Run `bash src/opencode-db.sh …` straight from the repo. The repo-shipped config is read directly; exports/backups/activity log default into the repo (`./exports`, `./backups`, `./activity.log`, gitignored). |
 

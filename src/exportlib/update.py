@@ -43,7 +43,7 @@ if MODULES_DIR not in sys.path:
     sys.path.insert(0, MODULES_DIR)
 
 from exportlib import TOOL_VERSION
-from exportlib.config import default_db, default_out
+from exportlib.config import default_db, default_out, readonly_db_uri
 from exportlib.db import load_effective_scope
 from exportlib.flags import FLAGS
 from exportlib.freshness import _require_canonical, snapshot_changes
@@ -111,7 +111,7 @@ def build_plan(args) -> dict:
     excluded = {r.get("id"): r for r in meta["excluded"] if r.get("id")}
     included = set(recs)
 
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con = sqlite3.connect(readonly_db_uri(db), uri=True)
     con.row_factory = sqlite3.Row
     try:
         live = {r["id"]: dict(r) for r in con.execute(LIVE_SQL)}
