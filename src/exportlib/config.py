@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 _MODULES = Path(__file__).resolve().parent  # .../src/exportlib
-_REPO_ROOT = _MODULES.parent  # .../src -> the checkout root
+_REPO_ROOT = _MODULES.parent.parent  # .../src/exportlib -> checkout or install root
 
 
 class DatabasePathError(RuntimeError):
@@ -41,10 +41,8 @@ def _config_default(name: str) -> str:
 
 
 def _portable() -> bool:
-    """True when the bash `OCED_PORTABLE` branch would be active: the repo ships a
-    real conf and no user conf exists (the user config wins when both exist)."""
-    home_conf = _config_dir() / "opencode-db.conf"
-    return not home_conf.exists() and (_REPO_ROOT / "opencode-db.conf").exists()
+    """Direct Python runs from a checkout default output into that checkout."""
+    return (_REPO_ROOT / "opencode-db.conf").exists()
 
 
 def _windows_db_from_opencode() -> str:

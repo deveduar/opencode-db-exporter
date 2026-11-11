@@ -36,6 +36,7 @@ from exportlib.config import (
 from exportlib.db import (
     all_session_ids,
     backfill_session_tokens,
+    count_messages,
     filter_subagent_policy,
     load_sessions,
     since_ms,
@@ -45,7 +46,11 @@ from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile, scope_meta
 from exportlib.render import Renderer
-from exportlib.transcript import append_transcript_inline, write_transcript
+from exportlib.transcript import (
+    append_transcript_inline,
+    session_frontmatter,
+    write_transcript,
+)
 from exportlib.util import (
     die,
     safe_filename,
@@ -454,6 +459,7 @@ def _main() -> None:
 
     if args.profile == "full":
         args.profile = "transcript"  # alias
+        profile_arg = args.profile
 
     # Preview short-circuits before the write pipeline (`--show` never reads the DB).
     if args.show:
@@ -627,7 +633,15 @@ def _main() -> None:
                 total_comp += c
                 total_digest += sub.get("digests") or 0
             if renderer.profile == "transcript" and args.chunk_mb > 0:
-                chunk_markdown_file(rfile, args.chunk_mb, stem, root_id, message_sizes)
+                chunk_markdown_file(
+                    rfile, args.chunk_mb, stem, root_id, message_sizes,
+                    session_frontmatter(
+                        root,
+                        renderer.profile,
+                        count_messages(con, root_id, renderer.profile, renderer.role),
+                        root["compactions"], root.get("digests") or 0, stem, con,
+                    ),
+                )
 
         written.append((root, subs, rfolder))
 

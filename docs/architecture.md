@@ -181,7 +181,7 @@ its `subagents/` folder) with the native shape
 `{"info": {...}, "messages": [{"info": {...}, "parts": [...]}]}` (parity with
 `session_faithful`). It is a product, not a flag on `transcript` — the Markdown and
 the machine copy are two different documents, and a plan includes the one it needs
-(`archive`/`review` include both; `quick` is the raw copy alone). `info.tokens` includes
+(`complete`/`review` include both; `source` is the raw copy alone). `info.tokens` includes
 `backfilled`.
 Because it never applies the display filters, a plan containing it is what the
 cards call **lossless**.
@@ -375,7 +375,7 @@ rows still come straight from `exportlib/plan.py products` but only as the CLI/t
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 each preset carries its own `description` **in the presets file**, so the shipped
-plans (`archive`/`quick`/`review`/`notes`/`conversation`/`prompts`/`rag`/`digest`) annotate themselves
+plans (`complete`/`source`/`review`/`notes`/`conversation`/`prompts`/`rag`/`digest`) annotate themselves
 from the same source that defines them (a preset with no `description` shows the bare
 row). The confirm step prints the plan as the SAME **card** `--explain` prints, so a
 single builder describes every plan. `plan_text()` prints `card_lines()` for a preset: the
@@ -712,8 +712,8 @@ time (a root-only export is a different set, so it never clears the flag). The e
 
 | I want to… | use | notes |
 |---|---|---|
-| keep a lossless backup of everything | `export archive` | complete tool outputs + the raw session + corpus |
-| keep the raw session, losslessly | `export quick` (or `export faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
+| keep a lossless backup of everything | `export complete` | complete tool outputs + the raw session + corpus |
+| keep the raw session, losslessly | `export source` (or `export faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
 | read a conversation and keep its RAG corpus, no raw copy | `export study` | readable log + corpus.jsonl, no faithful JSON |
 | review or hand a session to someone | `export review` | no reasoning + the raw session; it does **not** redact — **read the output before passing it on** |
 | read a conversation plain | `export notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
@@ -721,8 +721,8 @@ time (a root-only export is a different set, so it never clears the flag). The e
 | collect just the prompts I typed (task log / prompt library) | `export prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
 | give another AI the context of my sessions (RAG) | `export rag` (a named plan) or `export memory` (CLI) | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `export digest` | just the compaction summaries (also in transcript + memory) |
-| archive-grade export, but make sure the backup is current first | `export transcript --snapshot fresh` | offers a fresh backup when the last one diverged, then a full transcript |
-| read one conversation in full **and** keep the raw copy | `export archive` (CLI: `export transcript` then `export faithful`) | the Markdown plus the native-JSON archive |
+| archive-grade export, but make sure the backup is current first | `export complete --snapshot fresh` | offers a fresh backup when the last one diverged, then exports all bundle products |
+| read one conversation in full **and** keep the raw copy | `export complete --sessions ses_X` | the Markdown, corpus and native-JSON archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | the compaction digests are already on the read-only side (`info --no-digest` drops the block) |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |
@@ -734,7 +734,7 @@ time (a root-only export is a different set, so it never clears the flag). The e
 ## 8. Precedence and safety
 
 - Environment > conf file > defaults for paths/options; **the CLI wins over a plan**
-  (`opencode-db export archive --filter ses_X` overrides the plan's selection; an
+  (`opencode-db export complete --filter ses_X` overrides the plan's selection; an
   explicit flag overrides the plan's value).
 - The DB is always opened **read-only**; exports never mutate opencode data. The only
   path that writes the live DB is the opt-in `shrink --swap`.

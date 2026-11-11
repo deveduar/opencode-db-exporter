@@ -17,12 +17,14 @@ bash src/opencode-db.sh menu
 opencode-db menu
 
 # Python-only export (also works in native Windows PowerShell):
-python opencode-db-export.py archive --dry-run
-python opencode-db-export.py archive
+python opencode-db-export.py complete --dry-run
+python opencode-db-export.py complete
 ```
 
 The menu covers everything: export, backups, shrink and session browsing.
 The Python entry point runs exports without Bash, `sqlite3`, `jq`, `gzip` or `fzf`.
+`complete` is the shipped bundle preset (transcript + memory + faithful); `full`
+is a product alias for `transcript`, not a preset.
 
 ## What it does
 
@@ -280,4 +282,4 @@ bash tests/menu_flow.sh      # fzf menu logic (fzf stubbed) -> 354 OK / 0 FAIL
 - ✅ **Menu**: preset-only export, sessions picker (subagents hidden/shown), backups/shrinks/exports pickers with toggle view/remove, integrated verify.
 - 🔄 **To validate**: `shrink --swap` in real environment (stop opencode → swap → verify).
 - 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain, evaluate `schema_version: 2` if a multi-source consumer emerges.
-- 📋 **Nice-to-have**: Windows native (PowerShell), pre-commit hooks for tests, complete `help` for subcommands.
+- 📋 **Nice-to-have**: native Windows run management/backups/shrink/menu, pre-commit hooks for tests, complete `help` for subcommands.

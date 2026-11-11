@@ -120,9 +120,14 @@ overrides both; an environment value overrides a preset. Parts are written in
 chronological order and the original `<session>.md` path becomes a small landing
 page linking to the newest part and the complete parts index. A single message
 larger than the target stays intact and can make its part exceed the target.
-Continuation files include the session title and ID in their heading, while
-part filenames include the session title. `metadata.json.artifacts` lists the
-landing page, parts, and the per-session parts index.
+Every per-session Markdown file starts with YAML frontmatter (`title`,
+`profile`, `session_id`, `agent`, `model`, `directory`, `created`, and the
+applicable message/digest and compaction counts; subagents also have `parent_id`).
+String values are quoted scalars, and dates remain quoted ISO-8601 UTC strings.
+Continuation files additionally include `part`; the landing page and parts index
+have their own frontmatter with the session ID and chunk counts. Part filenames
+include the session title. `metadata.json.artifacts` lists the landing page,
+parts, and the per-session parts index.
 
 Markdown omits the internal `step-start` and `step-finish` parts, as well as any
 message left with no visible content after filtering. Its heading/timestamp is
@@ -191,7 +196,7 @@ the same conditional `Preset` row.
   "updated_from": "2026-10-19_13-36",   // R?: present only on a REFRESHED run — the stamp it was refreshed from (== its own)
   "update_mode": "delta",               // R?: present only on a refreshed run — delta | accumulative
   "profile": "transcript",              // product keyword: transcript | memory | digest | faithful (never a preset name)
-  "preset": "archive",              // R?: preset/plan name that produced this run, else null
+  "preset": "complete",             // R?: preset/plan name that produced this run, else null
   "subagents_hidden": 0,            // how many subagents those two flags actually dropped from the MATCHED set
                                    // (0 for an exact --sessions selection: a subagent that was never selected cannot be dropped)
   "tokens_backfilled": 0,               // number of sessions whose token/cost rows were summed from step-finish parts

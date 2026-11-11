@@ -63,6 +63,16 @@ PY_PLAN=$(python3 "$TESTS_DIR/../opencode-db-export.py" transcript --dry-run 2>&
 printf '%s' "$PY_PLAN" | grep -q '^Matched: ' \
     && ok "root Python entry point reads the fake DB directly" \
     || bad "root Python export dry run: $PY_PLAN"
+PY_COMPLETE=$(HOME="$TMP/python-home" env -u OCED_PRESETS \
+    python3 "$TESTS_DIR/../opencode-db-export.py" complete --show 2>&1)
+printf '%s' "$PY_COMPLETE" | grep -q '^== Export plan: complete ==' \
+    && printf '%s' "$PY_COMPLETE" | grep -q 'transcript + memory + faithful' \
+    && ok "Python entry point resolves the shipped complete bundle preset" \
+    || bad "Python complete plan: $PY_COMPLETE"
+PY_FULL=$(python3 "$TESTS_DIR/../opencode-db-export.py" full --show 2>&1)
+printf '%s' "$PY_FULL" | grep -q '^== Export plan: transcript ==' \
+    && ok "full is normalized to the transcript product alias" \
+    || bad "full alias plan: $PY_FULL"
 PY_EXPORT=$(OCED_OUT="$TMP/python-out" python3 "$TESTS_DIR/../opencode-db-export.py" \
     transcript --sessions ses_A0001 2>&1)
 PY_MD=$(find "$TMP/python-out" -type f -name '*.md' -print -quit)
@@ -393,6 +403,13 @@ grep_run "Exported" export transcript && ok "transcript export" || bad "transcri
 TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 echo "$TC" | grep -q "**Tool:**" && ok "transcript keeps tool calls" || bad "transcript no tools"
 echo "$TC" | grep -q "Let me think first" && ok "transcript keeps reasoning by default" || bad "transcript reasoning lost"
+printf '%s\n' "$TC" | sed -n '1,12p' | grep -qx -- '---' \
+    && printf '%s\n' "$TC" | sed -n '1,12p' | grep -q '^session_id: "ses_A0001"$' \
+    && printf '%s\n' "$TC" | sed -n '1,12p' | grep -q '^agent: "build"$' \
+    && printf '%s\n' "$TC" | sed -n '1,12p' | grep -q '^messages: ' \
+    && printf '%s\n' "$TC" | sed -n '1,12p' | grep -q '^---$' \
+    && ok "transcript metadata is Obsidian YAML frontmatter" \
+    || bad "transcript frontmatter: $(printf '%s\n' "$TC" | sed -n '1,14p')"
 MT=$(last_meta transcript)
 jq -e '.profile == "transcript" and .flags.sanitize == false and .flags.no_reasoning == false and .flags.tool_output == "truncated"' "$MT" >/dev/null \
     && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,flags}' "$MT")"
@@ -429,6 +446,10 @@ DIGRUN=$(run export digest --filter ses_A0001 --stamp "digest-run")
 CC=$(cat "$(out_dir_of "$DIGRUN")"/*/'Project-Alpha'*.md)
 echo "$CC" | grep -q "DIGEST_A" && ok "digest profile exported" || bad "digest profile"
 echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "digest profile has tools" || ok "digest profile no tools"
+printf '%s\n' "$CC" | sed -n '1,14p' | grep -q '^profile: "digest"$' \
+    && printf '%s\n' "$CC" | sed -n '1,14p' | grep -q '^digests: 1$' \
+    && ok "digest metadata is YAML frontmatter" \
+    || bad "digest frontmatter: $(printf '%s\n' "$CC" | sed -n '1,14p')"
 
 echo "== long output truncation =="
 run export transcript --filter ses_B0001 >/dev/null
@@ -463,8 +484,8 @@ fi
 [ "$(grep -c '^## Assistant' "$CONV_FILE")" -eq 4 ] \
     && ok "marker-only assistant message has no empty timestamp heading" \
     || bad "conversation assistant headings: $(grep -c '^## Assistant' "$CONV_FILE")"
-[ "$(grep -c '^---$' "$CONV_FILE")" -eq 1 ] \
-    && ok "conversation has only its metadata divider, no per-message separator noise" \
+[ "$(grep -c '^---$' "$CONV_FILE")" -eq 2 ] \
+    && ok "conversation has only the two frontmatter delimiters, no per-message separator noise" \
     || bad "conversation horizontal rules: $(grep -c '^---$' "$CONV_FILE")"
 sqlite3 "$FAKE" "DELETE FROM part WHERE message_id='msg_A_structural'; DELETE FROM message WHERE id='msg_A_structural';"
 

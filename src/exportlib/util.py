@@ -12,6 +12,14 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
+def yaml_frontmatter(values: dict) -> str:
+    """Serialize scalar frontmatter values using JSON strings, valid YAML 1.2."""
+    lines = ["---"]
+    for key, value in values.items():
+        lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n---\n\n"
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:

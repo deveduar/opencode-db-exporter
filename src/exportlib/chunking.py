@@ -4,6 +4,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from exportlib.util import yaml_frontmatter
+
 
 def chunk_markdown_file(
     path: Path,
@@ -11,6 +13,7 @@ def chunk_markdown_file(
     title: str,
     session_id: str,
     message_sizes: list[int],
+    metadata: dict | None = None,
 ) -> list[dict]:
     """Split a transcript between messages, keeping each message intact.
 
@@ -49,8 +52,13 @@ def chunk_markdown_file(
         has_message = False
         if number > 1:
             heading = f"# {title} — part {number:03d}\n\n"
-            session = f"- **Session ID:** `{session_id}`\n\n"
-            continuation = (heading + session).encode("utf-8")
+            fields = dict(metadata or {})
+            fields["session_id"] = session_id
+            fields.setdefault("title", title)
+            fields["part"] = number
+            continuation = (
+                yaml_frontmatter(fields) + heading
+            ).encode("utf-8")
             out.write(continuation)
             size += len(continuation)
 
@@ -73,8 +81,24 @@ def chunk_markdown_file(
             raise FileExistsError(f"chunk directory already exists: {target}")
 
         source = path.open("rb")
-        start_part()
         preamble = source.read(preamble_size)
+        frontmatter_end = preamble.find(b"\n---\n\n")
+        if frontmatter_end < 0:
+            raise ValueError("chunked transcript is missing YAML frontmatter")
+        if metadata is not None:
+            first_part = dict(metadata)
+            first_part["part"] = 1
+            preamble = (
+                yaml_frontmatter(first_part).encode("utf-8")
+                + preamble[frontmatter_end + len(b"\n---\n\n"):]
+            )
+        else:
+            preamble = (
+                preamble[:frontmatter_end + 1]
+                + b"part: 1\n"
+                + preamble[frontmatter_end + 1:]
+            )
+        start_part()
         out.write(preamble)
         size += len(preamble)
 
@@ -106,9 +130,16 @@ def chunk_markdown_file(
         source = None
 
         index_lines = [
+            yaml_frontmatter({
+                "title": title,
+                "session_id": session_id,
+                "profile": "transcript",
+                "type": "transcript_parts_index",
+                "chunks": len(parts),
+                "target_mb": chunk_mb,
+            }).rstrip("\n"),
             f"# {title} — transcript parts",
             "",
-            f"- **Session ID:** `{session_id}`",
             f"- **Target size:** {chunk_mb} MB per file; individual messages stay whole",
             "- **Order:** files are chronological; start with the newest part below.",
             "",
@@ -131,8 +162,15 @@ def chunk_markdown_file(
         os.close(fd)
         landing = Path(landing_name)
         landing.write_text(
-            f"# {title} — chunked transcript\n\n"
-            f"- **Session ID:** `{session_id}`\n"
+            yaml_frontmatter({
+                "title": title,
+                "session_id": session_id,
+                "profile": "transcript",
+                "type": "transcript_landing",
+                "chunks": len(parts),
+                "target_mb": chunk_mb,
+            })
+            + f"# {title} — chunked transcript\n\n"
             f"- **Chunks:** {len(parts)} · target {chunk_mb} MB; messages stay whole\n\n"
             f"**Latest context:** [{latest['name']}]({target.name}/{latest['name']})\n\n"
             f"[All parts, newest first]({target.name}/index.md)\n",

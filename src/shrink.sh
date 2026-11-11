@@ -74,10 +74,10 @@ o_shrink_discard_profile() {
     if ! o_export_profile_known "$p"; then
         if o_export_profile_known review; then
             fallback=review
-        elif o_export_profile_known archive; then
-            fallback=archive
+        elif o_export_profile_known complete; then
+            fallback=complete
         else
-            # No presets file at all: `archive` cannot resolve, and the transcript
+            # No presets file at all: `complete` cannot resolve, and the transcript
             # product always does.
             fallback=transcript
         fi

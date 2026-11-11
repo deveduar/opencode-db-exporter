@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 _MODULES = Path(__file__).resolve().parent  # .../src/shrinklib
-_REPO_ROOT = _MODULES.parent  # .../src -> the checkout root
+_REPO_ROOT = _MODULES.parent.parent  # .../src/shrinklib -> checkout or install root
 
 
 def default_shrink_presets() -> str:
