@@ -123,10 +123,10 @@ oc_shrink_discard_offer() {
         if [ -t 0 ]; then
             local answer
             printf '   Export title (blank = %s): ' "$title"
-            IFS= read -r answer || answer=""
+            oc_read_meta_line answer || answer=""
             [ -n "$answer" ] && title="$answer"
             printf '   Export notes (blank = %s): ' "$notes"
-            IFS= read -r answer || answer=""
+            oc_read_meta_line answer || answer=""
             if [ -n "$answer" ]; then
                 notes="$answer"
                 notes_kind=""
@@ -227,9 +227,9 @@ oc_shrink_confirm_run() {
     [ "$disc_n" -gt 0 ] && oc_shrink_discard_offer "$(printf '%s' "$selargs" | sed -n 's/^--discard-sessions //p')"
     if [ -t 0 ]; then
         printf '   Shrink title (optional, blank = none): '
-        IFS= read -r shrink_title || shrink_title=""
+        oc_read_meta_line shrink_title || shrink_title=""
         printf '   Shrink notes (optional, blank = none): '
-        IFS= read -r shrink_notes || shrink_notes=""
+        oc_read_meta_line shrink_notes || shrink_notes=""
     fi
     confirm_action "Build this shrink copy? The live DB is never modified; export memory first to keep its knowledge." \
         || { echo "   declined — back to the recipe step (ESC there cancels the flow)."; return 2; }

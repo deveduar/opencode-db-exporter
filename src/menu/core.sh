@@ -140,6 +140,20 @@ run_oced_tool_spin() {
     return "$rc"
 }
 
+# oc_read_meta_line <var> -> one editable metadata line (title/notes).
+# Readline (-e) handles Backspace and arrow keys on WSL/Windows terminals, which
+# a plain `read -r` cannot: it leaves DEL/^H and ESC sequences in the value.
+# Without a TTY it falls back to plain read so scripted runs keep working.
+oc_read_meta_line() {
+    local __var="$1" __line=""
+    if [ -t 0 ]; then
+        IFS= read -e -r __line || return 1
+    else
+        IFS= read -r __line || return 1
+    fi
+    printf -v "$__var" '%s' "$__line"
+}
+
 confirm_action() {
     local message="$1"
     local answer

@@ -107,6 +107,10 @@ ARROW=$'\u2192'
     && ok "o_local_ts passes an unparsable value through" \
     || bad "o_local_ts passthrough: $(TZ=UTC o_local_ts 'garbage')"
 mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
+for d in aaa bbb ccc; do
+    echo '{"profile":"full","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/$d/metadata.json"
+done
+echo '{"profile":"transcript","preset":"notes","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/bbb/metadata.json"
 [ "$(exports_run_count)" = "3" ] && ok "exports_run_count counts runs" || bad "exports_run_count: $(exports_run_count)"
 
 echo "== product rows come from plan.py (no product-only menu flow anymore) =="
@@ -708,13 +712,8 @@ printf '%s\n' "$ER_REM" | grep -qxF "__TOGGLE_ORDER__${TAB}[*] newest first  ${A
 [ "$(oc_exports_rows view old | grep -oE '^(aaa|bbb|ccc)' | head -1)" = "aaa" ] \
     && ok "exports rows flip to old first on --old" || bad "exports old-first: $(oc_exports_rows view old | grep -oE '^(aaa|bbb|ccc)' | head -1)"
 reset
-mkdir -p "$OUT/aaa" "$OUT/bbb" "$OUT/ccc"
-for d in aaa bbb ccc; do
-    echo '{"profile":"full","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/$d/metadata.json"
-done
 # `bbb` carries a preset so the row's preset column can be asserted. Canonical
 # metadata is sufficient even for an empty run; it must not need a legacy tag.
-echo '{"profile":"transcript","preset":"notes","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[],"excluded":[],"artifacts":[],"messages":3}' > "$OUT/bbb/metadata.json"
 oc_exports_run_row bbb '{}' | grep -qE 'notes$' \
     && ok "the run row names the preset without a legacy fallback tag" \
     || bad "preset column: $(oc_exports_run_row bbb)"
@@ -1312,8 +1311,8 @@ oc_export_plan transcript | grep -qx 'fidelity: lossy (no faithful JSON: the Mar
     && ok "the keyword plan states its fidelity too (lossy)" || bad "keyword fidelity: $(oc_export_plan transcript | grep 'fidelity:')"
 # The tree names every file the writer really emits: a json preset writes the
 # subagent JSON next to its Markdown (cli.py), so the tree must show it.
-printf '%s\n' "$PLANOUT" | grep -q '<sub>_<id>.json' \
-    && ok "the tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON: $(grep '<sub>' <<<"$PLANOUT")"
+printf '%s\n' "$PLANOUT" | grep -q '<descendant>_<id>.json' \
+    && ok "the tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON: $(grep '<descendant>' <<<"$PLANOUT")"
 # The bits are emitted verbatim: every one of them is present (the wrap may
 # split the flags: line, so flatten it before matching).
 PLANFLAT=$(tr '\n' ' ' <<<"$PLANOUT" | tr -s ' ')
@@ -1477,7 +1476,7 @@ grep -q '^shrink --discard-sessions ' "$CALLS" && ok "unmarked roots -> --discar
 # --discard-sessions drops the roots AND their descendants. Offering the roots
 # alone exported 2 of the 3 sessions about to be deleted — and looked like it
 # worked, because the export succeeded with plausible counts.
-EXCSV=$(grep '^export review --sessions ' "$CALLS" | tail -1 | sed 's/^export review --sessions //')
+EXCSV=$(grep '^export review --sessions ' "$CALLS" | tail -1 | sed -E 's/^export review --sessions ([^ ]+).*/\1/')
 [ "$(printf '%s' "$EXCSV" | tr ',' '\n' | sort | paste -sd, -)" = "ses_B0001,ses_B0002,ses_ORPHAN01" ] \
     && ok "the discard offer exports the cascade (ses_B0002 comes along)" || bad "offer csv: $EXCSV"
 grep -qx "shrink --discard-sessions $(printf '%s' 'ses_ORPHAN01,ses_B0001')" "$CALLS" \
@@ -1518,14 +1517,14 @@ reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 OCED_SHRINK_DISCARD_EXPORT_PROFILE="memory" oc_pick_shrink >/dev/null 2>&1
-grep -q '^export memory --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+grep -q '^export memory --sessions ses_B0001,ses_ORPHAN01,ses_B0002 --source shrink-discard ' "$CALLS" \
     && ok "the profile var picks a different export (same cascade)" || bad "profile var: $(cat "$CALLS")"
 export OCED_PRESETS="$TMP/no-presets.json"
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
 qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 oc_pick_shrink > "$TMP/offer_nopresets.txt" 2>&1
-grep -q '^export transcript --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+grep -q '^export transcript --sessions ses_B0001,ses_ORPHAN01,ses_B0002 --source shrink-discard ' "$CALLS" \
     && ok "with no presets file the offer falls back to the always-valid product" || bad "no-presets: $(cat "$CALLS")"
 
 # the offer hands over the whole CASCADE, so a profile that would not keep the
@@ -1538,7 +1537,7 @@ qset "__NONE__" "ses_A0001" "__MAKE__" "__PRESET_quiet"
 OCED_SHRINK_DISCARD_EXPORT_PROFILE="narrow" oc_pick_shrink > "$TMP/offer_gap.txt" 2>&1
 grep -q "does not preserve subagents (sub_omit)" "$TMP/offer_gap.txt" \
     && ok "the offer warns when the profile drops the subagents (sub: omit)" || bad "gap warn: $(grep -E '\[!\]' "$TMP/offer_gap.txt")"
-grep -q '^export narrow --sessions ses_B0001,ses_ORPHAN01,ses_B0002$' "$CALLS" \
+grep -q '^export narrow --sessions ses_B0001,ses_ORPHAN01,ses_B0002 --source shrink-discard ' "$CALLS" \
     && ok "the subagent gap warns but does not veto the offer" || bad "gap veto: $(cat "$CALLS")"
 reset; call_log; confirm_action() { return 0; }
 : > "$CALLS"
@@ -1626,8 +1625,8 @@ ok "the symbol sample covers $SEEN"
 BADTOKEN=$(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | grep -vxE "$ALLOWED")
 [ -z "$BADTOKEN" ] && ok "no invented bracket tokens ($(cut -f2- "$TMP/symbols.txt" | grep -oE '^\[[^]]*\]' | sort -u | tr '\n' ' '))" \
     || bad "unknown bracket tokens: $BADTOKEN"
-BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SWAP__|__MAKE__|__REPORT_ALL__|__PRESHRINK__|__UPDATE__|__UPDATE_ALL__|__UPDATE_GO__')
-[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/swap/choose preset/all-report/update/pre-shrink)" || bad "[>] leaked onto: $BADFLOW"
+BADFLOW=$(grep -F '[>]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__CREATE__|__SYNC__|__SWAP__|__MAKE__|__REPORT_ALL__|__PRESHRINK__|__UPDATE__|__UPDATE_ALL__|__UPDATE_GO__')
+[ -z "$BADFLOW" ] && ok "[>] only on flow rows (create/sync/swap/choose preset/all-report/update/pre-shrink)" || bad "[>] leaked onto: $BADFLOW"
 BADINSPECT=$(grep -F '[?]' "$TMP/symbols.txt" | cut -f1 | grep -vxE '__VERIFY__|__EXPLAIN__')
 [ -z "$BADINSPECT" ] && ok "[?] only on inspect rows (verify/explain)" || bad "[?] leaked onto: $BADINSPECT"
 NOTOGGLE=$(grep -E '^__TOGGLE__|^__SUBS__|^__TOGGLE_ORDER__|^__TOGGLE_MODE__|^__TOGGLE_INC__' "$TMP/symbols.txt" | cut -f2- | grep -cvE '^\[\*\] ')
@@ -2134,6 +2133,43 @@ else
         ok "run_oced_tool streams: the plan reached the screen at ${FIRST}s, before the answer"
     else
         bad "run_oced_tool does NOT stream (first chunk at ${FIRST:-?}s, got=$GOT): the question is invisible"
+    fi
+fi
+
+#-----------------------------------------------------------------------
+# Metadata fields (export title/notes, update title/notes, shrink title/notes)
+# are the ONLY prompts that need Readline: WSL terminals send DEL/^H and arrow
+# escape sequences that plain `read -r` stores literally. Guard both the call
+# sites and the editable behaviour itself through a real PTY.
+#-----------------------------------------------------------------------
+echo "== metadata prompts use Readline (WSL Backspace/arrows) =="
+BARE_META=$(grep -nE 'IFS= read -r (title|notes|answer|shrink_title|shrink_notes)' \
+    "$MOD/menu/export.sh" "$MOD/menu/exports.sh" "$MOD/menu/shrink.sh" || true)
+[ -z "$BARE_META" ] && ok "metadata prompts use oc_read_meta_line" \
+    || bad "bare metadata read remains: $BARE_META"
+
+if ! command -v script >/dev/null 2>&1; then
+    echo "  [SKIP] pty metadata test: util-linux 'script' not available"
+else
+    META_PROBE="$TMP/pty-meta.sh"
+    META_OUT="$TMP/pty-meta.out"
+    printf '#!/usr/bin/env bash\nset -uo pipefail\n. %q\n. %q\noc_prompt_run_meta\nprintf "META_TITLE:[%%s]\\n" "$OCED_RUN_TITLE"\nprintf "META_NOTES:[%%s]\\n" "$OCED_RUN_NOTES"\n' \
+        "$MOD/common.sh" "$MOD/menu.sh" > "$META_PROBE"
+    chmod +x "$META_PROBE"
+    rm -f "$META_OUT"
+    ( sleep 1; printf 'abc\177d\r'; sleep 0.3; printf 'notes\033[D\033[DX\r'; sleep 0.3 ) \
+        | script -q -e -c "$META_PROBE" /dev/null > "$META_OUT" 2>&1
+    grep -qF 'META_TITLE:[abd]' "$META_OUT" \
+        && ok "PTY: export title honors Backspace" \
+        || bad "PTY: export title kept control bytes: $(grep -o 'META_TITLE:.*' "$META_OUT" | head -1)"
+    grep -qF 'META_NOTES:[notXes]' "$META_OUT" \
+        && ok "PTY: export notes honors arrow keys" \
+        || bad "PTY: export notes kept escape bytes: $(grep -o 'META_NOTES:.*' "$META_OUT" | head -1)"
+    META_VALUES=$(grep -E '^META_(TITLE|NOTES):' "$META_OUT")
+    if printf '%s' "$META_VALUES" | grep -q $'\x1b' || printf '%s' "$META_VALUES" | grep -q $'\x7f'; then
+        bad "PTY: metadata value still contains ESC/DEL bytes"
+    else
+        ok "PTY: metadata values contain no ESC/DEL bytes"
     fi
 fi
 

@@ -135,7 +135,6 @@ opencode-db export rag --cap 3000        # per-run override
 - `export --list-presets` / `--show <name>` / `--dry-run <name>` / `--explain` inspect plans without DB.
 - `--sanitize` redacts high-confidence secret prefixes — best-effort; review output before sharing.
 
-
 ## Managing export runs
 
 ```bash

@@ -69,9 +69,9 @@ oc_prompt_run_meta() {
         return 0
     fi
     printf 'Optional title (blank = none): '
-    IFS= read -r title || title=""
+    oc_read_meta_line title || title=""
     printf 'Optional notes (blank = none): '
-    IFS= read -r notes || notes=""
+    oc_read_meta_line notes || notes=""
     OCED_RUN_TITLE="$title"
     OCED_RUN_NOTES="$notes"
 }
@@ -146,6 +146,9 @@ oc_preset_run() {
     # preset's own config.
     local menu_adds="nothing"
     local -a extra=()
+    local -a meta_args=()
+    if [ -n "$OCED_RUN_TITLE" ]; then meta_args+=(--title "$OCED_RUN_TITLE"); fi
+    if [ -n "$OCED_RUN_NOTES" ]; then meta_args+=(--notes "$OCED_RUN_NOTES"); fi
     local run_csv=""
     if [ "$all_marked" != 1 ]; then
         # The menu narrowed the selection: it wins, and the Sessions line names
@@ -193,10 +196,10 @@ oc_preset_run() {
 
     if [ "$all_marked" = "1" ]; then
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool_spin "Exporting" export "$name" --title "$OCED_RUN_TITLE" --notes "$OCED_RUN_NOTES" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" "${meta_args[@]}" "${extra[@]}"
     else
         oc_export_confirm "$name" "$sess_line" "$menu_adds" "$note" || return 1
-        run_oced_tool_spin "Exporting" export "$name" --title "$OCED_RUN_TITLE" --notes "$OCED_RUN_NOTES" --sessions "$run_csv" "${extra[@]}"
+        run_oced_tool_spin "Exporting" export "$name" "${meta_args[@]}" --sessions "$run_csv" "${extra[@]}"
     fi
     return 0
 }

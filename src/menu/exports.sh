@@ -455,7 +455,7 @@ _oc_exports_update_one() {
         fi
         printf '   Current title: %s\n' "${current_title:-(none)}"
         printf '   New title (Enter keeps current): '
-        IFS= read -r answer || answer=""
+        oc_read_meta_line answer || answer=""
         [ -n "$answer" ] && meta_args+=(--title "$answer")
         if [ "$current_notes_kind" = "auto-shrink-discard" ]; then
             printf '   Current automatic notes: %s\n' "${current_notes:-(none)}"
@@ -464,7 +464,7 @@ _oc_exports_update_one() {
             printf '   Current notes: %s\n' "${current_notes:-(none)}"
             printf '   New notes (Enter keeps current): '
         fi
-        IFS= read -r answer || answer=""
+        oc_read_meta_line answer || answer=""
         [ -n "$answer" ] && meta_args+=(--notes "$answer")
     fi
     confirm_action "Apply this update to $stamp now?" || return 1

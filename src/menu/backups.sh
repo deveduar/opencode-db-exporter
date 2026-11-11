@@ -6,14 +6,14 @@
 oc_backups_rows() {
     local mode="$1" order="${2:-newest}"
     local m="$OCED_BACKUP_DIR/manifest.json"
-    local last_f=""
+    printf '__CREATE__\t[>] create backup\n'
     if [ -f "$m" ]; then
+        local last_f
         last_f=$(jq -r '.backups[-1].file // empty' "$m" 2>/dev/null)
         if [ -n "$last_f" ]; then
             printf '__SYNC__\t[>] sync backup with live DB\n'
         fi
     fi
-    printf '__CREATE__\t[>] create backup\n'
     oc_toggle_row "$mode" "$([ "$mode" = view ] && printf remove || printf view)"
     if [ "$order" = "newest" ]; then
         oc_toggle_row "newest first" "old first" "__TOGGLE_ORDER__"

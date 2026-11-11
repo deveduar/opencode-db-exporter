@@ -20,6 +20,7 @@ bash "$TESTS_DIR/make_fake_db.sh" "$FAKE" >/dev/null
 export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$BK"
+EX_PRESETS="$TESTS_DIR/../presets.json"
 # Hermetic config: a missing OCED_CONF keeps the suite independent of the
 # developer's ~/.config AND of the repo-shipped portable conf (env > conf; the
 # portable-detection tests below override this with env -u OCED_CONF ...).
@@ -122,14 +123,14 @@ PBK=$(printf '%s\n' "$PORT_DEFAULTS" | sed -n 3p)
 [ "$POUT" = "$PORT_ROOT/exports" ] && ok "portable OCED_OUT defaults into the repo" || bad "portable OCED_OUT: $POUT"
 [ "$PBK" = "$PORT_ROOT/backups" ] && ok "portable OCED_BACKUP_DIR defaults into the repo" || bad "portable OCED_BACKUP_DIR: $PBK"
 
-# End-to-end: the repo presets are actually usable — `archive` exists only in the
+# End-to-end: the repo presets are actually usable — `complete` exists only in the
 # shipped presets.json, so resolving it proves the portable default kicked in.
 PO="$TMP/po"
 mkdir -p "$PO"
 PORT_RUN=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS -u OCED_SHRINK_PRESETS \
-    OPENCODE_DB="$FAKE" OCED_OUT="$PO" bash "$MOD/opencode-db.sh" export archive --sessions ses_A0001 2>&1)
+    OPENCODE_DB="$FAKE" OCED_OUT="$PO" bash "$MOD/opencode-db.sh" export complete --sessions ses_A0001 2>&1)
 [ -n "$(find "$PO" -name metadata.json 2>/dev/null | head -1)" ] \
-    && ok "portable export resolves the repo presets (archive)" \
+    && ok "portable export resolves the repo presets (complete)" \
     || bad "portable export: $(printf '%s' "$PORT_RUN" | tail -2)"
 
 # A user ~/.config presets file beats the repo-shipped one (the repo is only the
@@ -370,7 +371,7 @@ grep_run "All core dependencies present." deps --check && ok "deps --check" || b
 
 echo "== export transcript default =="
 grep_run "Exported" export transcript && ok "transcript export" || bad "transcript export"
-TC=$(cat "$(last_transcript transcript 'Project Alpha')")
+TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 echo "$TC" | grep -q "**Tool:**" && ok "transcript keeps tool calls" || bad "transcript no tools"
 echo "$TC" | grep -q "Let me think first" && ok "transcript keeps reasoning by default" || bad "transcript reasoning lost"
 MT=$(last_meta transcript)
@@ -379,7 +380,7 @@ jq -e '.profile == "transcript" and .flags.sanitize == false and .flags.no_reaso
 
 echo "== export transcript --no-reasoning =="
 run export transcript --no-reasoning --filter ses_A0001 >/dev/null
-TC=$(cat "$(last_transcript transcript 'Project Alpha')")
+TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 echo "$TC" | grep -q "Let me think first" && bad "no-reasoning kept reasoning" || ok "no-reasoning omits reasoning"
 echo "$TC" | grep -q "I'll look at the files" && ok "no-reasoning keeps the text" || bad "no-reasoning lost text"
 MT=$(last_meta transcript)
@@ -387,7 +388,7 @@ jq -e '.flags.no_reasoning == true' "$MT" >/dev/null && ok "no-reasoning recorde
 
 echo "== export transcript --role user (prompts only, flag not a preset) =="
 run export transcript --role user --filter ses_A0001 >/dev/null
-TC=$(cat "$(last_transcript transcript 'Project Alpha')")
+TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 echo "$TC" | grep -q "Done\." && bad "--role user kept the assistant answer" || ok "--role user excludes assistant messages"
 echo "$TC" | grep -q "Still working" && ok "--role user keeps the prompts" || bad "--role user lost prompts"
 
@@ -406,18 +407,18 @@ ALIASMETA=$(meta_of "$ALIASOUT")
 jq -e '.profile == "digest"' "$ALIASMETA" >/dev/null \
     && ok "the compactions alias normalises to the digest profile" || bad "alias profile: $(jq -r '.profile' "$ALIASMETA")"
 DIGRUN=$(run export digest --filter ses_A0001 --stamp "digest-run")
-CC=$(cat "$(out_dir_of "$DIGRUN")"/*/'Project Alpha'*.md)
+CC=$(cat "$(out_dir_of "$DIGRUN")"/*/'Project-Alpha'*.md)
 echo "$CC" | grep -q "DIGEST_A" && ok "digest profile exported" || bad "digest profile"
 echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "digest profile has tools" || ok "digest profile no tools"
 
 echo "== long output truncation =="
 run export transcript --filter ses_B0001 >/dev/null
-FT=$(cat "$(last_transcript transcript 'Project Beta')")
+FT=$(cat "$(last_transcript transcript 'Project-Beta')")
 echo "$FT" | grep -q "truncated:" && ok "long output truncated" || bad "output not truncated"
 
 echo "== transcript toggles: compaction markers + summary diffs =="
 run export transcript --mark-compactions --summary-diffs --filter ses_A0001 >/dev/null
-TC2=$(cat "$(last_transcript transcript 'Project Alpha')")
+TC2=$(cat "$(last_transcript transcript 'Project-Alpha')")
 echo "$TC2" | grep -q "Context compaction" && ok "compaction marker" || bad "compaction marker"
 echo "$TC2" | grep -q "Summary of changes" && ok "summary diffs" || bad "summary diffs"
 echo "$TC2" | grep -Eq '<!-- step-(start|finish) -->' && bad "structural step markers leaked into Markdown" || ok "structural step markers omitted from Markdown"
@@ -434,7 +435,7 @@ INSERT INTO part VALUES
   '{"type":"step-finish","reason":"tool-calls"}');
 SQL
 CONV_RUN=$(run export conversation --sessions ses_A0001)
-CONV_FILE=$(find "$(out_dir_of "$CONV_RUN")" -name 'Project Alpha.md' -type f -print -quit)
+CONV_FILE=$(find "$(out_dir_of "$CONV_RUN")" -name 'Project-Alpha.md' -type f -print -quit)
 if grep -Eq '<!-- step-(start|finish) -->' "$CONV_FILE"; then
     bad "conversation includes structural step comments"
 else
@@ -467,7 +468,7 @@ jq -e '.flags.files == false and .artifacts == ["corpus.jsonl", "index.md"] and 
 
 echo "== faithful product (lossless JSON archive) =="
 run export faithful --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -path "*/faithful/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+FR=$(find "$OUT" -path "*/faithful/*" -name 'Project-Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 [ -n "$FR" ] && ok "faithful JSON file written in the faithful product dir" || bad "faithful json file missing"
 jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.backfilled == true and .info.cost == 0.05' "$FR" >/dev/null \
     && ok "faithful info carries the backfilled tokens" || bad "faithful info tokens"
@@ -482,11 +483,11 @@ jq -e '.info.model == "model-a" and .info.parentId == null and .info.agent == "b
 
 echo "== --sanitize redacts secrets in markdown and faithful JSON =="
 run export transcript --sanitize --filter ses_A0001 >/dev/null
-TC=$(cat "$(last_transcript transcript 'Project Alpha')")
+TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 printf '%s' "$TC" | grep -q "sk-test1234567890abcdefghijkl" && bad "sanitize leaked the API key" || ok "sanitize redacts the API key"
 printf '%s' "$TC" | grep -q "sk-\[REDACTED\]" && ok "sanitize shows the redaction marker" || bad "sanitize marker missing"
 run export faithful --sanitize --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -path "*/faithful/*" -name 'Project Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+FR=$(find "$OUT" -path "*/faithful/*" -name 'Project-Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "faithful sanitize leaked" || ok "faithful sanitize redacts recursively"
 MT=$(last_meta faithful)
 jq -e '.flags.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize recorded in metadata" || bad "faithful sanitize metadata"
@@ -564,10 +565,11 @@ LEGACYV=$(run exports view "$LEGACY" 2>&1)
 [ $? -ne 0 ] && printf '%s' "$LEGACYV" | grep -q "No metadata.json found" \
     && ok "exports view refuses a legacy-only metadatos.json run dir" \
     || bad "exports view legacy: $(printf '%s' "$LEGACYV" | head -1)"
-EXL=$(run exports list)
-[ $? -ne 0 ] && printf '%s' "$EXL" | grep -q "no metadata.json; re-export this run" \
-    && ok "exports list rejects a run without canonical metadata" \
-    || bad "legacy list: $(printf '%s' "$EXL" | head -1)"
+EXL=$(run exports list); exlrc=$?
+[ "$exlrc" -eq 0 ] && printf '%s' "$EXL" | grep -q "$LEGACY" \
+    && printf '%s' "$EXL" | grep -q '?' \
+    && ok "exports list tolerates a run without canonical metadata (flags it '?')" \
+    || bad "legacy list: rc=$exlrc $(printf '%s' "$EXL" | head -1)"
 rm -rf "$OUT/$LEGACY"
 
 # A NARROWED run records `.scope` (the wider set) + `.excluded` (what it left
@@ -667,7 +669,7 @@ jq -e '.selection.ids == ["ses_A0001","ses_B0001"]' "$(last_meta transcript)" >/
 
 echo "== sub inline / omit / separate =="
 run export transcript --sub inline >/dev/null
-INL=$(last_transcript transcript 'Project Alpha')
+INL=$(last_transcript transcript 'Project-Alpha')
 grep -q "Subagent" "$INL" && ok "sub inline included" || bad "sub inline"
 run export transcript --sub omit >/dev/null
 OMIT=$(last_meta transcript)
@@ -892,9 +894,23 @@ jq -e '.selection.ids == ["ses_B0001"]' "$DSJ" >/dev/null \
 jq -e 'has("discard_exported") | not' "$DSJ" >/dev/null \
     && ok "a discard run with no export yet has no discard_exported key" \
     || bad "discard_exported present on a never-exported discard"
+
+# The discard-export coverage check needs its OWN shelf + export dir: it re-asks
+# the exports shelf at verify time, so adding/removing runs must never disturb
+# the shared fixtures above.
+UMK="$TMP/umk"; UOU="$TMP/umk-out"
+rm -rf "$UMK" "$UOU"; mkdir -p "$UMK" "$UOU"
+OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" OCED_PRESETS="$EX_PRESETS" \
+    run shrink --discard-sessions ses_B0001 >/dev/null || bad "discard run on the verify shelf"
+USJ=$(ls -t "$UMK"/shrink/*/shrink.json | head -1)
+USTAMP=$(basename "$(dirname "$USJ")")
+jq -r '.selection.cascade | join(",")' "$USJ" | grep -qx 'ses_B0001,ses_B0002' \
+    && ok "a discard run stores its closed cascade in .selection.cascade" \
+    || bad "cascade: $(jq -c '.selection' "$USJ" 2>/dev/null)"
+
 # A ROOT-ONLY export of the same root is a DIFFERENT set: exact ids, so it
 # must never clear the flag (the whole reason the offer hands the full cascade).
-OSTAB=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export archive --sessions ses_B0001)
+OSTAB=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export complete --sessions ses_B0001)
 SSTAB=$(stamp_of "$OSTAB")
 UVT2=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
 [ "$(printf '%s\n' "$UVT2" | grep -c '^unexported')" -eq 1 ] \
@@ -902,7 +918,7 @@ UVT2=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
     && ok "a root-only export is a different set: the discard stays flagged" \
     || bad "root-only export cleared the flag: [$UVT2]"
 # 3) the CASCADE exported AFTER the shrink -> the live re-check finds it: clean.
-OCAS=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export archive --sessions ses_B0001,ses_B0002)
+OCAS=$(OCED_PRESETS="$EX_PRESETS" OCED_OUT="$UOU" run export complete --sessions ses_B0001,ses_B0002)
 SCAS=$(stamp_of "$OCAS")
 UV2=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify)
 printf '%s' "$UV2" | grep -q "All clean: no orphan dirs, no old pre-shrinks, no unexported discards" \
