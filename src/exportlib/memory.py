@@ -20,6 +20,7 @@ from exportlib.writers import (
     product_artifact_files,
     product_artifact_path,
 )
+from exportlib.progress import Progress
 
 
 def memory_session_entry(con, s: dict, cap: int = 0, files: bool = False, sanitize_on: bool = False) -> dict:
@@ -117,6 +118,12 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     total_digest = 0
     total_backfilled = 0
     records: list = []
+    progress = Progress(
+        "Exporting memory",
+        len(sessions),
+        disabled=args.no_progress,
+    )
+    progress.start()
     with (out_dir / "corpus.jsonl").open("w", encoding="utf-8") as corpus:
         for rid in roots:
             root = sessions[rid]
@@ -143,6 +150,8 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
                 records.append(session_record(sessions[s_id], "subagent"))
             if e["tokens"]["backfilled"]:
                 total_backfilled += 1
+            progress.advance(1 + len(subs))
+    progress.finish()
 
     idx_rows = [
         "# opencode memory corpus",

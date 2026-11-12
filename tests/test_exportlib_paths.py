@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import io
 import os
 import sqlite3
 import sys
@@ -19,6 +20,7 @@ from exportlib.config import (
     default_presets,
     readonly_db_uri,
 )
+from exportlib.progress import Progress
 from exportlib.util import yaml_frontmatter
 from exportlib.writers import session_folder_name
 from shrinklib.config import default_shrink_presets
@@ -209,6 +211,34 @@ class MarkdownFrontmatterTests(unittest.TestCase):
         self.assertEqual(fields["agent"], "build")
         self.assertEqual(fields["model"], "model-from-message")
         con.close()
+
+
+class ExportProgressTests(unittest.TestCase):
+    class TTYBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    def test_progress_updates_interactive_stderr_and_finishes_line(self):
+        stream = self.TTYBuffer()
+        progress = Progress("Exporting", 2, stream=stream)
+        progress.start()
+        progress.advance()
+        progress.advance()
+        progress.finish()
+
+        output = stream.getvalue()
+        self.assertIn("Exporting:", output)
+        self.assertIn("1/2 sessions", output)
+        self.assertIn("2/2 sessions\n", output)
+
+    def test_progress_is_silent_when_disabled_or_not_a_tty(self):
+        disabled_stream = self.TTYBuffer()
+        Progress("Exporting", 2, disabled=True, stream=disabled_stream).start()
+        non_tty_stream = io.StringIO()
+        Progress("Exporting", 2, stream=non_tty_stream).start()
+
+        self.assertEqual(disabled_stream.getvalue(), "")
+        self.assertEqual(non_tty_stream.getvalue(), "")
 
 
 def subprocess_result(returncode=0, stdout="", stderr=""):

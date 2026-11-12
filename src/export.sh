@@ -22,7 +22,7 @@ oced_export() {
     local need_db=1 a
     for a in "$@"; do
         case "$a" in
-            --list-presets|--list-products|--show|--explain|--dry-run) need_db=0 ;;
+            --list-presets|--list-products|--show|--explain|--dry-run|--check) need_db=0 ;;
         esac
     done
     [ "$need_db" -eq 1 ] && o_db_exists

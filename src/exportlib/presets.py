@@ -264,6 +264,8 @@ def bundle_child_argv(args, product: str) -> list[str]:
         argv += ["--notes", args.notes]
     if getattr(args, "notes_kind", None):
         argv += ["--notes-kind", args.notes_kind]
+    if getattr(args, "no_progress", False):
+        argv.append("--no-progress")
     cfg = args.bundle.get(product, {})
     for k, v in cfg.items():
         if flag_in_argv("--" + _flag(k)) or flag_in_env(k):

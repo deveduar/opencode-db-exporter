@@ -26,6 +26,7 @@ from exportlib.writers import (
     session_folder_name,
     session_product_filename,
 )
+from exportlib.progress import Progress
 
 
 def session_faithful(con, s: dict, sanitize_on: bool) -> dict:
@@ -91,6 +92,12 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     total_digest = 0
     total_backfilled = 0
     records: list = []
+    progress = Progress(
+        "Exporting faithful",
+        len(sessions),
+        disabled=args.no_progress,
+    )
+    progress.start()
     for rid in roots:
         root = sessions[rid]
         subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
@@ -121,8 +128,11 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
                 if sub.get("tokens_backfilled"):
                     total_backfilled += 1
                 records.append(session_record(sub, "subagent"))
+                progress.advance()
         n_root += 1
         n_subs += len(subs)
+        progress.advance()
+    progress.finish()
 
     idx_rows = [
         "# opencode faithful JSON archive",

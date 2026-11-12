@@ -164,7 +164,7 @@ fi
 case "${1:-help}" in
     deps|help|-h|menu|backups|shrinks) ;;
     shrink) [ "${2:-}" = "--list-presets" ] || o_resolve_db ;;
-    export) case "${2:-}" in --list-presets|--list-products) ;; *) o_resolve_db ;; esac ;;
+    export) case "${2:-}" in --list-presets|--list-products|--show|--explain|--dry-run|--check) ;; *) o_resolve_db ;; esac ;;
     *) o_resolve_db ;;
 esac
 trap 'o_cleanup_tmp' EXIT

@@ -63,20 +63,45 @@ describe an invented schema):
 
 ## 3. Export pipeline
 
-`export.sh` is a "bash → python" bridge: it validates dependencies/DB and delegates to the
-`exportlib` package (`src/exportlib/cli.py` is the self-bootstrapping CLI entry — the old
-`src/export.py` shim is gone), which is the only SQLite reader. There is no fork toward
-the opencode CLI (the CLI offers no `session export` and
+The root `opencode-db-export.py` entry point is the primary, stable interface for creating
+exports. It runs the `exportlib` package directly with Python's standard-library
+`sqlite3`; no `pip install` or external SQLite executable is required. `export.sh` is an
+optional Bash bridge to the same self-bootstrapping Python CLI (`src/exportlib/cli.py`;
+the old `src/export.py` shim is gone), adding the Bash suite's command and menu
+integration. There is no fork toward the opencode CLI (the CLI offers no `session export` and
 its environment filters would hide sessions; reading the DB directly in `mode=ro` is what
 guarantees seeing everything).
 
-The root `opencode-db-export.py` entry point exposes that same exporter without the Bash
-dispatcher or its external tools. On Windows, the Python config asks the installed OpenCode
-CLI for `opencode debug paths db` (unless `OPENCODE_DB` is set), so channel-specific and
-overridden database locations are respected. SQLite access builds a percent-encoded file URI
-with `mode=ro`; the Python export path does not require the `sqlite3`, `jq`, `gzip` or `fzf`
-executables. This is native Windows support for generating exports; export-run management,
-backups, shrink and the interactive menu remain part of the Bash/Linux/WSL command suite.
+On Windows, the Python config asks the installed OpenCode CLI for `opencode debug paths db`
+(unless `OPENCODE_DB` is set), so channel-specific and overridden database locations are
+respected. SQLite access builds a percent-encoded file URI with `mode=ro`. The exporter
+shows live progress on an interactive terminal; `--no-progress` disables it, and progress
+never goes to non-terminal stderr. This is native Windows support for generating exports;
+export-run management, backups, shrink and the interactive menu remain in the
+Bash/Linux/WSL command suite. The Python `update.py` module is an implementation backend for
+the Bash `exports update` run-management command, not a separate public export CLI.
+
+The versioned (`schema_version: 1`) Python automation contract includes
+`--check --json` (read-only database preflight), `--show --json` (static plan), and
+`--dry-run --json` (read-only selected-session count). Preview operations never create
+output directories. Exit code `0` means ready/success, `1` means a runtime or database
+error, `2` is argparse usage error, and `3` means no data to export. JSON preflight
+distinguishes `status: "no_data"` plus `no_data_reason` from `status: "error"` plus
+`error`.
+
+The two interfaces intentionally have different configuration surfaces. The standalone
+Python exporter reads `OPENCODE_DB`, `OCED_OUT`, `OCED_PRESETS`,
+`OCED_TRANSCRIPT_CHUNK_MB`, and the backup settings needed by `--snapshot fresh`; it does
+not source `opencode-db.conf`. The Bash suite reads `OCED_CONF` and its path/preferences
+(`OCED_BACKUP_DIR`, `OCED_FROM_BACKUP`, `OCED_SHRINK_PRESETS`, compression/logging/timezone
+settings) and passes the relevant export environment to Python. `OCED_FROM_BACKUP` alone
+does not redirect the Python entry point to a backup; Bash resolves the chosen backup and
+passes that file as `OPENCODE_DB`.
+
+On WSL, direct reads from a Windows-mounted database may be affected by SQLite WAL locking
+and filesystem semantics. Keep the database and its `-wal`/`-shm` sidecars together. The
+optional Bash backup uses SQLite `.backup`, which creates a consistent WAL-aware snapshot;
+the Python exporter does not create backups.
 
 ### Products
 

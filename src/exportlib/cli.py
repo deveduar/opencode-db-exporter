@@ -45,6 +45,7 @@ from exportlib.db import (
 from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile, scope_meta
+from exportlib.progress import Progress
 from exportlib.render import Renderer
 from exportlib.transcript import (
     append_transcript_inline,
@@ -216,8 +217,14 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="print the resolved plan for <profile> and exit (static, no DB)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan + the sessions the selection would match; write nothing")
+    ap.add_argument("--check", action="store_true",
+                    help="check the database and report its session count; do not export")
+    ap.add_argument("--json", dest="json_output", action="store_true",
+                    help="emit JSON for --check, --show, or --dry-run")
     ap.add_argument("--explain", action="store_true",
                     help="catalog every preset: what it produces and an example file tree (no DB)")
+    ap.add_argument("--no-progress", action="store_true",
+                    help="disable the live terminal progress bar")
     return ap
 
 
@@ -352,22 +359,72 @@ def _print_products() -> int:
 
 
 def _plan_block(profile: str) -> str:
-    """The plan text for a profile, dying cleanly on an unknown name."""
+    """The plan text for a profile."""
     from exportlib.plan import plan_text
-    try:
-        return plan_text(profile)
-    except ValueError as e:
-        die(str(e))
+    return plan_text(profile)
 
 
 def _show_plan(profile: str) -> int:
     """`export <name> --show`: the resolved plan only, static (no DB read)."""
+    try:
+        plan = _plan_block(profile)
+    except ValueError as exc:
+        die(str(exc))
     print(f"== Export plan: {profile} ==")
     print()
-    print(_plan_block(profile))
+    print(plan)
     print()
     print("(plan only: the database was not read and nothing was written)")
     return 0
+
+
+def _json_result(result: dict) -> None:
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def _check_database(json_output: bool) -> int:
+    """Read-only preflight for automation and integrations."""
+    db_path = None
+    try:
+        db_path = Path(default_db())
+        if not db_path.is_file():
+            raise FileNotFoundError(f"Database not found: {db_path}")
+        with sqlite3.connect(readonly_db_uri(db_path), uri=True) as con:
+            count = con.execute("SELECT count(*) FROM session").fetchone()[0]
+    except (DatabasePathError, OSError, sqlite3.Error) as exc:
+        if json_output:
+            _json_result({
+                "schema_version": 1,
+                "status": "error",
+                "database": str(db_path) if db_path else None,
+                "session_count": None,
+                "no_data_reason": None,
+                "error": str(exc),
+                "writes": False,
+            })
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    no_data_reason = "database_has_no_sessions" if count == 0 else None
+    status = "no_data" if no_data_reason else "ready"
+    if json_output:
+        _json_result({
+            "schema_version": 1,
+            "status": status,
+            "database": str(db_path),
+            "session_count": count,
+            "no_data_reason": no_data_reason,
+            "error": None,
+            "writes": False,
+        })
+    else:
+        print(f"Database: {db_path}")
+        print(f"Sessions: {count}")
+        print(f"Status: {status}")
+        if no_data_reason:
+            print(f"No data reason: {no_data_reason}")
+    return 3 if no_data_reason else 0
 
 
 def _matched_sessions(con, args) -> dict:
@@ -392,32 +449,120 @@ def _counts(sessions: dict) -> str:
     return f"{len(sessions)} session(s) = {roots} root(s) + {len(sessions) - roots} subagent(s)"
 
 
-def _dry_run(args, profile: str) -> int:
+def _dry_run(args, profile: str, json_output: bool = False) -> int:
     """`export <name> --dry-run`: the plan plus the sessions the current
     selection would match (read-only), and nothing is written."""
-    text = _plan_block(profile)
+    selection = selection_label(args)
+    db_path = None
+    try:
+        text = _plan_block(profile)
+    except ValueError as exc:
+        if json_output:
+            _json_result({
+                "schema_version": 1,
+                "status": "error",
+                "profile": profile,
+                "selection": selection,
+                "selected_session_count": None,
+                "no_data_reason": None,
+                "error": str(exc),
+                "database_read": False,
+                "writes": False,
+            })
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        db_path = Path(default_db())
+        if not db_path.is_file():
+            raise FileNotFoundError(f"Database not found: {db_path}")
+        con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            sessions = _matched_sessions(con, args)
+        finally:
+            con.close()
+    except (DatabasePathError, OSError, sqlite3.Error) as exc:
+        if json_output:
+            _json_result({
+                "schema_version": 1,
+                "status": "error",
+                "profile": profile,
+                "database": str(db_path) if db_path else None,
+                "selection": selection,
+                "selected_session_count": None,
+                "root_count": None,
+                "subagent_count": None,
+                "no_data_reason": None,
+                "error": str(exc),
+                "plan": text,
+                "database_read": False,
+                "writes": False,
+            })
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    ids = set(sessions)
+    roots = sum(1 for session in sessions.values() if session["parent_id"] not in ids)
+    subagents = len(sessions) - roots
+    no_data_reason = "selection_matched_no_exportable_sessions" if not sessions else None
+    status = "no_data" if no_data_reason else "ready"
+    if json_output:
+        _json_result({
+            "schema_version": 1,
+            "status": status,
+            "profile": profile,
+            "database": str(db_path),
+            "selection": selection,
+            "selected_session_count": len(sessions),
+            "root_count": roots,
+            "subagent_count": subagents,
+            "no_data_reason": no_data_reason,
+            "error": None,
+            "plan": text,
+            "database_read": True,
+            "writes": False,
+        })
+        return 3 if no_data_reason else 0
+
     print(f"== Export plan: {profile} ==")
     print()
     print(text)
     print()
-    print(f"Selection: {selection_label(args)}")
-
-    db_path = Path(default_db())
-    if not db_path.exists():
-        print(f"(database not found at {db_path}; nothing was read or written)")
-        return 0
-
-    con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
-    con.row_factory = sqlite3.Row
-    try:
-        sessions = _matched_sessions(con, args)
-    finally:
-        con.close()
+    print(f"Selection: {selection}")
     if not sessions:
-        print(f"Matched: 0 sessions — nothing would be exported ({selection_label(args)}).")
-        return 0
+        print(f"Matched: 0 sessions — nothing would be exported ({selection}).")
+        print("(dry run: nothing was written)")
+        return 3
     print(f"Matched: {_counts(sessions)}")
     print("(dry run: nothing was written)")
+    return 0
+
+
+def _show_plan_json(profile: str) -> int:
+    try:
+        plan = _plan_block(profile)
+    except (OSError, ValueError, SystemExit) as exc:
+        _json_result({
+            "schema_version": 1,
+            "status": "error",
+            "profile": profile,
+            "plan": None,
+            "database_read": False,
+            "writes": False,
+            "error": str(exc),
+        })
+        return int(exc.code) if isinstance(exc, SystemExit) and isinstance(exc.code, int) else 1
+    _json_result({
+        "schema_version": 1,
+        "status": "ready",
+        "profile": profile,
+        "plan": plan,
+        "database_read": False,
+        "writes": False,
+        "error": None,
+    })
     return 0
 
 
@@ -439,6 +584,20 @@ def _explain() -> int:
     return 0
 
 
+def _normalize_session_ids(args) -> None:
+    if not args.sessions:
+        return
+    flat = []
+    for item in args.sessions:
+        if isinstance(item, str):
+            flat.extend(part.strip() for part in item.split(","))
+        else:
+            flat.extend(str(part) for part in item)
+    args.sessions = [session_id for session_id in flat if session_id]
+    if not args.sessions:
+        die("--sessions received no ids")
+
+
 def main() -> None:
     try:
         _main()
@@ -457,6 +616,10 @@ def _main() -> None:
         sys.exit(_print_products())
     if args.explain:
         sys.exit(_explain())
+    if args.json_output and not (args.check or args.show or args.dry_run):
+        ap.error("--json requires --check, --show, or --dry-run")
+    if args.check:
+        sys.exit(_check_database(args.json_output))
 
     if args.chunk_mb < 0:
         ap.error("--chunk-mb must be non-negative (0 disables chunking)")
@@ -468,20 +631,14 @@ def _main() -> None:
         args.profile = "transcript"  # alias
         profile_arg = args.profile
 
+    _normalize_session_ids(args)
+
     # Preview short-circuits before the write pipeline (`--show` never reads the DB).
     if args.show:
-        sys.exit(_show_plan(profile_arg))
+        sys.exit(_show_plan_json(profile_arg) if args.json_output else _show_plan(profile_arg))
 
     if args.dry_run:
-        sys.exit(_dry_run(args, profile_arg))
-
-    if args.sessions:
-        flat = []
-        for part_ in args.sessions:  # preset may already hold a list of ids
-            flat.extend((p.strip() for p in part_.split(",")) if isinstance(part_, str) else (str(p) for p in part_))
-        args.sessions = [s for s in flat if s]
-        if not args.sessions:
-            die("--sessions received no ids")
+        sys.exit(_dry_run(args, profile_arg, args.json_output))
 
     if args.bundle:
         run_bundle(args)
@@ -511,12 +668,6 @@ def _main() -> None:
                 file=sys.stderr,
             )
 
-    out_dir = make_outdir_final(
-        out_base,
-        args.stamp,
-        getattr(args, "preset", None),
-        bundle_child=args.bundle_child,
-    )
     try:
         con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
         con.row_factory = sqlite3.Row
@@ -526,7 +677,9 @@ def _main() -> None:
     sessions = load_sessions(con, args.filter, args.sessions,
                              getattr(args, "last", None), getattr(args, "since", None))
     if not sessions:
-        die(f"No sessions to export ({selection_label(args)} matched nothing).")
+        print(f"No sessions to export ({selection_label(args)} matched nothing).",
+              file=sys.stderr)
+        sys.exit(3)
 
     # ------- subagent inclusion (BEFORE the hierarchy) -------
     # `load_sessions` returns exactly what the selection matched, so a subagent is
@@ -548,12 +701,27 @@ def _main() -> None:
     sessions = filter_subagent_policy(sessions, db_ids, sub=args.sub)
     if not sessions:
         if args.no_subagents:
-            die("--no-subagents: every matched session is a subagent — nothing left to export.")
+            print("--no-subagents: every matched session is a subagent — nothing left to export.",
+                  file=sys.stderr)
+            sys.exit(3)
         if args.no_orphan_subagents:
-            die(
+            print(
                 "--no-orphan-subagents: every matched session is a subagent whose "
-                "parent is not exported — nothing left to export."
+                "parent is not exported — nothing left to export.",
+                file=sys.stderr,
             )
+            sys.exit(3)
+    if not sessions:
+        print(f"No sessions to export ({selection_label(args)} matched nothing).",
+              file=sys.stderr)
+        sys.exit(3)
+
+    out_dir = make_outdir_final(
+        out_base,
+        args.stamp,
+        getattr(args, "preset", None),
+        bundle_child=args.bundle_child,
+    )
 
     # The shrink-discard note is generated from the original export selection.
     # On refresh, replace that creation-time count with the actual selected set
@@ -602,6 +770,12 @@ def _main() -> None:
     total_comp = 0
     total_digest = 0
     total_msgs = 0
+    progress = Progress(
+        f"Exporting {args.profile}",
+        len(sessions),
+        disabled=args.no_progress,
+    )
+    progress.start()
     for root_id in roots:
         root = sessions[root_id]
         sub_tree = list(walk_subagents(root_id, children_of))
@@ -659,6 +833,8 @@ def _main() -> None:
                 )
 
         written.append((root, subs, rfolder))
+        progress.advance(1 + len(subs))
+    progress.finish()
 
     # ------- index -------
     index_path = product_artifact_path(out_dir, "index.md", args)

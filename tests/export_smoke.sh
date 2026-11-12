@@ -65,6 +65,51 @@ PY_PLAN=$(python3 "$TESTS_DIR/../opencode-db-export.py" transcript --dry-run 2>&
 printf '%s' "$PY_PLAN" | grep -q '^Matched: ' \
     && ok "root Python entry point reads the fake DB directly" \
     || bad "root Python export dry run: $PY_PLAN"
+PY_CHECK=$(python3 "$TESTS_DIR/../opencode-db-export.py" --check --json 2>&1)
+printf '%s' "$PY_CHECK" | jq -e --arg db "$FAKE" \
+    '.schema_version == 1 and .status == "ready" and .database == $db and .session_count == 6 and .no_data_reason == null and .writes == false' >/dev/null \
+    && ok "Python JSON preflight reports database and session count" \
+    || bad "Python preflight JSON: $PY_CHECK"
+PY_DRY=$(OCED_OUT="$TMP/dry-run-must-not-exist" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" transcript --last 1 --dry-run --json 2>&1)
+printf '%s' "$PY_DRY" | jq -e \
+    '.schema_version == 1 and .status == "ready" and .selected_session_count > 0 and .writes == false and .database_read == true' >/dev/null \
+    && [ ! -e "$TMP/dry-run-must-not-exist" ] \
+    && ok "Python JSON dry-run reports its selection and creates no output" \
+    || bad "Python dry-run JSON or unexpected output: $PY_DRY"
+PY_SHOW=$(python3 "$TESTS_DIR/../opencode-db-export.py" complete --show --json 2>&1)
+printf '%s' "$PY_SHOW" | jq -e \
+    '.schema_version == 1 and .status == "ready" and .profile == "complete" and .database_read == false and .writes == false and (.plan | type == "string")' >/dev/null \
+    && ok "Python JSON show returns a static plan without reading the database" \
+    || bad "Python show JSON: $PY_SHOW"
+EMPTY_DRY=$(OCED_OUT="$TMP/empty-dry-run-must-not-exist" \
+    OPENCODE_DB="$FAKE" python3 "$TESTS_DIR/../opencode-db-export.py" transcript \
+        --sessions ses_missing --dry-run --json 2>&1); EMPTY_DRY_RC=$?
+[ "$EMPTY_DRY_RC" -eq 3 ] \
+    && printf '%s' "$EMPTY_DRY" | jq -e \
+        '.schema_version == 1 and .status == "no_data" and .selected_session_count == 0 and .no_data_reason != null and .writes == false' >/dev/null \
+    && [ ! -e "$TMP/empty-dry-run-must-not-exist" ] \
+    && ok "empty Python dry-run has a distinct no-data status and writes nothing" \
+    || bad "empty dry-run rc=$EMPTY_DRY_RC: $EMPTY_DRY"
+EMPTY_DB="$TMP/empty.db"
+python3 - "$EMPTY_DB" <<'PY'
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as con:
+    con.execute("CREATE TABLE session (id TEXT)")
+PY
+EMPTY_CHECK=$(OPENCODE_DB="$EMPTY_DB" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" --check --json 2>&1); EMPTY_RC=$?
+[ "$EMPTY_RC" -eq 3 ] \
+    && printf '%s' "$EMPTY_CHECK" | jq -e \
+        '.schema_version == 1 and .status == "no_data" and .session_count == 0 and .no_data_reason == "database_has_no_sessions"' >/dev/null \
+    && ok "Python preflight distinguishes a valid empty database" \
+    || bad "empty database preflight rc=$EMPTY_RC: $EMPTY_CHECK"
+MISSING_CHECK=$(OPENCODE_DB="$TMP/missing.db" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" --check --json 2>&1); MISSING_RC=$?
+[ "$MISSING_RC" -eq 1 ] \
+    && printf '%s' "$MISSING_CHECK" | jq -e '.schema_version == 1 and .status == "error" and .session_count == null and .error != null' >/dev/null \
+    && ok "Python preflight distinguishes runtime/path errors from no data" \
+    || bad "missing database preflight rc=$MISSING_RC: $MISSING_CHECK"
 PY_COMPLETE=$(HOME="$TMP/python-home" env -u OCED_PRESETS \
     python3 "$TESTS_DIR/../opencode-db-export.py" complete --show 2>&1)
 printf '%s' "$PY_COMPLETE" | grep -q '^== Export plan: complete ==' \
@@ -1059,11 +1104,11 @@ printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "After the u
     && ok "update keeps a narrowed run narrow (no silent widening)" \
     || bad "narrow update: $(runu exports update "$NSTAMP" --dry-run)"
 usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_NEW01';"
-NSPJ=$(runu exports update "$NSSTAMP" --dry-run --json)
+NSPJ=$(runu exports update "$NSTAMP" --dry-run --json)
 printf '%s' "$NSPJ" | jq -e '.up_to_date == true and .counts.revived == 0 and .counts.excluded_total == 0' >/dev/null \
     && ok "a policy-dropped subagent is never revived (plan and artifacts agree)" \
     || bad "no-subagents plan: $NSPJ"
-printf '%s' "$(runu exports update "$NSSTAMP" --yes)" | grep -q "Nothing to do" \
+printf '%s' "$(runu exports update "$NSTAMP" --yes)" | grep -q "Nothing to do" \
     && ok "a --no-subagents run stays up to date after a dropped subagent is edited" \
     || bad "no-subagents idempotent: $(runu exports update "$NSSTAMP" --yes)"
 # A stray `.excluded` entry is not a policy drop: the recorded flags still make
@@ -1071,7 +1116,7 @@ printf '%s' "$(runu exports update "$NSSTAMP" --yes)" | grep -q "Nothing to do" 
 # dropped again.
 jq '.excluded=[{"id":"ses_A0002","title":"Explore gaps (@explore subagent)"}]' "$NSMETA" > "$NSMETA.tmp" \
     && mv "$NSMETA.tmp" "$NSMETA"
-NSPJ2=$(runu exports update "$NSSTAMP" --dry-run --json)
+NSPJ2=$(runu exports update "$NSTAMP" --dry-run --json)
 printf '%s' "$NSPJ2" | jq -e '.up_to_date == true and .counts.revived == 0 and (.target|length) == 3' >/dev/null \
     && ok "a stray .excluded entry cannot revive a policy-dropped subagent" \
     || bad "no-subagents stray excluded plan: $NSPJ2"
@@ -1121,7 +1166,7 @@ jq 'del(.session_records)' "$LEGRUN/metadata.json" > "$LEGRUN/metadata.json.t" \
     && mv "$LEGRUN/metadata.json.t" "$LEGRUN/metadata.json"
 printf '%s' "$(runu exports update "$LSTAMP" --dry-run 2>&1)" | grep -qE "re-export (it instead|this run)" \
     && ok "update refuses a run that cannot say what it contains" || bad "legacy refusal: $(runu exports update "$LSTAMP" --dry-run 2>&1 | head -1)"
-runu exports update "$USTAMP" --mode nope >/dev/null 2>&1 \
+runu exports update "$NSTAMP" --mode nope >/dev/null 2>&1 \
     && bad "update accepted a bad --mode" || ok "update refuses a bad --mode"
 
 echo ""

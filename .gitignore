@@ -21,7 +21,6 @@ __pycache__/
 *.log
 .DS_Store
 
-/docs/archive/*
 archive/
 notes.md
 notes-archive.md
