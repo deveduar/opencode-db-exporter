@@ -127,12 +127,18 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   `transcript|memory|digest|faithful` (mutually exclusive with `product`). The selection is
   top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
   (`run_bundle()` in `cli.py`) computes one shared collision-free stamp (bumped to
-  `stamp@N` only when any product dir already exists), then re-executes `exportlib/cli.py
-  <product>` per product with the shared `--stamp` and a hidden `--preset-name` for
-  provenance. Each child runs the unchanged single-product pipeline, so a bundle subfolder
-  is byte-identical to a normal run; the parent writes an `index.md` at the stamp root
-  listing the bundle products. `bundle_child_argv()` forwards user-explicit flags as-is
-  (CLI wins) and only emits a per-product value when it was not explicit.
+  `stamp@N` only when the run directory already exists), then re-executes `exportlib/cli.py
+  <product>` per product with the shared `--stamp`, a hidden `--preset-name` for
+  provenance, and an internal bundle-child marker that writes all session products as
+  siblings in `<stamp>/<UTC-updated-date>__<session-folder>`. The date comes from
+  `session.time_updated` in epoch milliseconds and is formatted in UTC, so folder
+  names do not vary by machine timezone. Session filenames carry their product suffix;
+  only `subagents/` and transcript `.parts/` add a nested directory. Product indexes and
+  metadata are named `index.<product>.md` and `metadata.<product>.json` at the run root;
+  the aggregated memory `corpus.jsonl` also remains at the root. The root `index.md`
+  links those product indexes. `exports update` uses the same layout when rebuilding a
+  multi-product run. `bundle_child_argv()` forwards user-explicit flags as-is (CLI wins)
+  and only emits a per-product value when it was not explicit.
 - `load_sessions()` now accepts exact ids: `WHERE s.id IN (…)` when `--sessions` is given,
   the previous LIKE when only `--filter`, and the whole table when there is no selection.
 - Without a file (or no matches) there are no presets: the raw-flags path is unchanged.
@@ -223,7 +229,10 @@ if the corpus exceeds ~50 MB without `--cap`, it suggests bounding.
 
 ### index.md / metadata.json
 
-Each run writes `index.md` (summary/index) + `metadata.json` (tool/version/date, `db` +
+Each run writes directly into its stamp directory, without a product subdirectory.
+Single-product runs use `index.md` + `metadata.json`; bundles use product-suffixed
+`index.<product>.md` + `metadata.<product>.json` alongside the bundle `index.md`.
+`metadata.json` (tool/version/date, `db` +
 `db_sha256` to correlate the export with a snapshot, `profile`, flags such as
 `sanitize`/`reasoning`/`tokens_backfilled`, counts). `exports.sh` aggregates
 these `metadata.json` per stamp for `exports list/remove/prune`.

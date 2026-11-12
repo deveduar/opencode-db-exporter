@@ -5,7 +5,13 @@ from pathlib import Path
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir
-from exportlib.util import safe_filename, selection_label, selection_meta, selection_phrase
+from exportlib.util import (
+    safe_filename,
+    selection_label,
+    selection_meta,
+    selection_phrase,
+    ts_iso,
+)
 
 
 def _preset_suffix_for_name(name: str | None) -> str:
@@ -19,16 +25,73 @@ def _preset_suffix_for_name(name: str | None) -> str:
     return f"__{clean}" if clean else ""
 
 
-def make_outdir_final(base, profile: str, stamp: str | None = None, preset_name: str | None = None):
+def make_outdir_final(
+    base,
+    stamp: str | None = None,
+    preset_name: str | None = None,
+    *,
+    bundle_child: bool = False,
+):
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    if bundle_child:
+        target = base / stamp
+        target.mkdir(parents=True, exist_ok=True)
+        return target
     suffix = _preset_suffix_for_name(preset_name)
-    target = base / f"{stamp}{suffix}" / profile
+    target = base / f"{stamp}{suffix}"
     n = 2
     while target.exists():
-        target = base / f"{stamp}{suffix}@{n}" / profile
+        target = base / f"{stamp}{suffix}@{n}"
         n += 1
     target.mkdir(parents=True, exist_ok=False)
     return target
+
+
+def session_folder_name(session: dict) -> str:
+    title = session["title"] or session["slug"]
+    updated = session.get("time_updated")
+    try:
+        updated_date = ts_iso(updated)[:10] or "unknown-date"
+    except (OverflowError, OSError, TypeError, ValueError):
+        updated_date = "unknown-date"
+    return f"{updated_date}__{safe_filename(title)}_{session['id'][:8]}"
+
+
+def product_artifact_path(out_dir, filename: str, args):
+    """Suffix indexes/metadata only when several products share a run root."""
+    if getattr(args, "bundle_child", False):
+        path = Path(filename)
+        return out_dir / f"{path.stem}.{args.profile}{path.suffix}"
+    return out_dir / filename
+
+
+def session_product_filename(stem: str, product: str, suffix: str, args) -> str:
+    if getattr(args, "bundle_child", False):
+        return f"{stem}.{product}{suffix}"
+    return f"{stem}{suffix}"
+
+
+def product_artifact_files(out_dir, args) -> list[str]:
+    files = sorted(path for path in out_dir.rglob("*") if path.is_file())
+    if not getattr(args, "bundle_child", False):
+        return [str(path.relative_to(out_dir)) for path in files]
+    profile = args.profile
+
+    def belongs(path: Path) -> bool:
+        return (
+            path.name == f"index.{profile}.md"
+            or path.name == f"metadata.{profile}.json"
+            or path.name.endswith(f".{profile}.md")
+            or path.name.endswith(f".{profile}.json")
+            or (profile == "transcript" and path.parent.name.endswith(".transcript.parts"))
+            or (profile == "memory" and path.name == "corpus.jsonl")
+        )
+
+    return [
+        str(path.relative_to(out_dir))
+        for path in files
+        if belongs(path)
+    ]
 
 
 def write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
@@ -92,11 +155,14 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         if n_backfilled:
             f.write(f"| Tokens backfilled | {n_backfilled} session(s) from step-finish |\n")
         f.write("| Extraction | Python `exportlib` (read `mode=ro`) from `~/.local/share/opencode/opencode.db` |\n")
-        f.write(f"| Full metadata | [`metadata.json`](metadata.json) |\n\n")
+        metadata_name = product_artifact_path(out_dir, "metadata.json", args).name
+        f.write(f"| Full metadata | [`{metadata_name}`]({metadata_name}) |\n\n")
         f.write("## Sessions\n\n")
         for i, (root, subs, rfolder) in enumerate(written, 1):
             rt = root["title"] or root["slug"]
-            root_md = rfolder / f"{safe_filename(rt)}.md"
+            root_md = rfolder / session_product_filename(
+                safe_filename(rt), "transcript", ".md", args
+            )
             rel_d = root_md.relative_to(out_dir)
             f.write(f"{i}. **[{rt}]({rel_d})**  — `{root['id']}`  · agent `{root.get('agent') or '?'}`\n")
             if children_of.get(root["id"]):
@@ -108,10 +174,15 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
                         st = sub["title"] or sub["slug"]
                         indent = "   " * depth
                         if getattr(args, "sub", "separate") == "separate":
-                            rel_s = (
-                                rfolder / "subagents"
-                                / f"{safe_filename(st)}_{sub['id'][:8]}.md"
-                            ).relative_to(out_dir)
+                            sub_name = session_product_filename(
+                                f"{safe_filename(st)}_{sub['id'][:8]}",
+                                "transcript",
+                                ".md",
+                                args,
+                            )
+                            rel_s = (rfolder / "subagents" / sub_name).relative_to(
+                                out_dir
+                            )
                             f.write(f"{indent}- [{st}]({rel_s})  `{sub['id'][:8]}`\n")
                         else:
                             f.write(f"{indent}- {st}  `{sub['id'][:8]}` (inline)\n")

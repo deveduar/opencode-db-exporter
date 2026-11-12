@@ -229,12 +229,12 @@ def bundle_child_argv(args, product: str) -> list[str]:
     """argv (positional + flags) for one bundle product, re-exported standalone.
 
     The child gets the product keyword as its 'profile' and the shared stamp /
-    preset provenance appended by the caller, so it runs the exact single-product
-    pipeline (own index.md + metadata.json). User-explicit flags (flag_in_argv)
+    preset provenance appended by the caller, so it runs the single-product
+    writer into the shared bundle root. User-explicit flags (flag_in_argv)
     are forwarded as-is and win over the preset's per-product config; the effective
     selection is materialized from args (CLI override or preset value)."""
     name = args.preset or ""
-    argv = [product]
+    argv = [product, "--bundle-child"]
     if args.sessions:
         argv += [f"--sessions={s}" for s in args.sessions]
     elif args.filter is not None:

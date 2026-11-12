@@ -37,13 +37,15 @@ run() { bash "$MOD/opencode-db.sh" "$@" 2>&1; }
 # NOT "newest metadata by mtime": two exports inside the same sub-second tick tie
 # on %T@, and the sort then picks by path, which can hand back the PREVIOUS run.
 # Every test that reads back what it just ran must use the run's own answer.
-# The reported path is <OUT>/<stamp>/<profile>; take THAT path verbatim instead
+# The reported path is always the run root.
 # of rebuilding it (no basename round-trip, no mtime, no name mangling).
-out_dir_of() {   # $1 = run output -> the <OUT>/<stamp>/<profile> dir it wrote
+out_dir_of() {   # $1 = run output -> the dir it wrote
     printf '%s' "$1" | sed -n 's/.* to: //p' | tail -1 | sed 's:/*$::'
 }
-stamp_of() { out_dir_of "$1" | sed 's:/[^/]*$::' | xargs -r basename; }
-# The metadata sits INSIDE the reported profile dir: <OUT>/<stamp>/<profile>/metadata.json
+stamp_of() {
+    basename "$(out_dir_of "$1")"
+}
+# Single-product metadata sits at the run root; bundle metadata is product-suffixed.
 meta_of() { out_dir_of "$1" | xargs -r -I{} printf '%s/metadata.json' "{}"; }
 grep_run() { # $1=pattern, rest=CLI args: capture output before grep (avoids SIGPIPE/pipefail)
     local pat="$1"; shift
@@ -80,14 +82,15 @@ printf '%s' "$PY_EXPORT" | grep -q '\[OK\] Exported (transcript)' && [ -n "$PY_M
     && ok "root Python entry point writes a transcript without Bash" \
     || bad "root Python export: $PY_EXPORT"
 last_transcript() { # $1=profile $2=title (newest by mtime)
-    find "$OUT" -path "*/$1/*" -name "*$2*.md" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
+    find "$OUT" -type f \( -name "$2.md" -o -name "$2.transcript.md" \) \
+        -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
 }
 last_meta() { # $1=profile (newest by mtime, path breaks a tie)
-    # `sort -n` compares the WHOLE line numerically, so an equal %T@ left the
-    # order to chance and two exports in the same tick could hand back the older
-    # run. Sort by mtime first and by PATH second: deterministic.
-    find "$OUT" -path "*/$1/*" -type f -name metadata.json -printf '%T@ %p\n' \
-        | sort -k1,1n -k2,2 | tail -1 | cut -d' ' -f2-
+    find "$OUT" -type f \( -name metadata.json -o -name "metadata.$1.json" \) -print0 \
+        | while IFS= read -r -d '' meta; do
+            jq -e --arg profile "$1" '.profile == $profile' "$meta" >/dev/null 2>&1 || continue
+            printf '%s\t%s\n' "$(stat -c %y "$meta")" "$meta"
+        done | sort -k1,1n -k2,2 | tail -1 | cut -f2-
 }
 
 echo "== status (incl. version/schema/deps sections) =="
@@ -158,7 +161,7 @@ PO="$TMP/po"
 mkdir -p "$PO"
 PORT_RUN=$(HOME="$FAKEHOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR -u OCED_PRESETS -u OCED_SHRINK_PRESETS \
     OPENCODE_DB="$FAKE" OCED_OUT="$PO" bash "$MOD/opencode-db.sh" export complete --sessions ses_A0001 2>&1)
-[ -n "$(find "$PO" -name metadata.json 2>/dev/null | head -1)" ] \
+[ -n "$(find "$PO" \( -name metadata.json -o -name 'metadata.*.json' \) -type f 2>/dev/null | head -1)" ] \
     && ok "portable export resolves the repo presets (complete)" \
     || bad "portable export: $(printf '%s' "$PORT_RUN" | tail -2)"
 
@@ -475,7 +478,11 @@ INSERT INTO part VALUES
   '{"type":"step-finish","reason":"tool-calls"}');
 SQL
 CONV_RUN=$(run export conversation --sessions ses_A0001)
-CONV_FILE=$(find "$(out_dir_of "$CONV_RUN")" -name 'Project-Alpha.md' -type f -print -quit)
+CONV_DIR=$(out_dir_of "$CONV_RUN")
+CONV_FILE=$(find "$CONV_DIR" -name 'Project-Alpha.md' -type f -print -quit)
+[ -f "$CONV_DIR/metadata.json" ] && [ ! -d "$CONV_DIR/transcript" ] \
+    && ok "conversation writes directly into its run root" \
+    || bad "conversation created an extra product directory: $CONV_DIR"
 if grep -Eq '<!-- step-(start|finish) -->' "$CONV_FILE"; then
     bad "conversation includes structural step comments"
 else
@@ -508,8 +515,9 @@ jq -e '.flags.files == false and .artifacts == ["corpus.jsonl", "index.md"] and 
 
 echo "== faithful product (lossless JSON archive) =="
 run export faithful --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -path "*/faithful/*" -name 'Project-Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-[ -n "$FR" ] && ok "faithful JSON file written in the faithful product dir" || bad "faithful json file missing"
+FR=$(find "$OUT" -type f \( -name 'Project-Alpha.json' -o -name 'Project-Alpha.faithful.json' \) \
+    -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+[ -n "$FR" ] && ok "faithful JSON file written in the run/session folder" || bad "faithful json file missing"
 jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.backfilled == true and .info.cost == 0.05' "$FR" >/dev/null \
     && ok "faithful info carries the backfilled tokens" || bad "faithful info tokens"
 jq -e '.messages | length == 6' "$FR" >/dev/null && ok "faithful keeps ALL messages (6)" || bad "faithful messages: $(jq '.messages | length' "$FR")"
@@ -527,7 +535,8 @@ TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 printf '%s' "$TC" | grep -q "sk-test1234567890abcdefghijkl" && bad "sanitize leaked the API key" || ok "sanitize redacts the API key"
 printf '%s' "$TC" | grep -q "sk-\[REDACTED\]" && ok "sanitize shows the redaction marker" || bad "sanitize marker missing"
 run export faithful --sanitize --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -path "*/faithful/*" -name 'Project-Alpha.json' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+FR=$(find "$OUT" -type f \( -name 'Project-Alpha.json' -o -name 'Project-Alpha.faithful.json' \) \
+    -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "faithful sanitize leaked" || ok "faithful sanitize redacts recursively"
 MT=$(last_meta faithful)
 jq -e '.flags.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize recorded in metadata" || bad "faithful sanitize metadata"
@@ -535,15 +544,15 @@ jq -e '.flags.sanitize == true' "$MT" >/dev/null && ok "faithful sanitize record
 echo "== shared-stamp bundle (products share one run folder) =="
 BSTAMP="stplug-$(date -u +%s)"
 SELRUN="selrun-$(date -u +%s)"
-run export transcript --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
-run export digest --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
-[ -f "$OUT/$BSTAMP/transcript/metadata.json" ] && [ -f "$OUT/$BSTAMP/digest/metadata.json" ] \
-    && ok "same stamp = one run with two products" || bad "stamp bundle dirs"
+run export study --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
+[ -f "$OUT/$BSTAMP/metadata.transcript.json" ] && [ -f "$OUT/$BSTAMP/metadata.memory.json" ] \
+    && [ ! -d "$OUT/$BSTAMP/transcript" ] && [ ! -d "$OUT/$BSTAMP/memory" ] \
+    && ok "two products are siblings directly under the stamp" || bad "stamp bundle dirs"
 ALROW=$(run exports list | awk -v s="$BSTAMP" '$0 ~ s {print; exit}')
-printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "digest" \
+printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "memory" \
     && ok "exports list aggregates products joined with +" || bad "exports list aggregate: $ALROW"
 VIEW=$(run exports view "$BSTAMP")
-printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "digest" && printf '%s' "$VIEW" | grep -q "totals:" \
+printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "memory" && printf '%s' "$VIEW" | grep -q "totals:" \
     && ok "exports view shows every product of the run" || bad "exports view aggregate: $(printf '%s' "$VIEW" | sed -n '1,6p')"
 # A detail screen must lead with a banner, like info/backups/shrinks.
 printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
@@ -551,11 +560,57 @@ printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
 printf '%s' "$VIEW" | grep -c "== Export run:" | grep -qx "1" \
     && ok "exports view repeats the run header once (per product)" || bad "exports view header repeated"
 VJSON=$(run exports view "$BSTAMP" --json)
-printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["digest","transcript"]' >/dev/null \
+printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["memory","transcript"]' >/dev/null \
     && ok "exports view --json is one metadata record per product" || bad "exports view --json: $VJSON"
 printf '%s' "$VJSON" | grep -q "== Export run" && bad "exports view --json header" || ok "exports view --json has no header"
+echo "== named bundle folder layout =="
+BUNDLE_STAMP="bundle-layout-$$"
+BUNDLE_DB="$TMP/bundle-layout.db"
+BUNDLE_OUT="$TMP/bundle-layout-out"
+cp "$FAKE" "$BUNDLE_DB"
+mkdir -p "$BUNDLE_OUT"
+OPENCODE_DB="$BUNDLE_DB" OCED_OUT="$BUNDLE_OUT" OCED_PRESETS="$EX_PRESETS" \
+    run export complete --sessions ses_A0001 --stamp "$BUNDLE_STAMP" >/dev/null
+SESSION_FOLDER=$(find "$BUNDLE_OUT/$BUNDLE_STAMP" -mindepth 1 -maxdepth 1 \
+    -type d -printf '%f\n' | head -1)
+[ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.transcript.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.memory.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.faithful.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.transcript.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.memory.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.faithful.json" ] \
+    && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/transcript" ] \
+    && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/memory" ] \
+    && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/faithful" ] \
+    && [[ "$SESSION_FOLDER" == ????-??-??__Project-Alpha_ses_A000* ]] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.transcript.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.faithful.json" ] \
+    && ! [[ "$SESSION_FOLDER" =~ ^[0-9]{2}- ]] \
+    && [ ! -e "$BUNDLE_OUT/${BUNDLE_STAMP}__complete" ] \
+    && ok "bundle products are siblings without product directories" \
+    || bad "bundle layout: $(find "$BUNDLE_OUT" -maxdepth 3 -type f | sort)"
+sqlite3 "$BUNDLE_DB" "UPDATE session SET time_updated=time_updated+1000000 WHERE id='ses_A0001';"
+OPENCODE_DB="$BUNDLE_DB" OCED_OUT="$BUNDLE_OUT" OCED_PRESETS="$EX_PRESETS" \
+    run exports update "$BUNDLE_STAMP" --yes >/dev/null
+[ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.transcript.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.memory.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.faithful.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.transcript.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.memory.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.faithful.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.transcript.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.faithful.json" ] \
+    && [ ! -e "$BUNDLE_OUT/${BUNDLE_STAMP}__complete" ] \
+    && ok "updating a bundle preserves the same product folder layout" \
+    || bad "updated bundle layout: $(find "$BUNDLE_OUT" -maxdepth 3 -type f | sort)"
+IDX=$(cat "$BUNDLE_OUT/$BUNDLE_STAMP/index.md")
+printf '%s' "$IDX" | grep -q 'Updated from' \
+    && ok "updated bundle index remains in the shared run directory" \
+    || bad "updated bundle index: $IDX"
 # `.selection.ids` is an ARRAY: the Selection line must join it, never concat it.
-mkdir -p "$OUT/$SELRUN/transcript"
+mkdir -p "$OUT/$SELRUN"
 jq -n '{tool:"opencode-db/exportlib",version:"0",date:"2026-01-02T03:04:05Z",db:"/db",db_sha256:"x",
         last_backup:null,profile:"transcript",preset:"archive",
         selection:{rule:"sessions",ids:["ses_A0001","ses_B0001"]},
@@ -566,7 +621,7 @@ jq -n '{tool:"opencode-db/exportlib",version:"0",date:"2026-01-02T03:04:05Z",db:
                no_reasoning:false,mark_compactions:false,summary_diffs:false,role:"all",sanitize:false},
         subagents_hidden:0,messages:2,compactions:0,digests:0,tokens_backfilled:0,
         artifacts:["index.md"]}' \
-    > "$OUT/$SELRUN/transcript/metadata.json"
+    > "$OUT/$SELRUN/metadata.json"
 SELV=$(run exports view "$SELRUN")
 printf '%s' "$SELV" | grep -q "jq: error" && bad "exports view selection array: jq error" || ok "exports view renders an array selection"
 printf '%s' "$SELV" | grep -qE "selection: +2 explicit session id\(s\)" \
@@ -588,8 +643,8 @@ BADALIGN=$(printf '%s' "$SELV" | sed -n '/== Details per product ==/,$p' | grep 
 # re-export instruction; no legacy top-level mirror is reconstructed from.
 for badkey in selection scope flags session_records excluded artifacts; do
     NKEY="nokey-$badkey-$(date -u +%s%N)"
-    mkdir -p "$OUT/$NKEY/transcript"
-    jq "del(.$badkey)" "$OUT/$SELRUN/transcript/metadata.json" > "$OUT/$NKEY/transcript/metadata.json"
+    mkdir -p "$OUT/$NKEY"
+    jq "del(.$badkey)" "$OUT/$SELRUN/metadata.json" > "$OUT/$NKEY/metadata.json"
     KOUT=$(run exports view "$NKEY" 2>&1); krc=$?
     [ "$krc" -ne 0 ] && printf '%s' "$KOUT" | grep -q "incomplete canonical metadata; re-export this run" \
         && ok "exports view refuses a run without .$badkey" \
@@ -599,8 +654,8 @@ done
 # The legacy `metadatos.json` file name is gone: a run dir that only has it is
 # invalid, rather than silently omitted from `exports list`.
 LEGACY="legacy-$(date -u +%s)"
-mkdir -p "$OUT/$LEGACY/transcript"
-echo '{"profile":"transcript","session_records":[],"messages":2,"compactions":0}' > "$OUT/$LEGACY/transcript/metadatos.json"
+mkdir -p "$OUT/$LEGACY"
+echo '{"profile":"transcript","session_records":[],"messages":2,"compactions":0}' > "$OUT/$LEGACY/metadatos.json"
 LEGACYV=$(run exports view "$LEGACY" 2>&1)
 [ $? -ne 0 ] && printf '%s' "$LEGACYV" | grep -q "No metadata.json found" \
     && ok "exports view refuses a legacy-only metadatos.json run dir" \
@@ -618,7 +673,7 @@ rm -rf "$OUT/$LEGACY"
 # reads as a full one. Both come straight from metadata (no DB read), so a
 # synthetic run proves the rendering deterministically.
 SCOPER="scoper-$(date -u +%s)"
-mkdir -p "$OUT/$SCOPER/transcript"
+mkdir -p "$OUT/$SCOPER"
 jq -n '{profile:"transcript",preset:"notes",date:"2026-01-02T03:04:05Z",db:"/db",db_sha256:"x",
         selection:{rule:"sessions",ids:["ses_A0001"]},scope:{rule:"all"},
         excluded:[{id:"ses_B0001",title:"Left out one",updated:"2026-01-01T00:00:00Z"},
@@ -626,7 +681,7 @@ jq -n '{profile:"transcript",preset:"notes",date:"2026-01-02T03:04:05Z",db:"/db"
         session_records:[{id:"ses_A0001",title:"Kept",kind:"root",parent_id:null,created:"2026-01-01T00:00:00Z",updated:"2026-01-01T00:00:00Z"}],
         flags:{sub:"separate",no_subagents:false,no_orphan_subagents:false},subagents_hidden:0,
         messages:2,compactions:0,digests:0,tokens_backfilled:0,artifacts:["index.md"]}' \
-    > "$OUT/$SCOPER/transcript/metadata.json"
+    > "$OUT/$SCOPER/metadata.json"
 SCOPEV=$(run exports view "$SCOPER")
 printf '%s' "$SCOPEV" | grep -qE "^  scope: +ALL sessions" \
     && ok "exports view names the run's scope" || bad "view scope: $(printf '%s' "$SCOPEV" | grep -i 'scope')"
@@ -996,7 +1051,7 @@ UVT5=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
 #    as narrow as the menu left it, and --sticky decides revivals.
 NRUN=$(runu export transcript --filter ses_A0001,ses_A0002)
 NSTAMP=$(stamp_of "$NRUN")
-NSMETA="$UPD/$NSTAMP/transcript/metadata.json"
+NSMETA="$UPD/$NSTAMP/metadata.json"
 jq -e '.scope == {"rule":"filter","value":"ses_%"} and ([.excluded[].id]|sort) == ["ses_B0001","ses_B0002","ses_NEW01","ses_ORPHAN01"]' "$NSMETA" >/dev/null \
     && ok "a narrowed run records the SCOPE it was drawn from and the ids it left out" \
     || bad "narrow: $(jq -c '.scope,[.excluded[].id]' "$NSMETA")"
@@ -1025,7 +1080,7 @@ printf '%s' "$NSPJ2" | jq -e '.up_to_date == true and .counts.revived == 0 and (
 #    re-export instruction; no legacy top-level mirror is reconstructed from.
 FLRUN=$(runu export transcript)
 FLSTAMP=$(stamp_of "$FLRUN")
-FLMETA="$UPD/$FLSTAMP/transcript/metadata.json"
+FLMETA="$UPD/$FLSTAMP/metadata.json"
 jq 'del(.flags)' "$FLMETA" > "$FLMETA.tmp" && mv "$FLMETA.tmp" "$FLMETA"
 FLOUT=$(runu exports update "$FLSTAMP" --dry-run 2>&1); flrc=$?
 [ "$flrc" -ne 0 ] && printf '%s' "$FLOUT" | grep -qE "missing (or invalid )?\.flags; re-export this run" \
@@ -1033,7 +1088,7 @@ FLOUT=$(runu exports update "$FLSTAMP" --dry-run 2>&1); flrc=$?
     || bad "missing .flags: rc=$flrc $(printf '%s' "$FLOUT" | head -1)"
 SCRUN=$(runu export transcript)
 SCSTAMP=$(stamp_of "$SCRUN")
-SCMETA="$UPD/$SCSTAMP/transcript/metadata.json"
+SCMETA="$UPD/$SCSTAMP/metadata.json"
 jq 'del(.scope)' "$SCMETA" > "$SCMETA.tmp" && mv "$SCMETA.tmp" "$SCMETA"
 SCOUT=$(runu exports update "$SCSTAMP" --dry-run 2>&1); scrc=$?
 [ "$scrc" -ne 0 ] && printf '%s' "$SCOUT" | grep -qE "missing (or invalid )?\.scope; re-export this run" \
@@ -1043,15 +1098,15 @@ SCOUT=$(runu exports update "$SCSTAMP" --dry-run 2>&1); scrc=$?
 # 9) bundles: one shared stamp, per-product provenance, one bundle index.
 BOUT=$(runu export pair)
 BSTAMP2=$(stamp_of "$BOUT")
-jq -e --arg s "$BSTAMP2" '.updated_from == null' "$UPD/$BSTAMP2/transcript/metadata.json" >/dev/null \
+jq -e --arg s "$BSTAMP2" '.updated_from == null' "$UPD/$BSTAMP2/metadata.transcript.json" >/dev/null \
     && ok "a fresh bundle carries no update provenance" || bad "bundle fresh"
 usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_B0002';"
 runu exports update "$BSTAMP2" --yes >/dev/null
 for p in transcript memory; do
-    jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/$p/metadata.json" >/dev/null \
+    jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/metadata.$p.json" >/dev/null \
         || bad "bundle $p did not record updated_from"
 done
-jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/transcript/metadata.json" >/dev/null \
+jq -e --arg s "$BSTAMP2" '.updated_from == $s' "$UPD/$BSTAMP2/metadata.transcript.json" >/dev/null \
     && ok "an updated bundle records the provenance in EVERY product" \
     || bad "bundle provenance"
 grep -q '^| Updated from |' "$UPD/$BSTAMP2/index.md" \
@@ -1062,8 +1117,8 @@ printf '%s' "$(runu exports update nope-stamp 2>&1)" | grep -q "Not found" \
     && ok "update refuses an unknown stamp" || bad "unknown stamp"
 LSTAMP=$(stamp_of "$(runu export transcript)")
 LEGRUN="$UPD/$LSTAMP"
-jq 'del(.session_records)' "$LEGRUN/transcript/metadata.json" > "$LEGRUN/transcript/metadata.json.t" \
-    && mv "$LEGRUN/transcript/metadata.json.t" "$LEGRUN/transcript/metadata.json"
+jq 'del(.session_records)' "$LEGRUN/metadata.json" > "$LEGRUN/metadata.json.t" \
+    && mv "$LEGRUN/metadata.json.t" "$LEGRUN/metadata.json"
 printf '%s' "$(runu exports update "$LSTAMP" --dry-run 2>&1)" | grep -qE "re-export (it instead|this run)" \
     && ok "update refuses a run that cannot say what it contains" || bad "legacy refusal: $(runu exports update "$LSTAMP" --dry-run 2>&1 | head -1)"
 runu exports update "$USTAMP" --mode nope >/dev/null 2>&1 \

@@ -73,12 +73,13 @@ it only when no explicit CLI/selection is given.
 
 **Bundle semantics.** `products` = `{product: {flags}}`; the selection is
 top-level and shared. `run_bundle()` computes one collision-free shared stamp
-(`stamp@N` bumped only when any product dir already exists, so every product
-lands under the same prefix), then runs one unchanged single-product export per
-product with `--stamp <shared> --preset-name <name>`. Each child writes its own
-`index.md` + `metadata.json` (with `.preset` provenance); a root `index.md` ties
-the bundle (it has no `metadata.json` of its own — that's by design); `exports
-list` aggregates it as `transcript+memory`.
+(`stamp@N` bumped when the run directory already exists), then runs one product
+writer per member with `--stamp <shared> --preset-name <name>`. Session files from
+all products share one folder named with the session's last-update date in UTC
+(`YYYY-MM-DD__<title>_<id>`) and carry a product suffix; product
+indexes and metadata are sibling files at the run root, alongside the bundle
+`index.md` and (for memory) `corpus.jsonl`. `exports list` still aggregates the
+product metadata as `transcript+memory`.
 
 ---
 
@@ -87,27 +88,48 @@ list` aggregates it as `transcript+memory`.
 `OCED_OUT/<stamp>/`:
 
 ```
-<stamp>/                       transcript+memory+faithful bundle   <stamp>/            transcript bundle
-  index.md                       (bundle tie-in)                  also:  index.md
-  transcript/index.md                                        (single product: one dir)
-  transcript/metadata.json
-  transcript/<session>.md        subagents/<sub>_<id>.md  (per --sub layout;
-                                                          all nested descendants are included)
-  transcript/<session>.parts/    chronological parts when a transcript exceeds chunk_mb
-    <session>-part-001.md ...    one file per whole rendered message group
-  memory/index.md
-  memory/metadata.json
-  memory/corpus.jsonl
-  faithful/index.md              the lossless JSON product
-  faithful/metadata.json
-  faithful/01-<title>_<id>/<title>.json
-  faithful/01-<title>_<id>/subagents/<descendant>_<id>.json
-                                 (all descendants; parent_id keeps hierarchy)
+<stamp>/                                      transcript+memory+faithful bundle
+  index.md                                    bundle index
+  index.transcript.md                         product index
+  metadata.transcript.json                    product metadata
+  index.memory.md
+  metadata.memory.json
+  corpus.jsonl                                one entry per root, including subagent refs
+  index.faithful.md
+  metadata.faithful.json
+  YYYY-MM-DD__<title>_<id>/                   one shared folder per root session, UTC date
+    <title>.transcript.md                     readable conversation
+    <title>.faithful.json                      lossless session archive
+    <title>.transcript.parts/                  only when transcript exceeds chunk_mb
+      <title>.transcript-part-001.md ...
+      index.md
+    subagents/                                 only when descendants are included
+      <descendant>_<id>.transcript.md
+      <descendant>_<id>.faithful.json
 ```
 
-The tool reads `metadata.json` only. Pre-rename run dirs that contain only the
-old `metadatos.json` name are ignored by every reader (`exports list`/`view`,
-menu, the shrink discard-link).
+The session-folder date is derived from `session.time_updated` (epoch milliseconds)
+and formatted as a UTC calendar date. This is stable across machines and independent
+of each viewer's local timezone. The former sequence-number prefix is not used.
+
+For a single-product export such as `conversation`, the same run-root layout is
+used without product suffixes:
+
+```
+<stamp>__conversation/
+  index.md
+  metadata.json
+  YYYY-MM-DD__<title>_<id>/
+    <title>.md
+    subagents/                 only when descendants are included
+```
+
+Every export writes directly into `<stamp>/`; there is no product-named directory.
+Single-product exports use unsuffixed filenames, while bundle products use product
+suffixes so their session files, indexes and metadata are siblings without collisions.
+The aggregate `corpus.jsonl` and product-level indexes/metadata stay at the run root.
+Only `subagents/` and transcript `.parts/` create deeper folders. Readers look only
+for metadata at the run root; the former `<stamp>/<product>/` layout is not supported.
 
 Long `transcript` Markdown is split near the configured rendered file size,
 after role and content filters (`--role`, `--no-reasoning`, `--patch`,
@@ -140,7 +162,7 @@ Subagent relationships are traversed recursively. Transcript and faithful
 exports place each descendant session in the root's `subagents/` directory;
 the run index displays the parent-child hierarchy, and each session record keeps
 its `parent_id`. Forks have no subagent parent relation and remain separate root
-sessions with their own numbered session directory. Multiple root sessions can
+sessions with their own UTC last-updated-date session directory. Multiple root sessions can
 belong to the same OpenCode project or working directory; they are still
 exported independently by session ID.
 
@@ -397,7 +419,9 @@ this section is the contract for *other tools*.
 **Loading it.** Both artifacts are plain JSON and need no adapter:
 
 - `corpus.jsonl` → one JSON object per line (`langchain_community.document_loaders.JSONLinesLoader`).
-- `<stamp>/faithful/…/<title>.json` → one document per session (`JSONLoader` with a `jq_schema`).
+- `<stamp>/YYYY-MM-DD__<title>_<id>/<title>.json` (single product) or
+  `<stamp>/YYYY-MM-DD__<title>_<id>/<title>.faithful.json` (bundle) → one document per session
+  (`JSONLoader` with a `jq_schema`).
 
 **What the corpus is, and what it is not.** Each entry is a **summary of one root
 session** (the goal, the outcome, the compaction digests, the counts, the touched
@@ -438,8 +462,12 @@ knows exactly where every line came from, so no per-line provenance field is add
 
 ## 4. Faithful JSON archive (the `faithful` product)
 
-One `<stamp>/faithful/01-<title>_<id>/<title>.json` per root session (subagents
-under the same folder's `subagents/<sub>_<id>.json`). Native shape,
+For a single-product export, one
+`<stamp>/YYYY-MM-DD__<title>_<id>/<title>.json` per root session.
+In a bundle, the same file is
+`<stamp>/YYYY-MM-DD__<title>_<id>/<title>.faithful.json`, beside the
+other products for that session. Subagents remain under that session's
+`subagents/` folder, with `.faithful.json` suffixes in a bundle. Native shape,
 mirrors `{info, messages:[{info, parts}]}` (see `exportlib/faithful.py`):
 
 ```jsonc

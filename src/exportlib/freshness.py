@@ -192,7 +192,7 @@ def _find_meta(stamp: str):
     run = Path(default_out()) / stamp
     if not run.is_dir():
         die(f"Not found: {run}")
-    paths = sorted(run.glob("*/metadata.json"))
+    paths = sorted(set(run.glob("metadata.json")) | set(run.glob("metadata.*.json")))
     if not paths:
         die(f"{run}: no metadata.json; re-export this run")
     for path in paths:

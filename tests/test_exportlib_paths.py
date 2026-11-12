@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,10 +20,34 @@ from exportlib.config import (
     readonly_db_uri,
 )
 from exportlib.util import yaml_frontmatter
+from exportlib.writers import session_folder_name
 from shrinklib.config import default_shrink_presets
 
 
 class ExportPathTests(unittest.TestCase):
+    def test_session_folder_uses_last_updated_utc_date_not_sequence_number(self):
+        session = {
+            "title": "Task name",
+            "slug": "fallback",
+            "id": "ses_123456789",
+            "time_updated": int(
+                datetime(2026, 6, 21, 0, 30, tzinfo=timezone.utc).timestamp() * 1000
+            ),
+        }
+        with patch.dict(os.environ, {"TZ": "America/Los_Angeles"}):
+            self.assertEqual(
+                session_folder_name(session), "2026-06-21__Task-name_ses_1234"
+            )
+
+        session["time_updated"] = None
+        self.assertEqual(
+            session_folder_name(session), "unknown-date__Task-name_ses_1234"
+        )
+        session["time_updated"] = "not-a-timestamp"
+        self.assertEqual(
+            session_folder_name(session), "unknown-date__Task-name_ses_1234"
+        )
+
     def test_database_environment_override_wins(self):
         with patch.dict(os.environ, {"OPENCODE_DB": r"C:\OpenCode\data.db"}, clear=True):
             self.assertEqual(default_db(), r"C:\OpenCode\data.db")

@@ -58,7 +58,7 @@ o_shrink_discard_export() {
                 return 1
             }
             got="${got:+$got,}$selected"
-        done < <(find "$run" -type f -name metadata.json 2>/dev/null)
+        done < <(oced_export_meta_files "$run")
         [ -n "$got" ] || continue
         got=$(printf '%s' "$got" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
         [ "$got" = "$want" ] || continue

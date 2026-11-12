@@ -60,7 +60,15 @@ from exportlib.util import (
     session_record,
     sha256_file,
 )
-from exportlib.writers import last_backup_info, make_outdir_final, write_index
+from exportlib.writers import (
+    last_backup_info,
+    make_outdir_final,
+    product_artifact_path,
+    product_artifact_files,
+    session_folder_name,
+    session_product_filename,
+    write_index,
+)
 from exportlib.flags import FLAGS, effective_flags
 
 
@@ -106,38 +114,36 @@ def _write_bundle_index(idx_dir, args, stamp: str, products, db_path) -> None:
           if getattr(args, "update_from", None) else []),
         f"| Products | {' + '.join(products)} |",
         "",
-        "Each product ran in its own subdirectory (own index.md + metadata.json):",
+        "Product indexes and metadata:",
         "",
     ]
-    lines += [f"- [`{p}/`]({p}/index.md)" for p in sorted(products)]
+    lines += [
+        f"- [{p}](index.{p}.md) · [metadata](metadata.{p}.json)"
+        for p in sorted(products)
+    ]
     lines += ["", f"Bundle: `opencode-db export {args.preset}` (stamp `{stamp}`)", ""]
     (idx_dir / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def _free_bundle_stamp(out_base, stamp: str, products) -> str:
-    """Shared stamp for all bundle products (bumps to stamp@N the same way
-    make_outdir_final does, but only when ANY product dir already exists, so the
-    whole bundle lands under one prefix)."""
+def _free_bundle_stamp(out_base, stamp: str) -> str:
+    """Choose one unused run folder for the whole bundle."""
     cand = stamp
     n = 2
-    while any((out_base / cand / p).exists() for p in products):
+    while (out_base / cand).exists():
         cand = f"{stamp}@{n}"
         n += 1
     return cand
 
 
 def run_bundle(args) -> None:
-    """Bundle preset: run each product as its own single-product export under one
-    shared stamp. The single-product pipeline is reused unchanged (a child process
-    gets the product keyword, the shared stamp and the preset provenance), so every
-    subfolder is byte-identical to a normal run of that product."""
+    """Run each bundle product into a shared run root and session folders."""
     db_path = Path(default_db())
     if not db_path.exists():
         die(f"Database not found: {db_path}")
     out_base = Path(args.out) if args.out else Path(default_out())
     base_stamp = args.stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
     products = list(args.bundle)
-    stamp = _free_bundle_stamp(out_base, base_stamp, products)
+    stamp = _free_bundle_stamp(out_base, base_stamp)
     entry = Path(__file__).resolve()  # this same file IS the CLI entry (no shim)
     for product in products:
         argv = bundle_child_argv(args, product)
@@ -192,6 +198,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--notes-kind", choices=("auto-shrink-discard",),
                     help=argparse.SUPPRESS)
     ap.add_argument("--preset-name", help=argparse.SUPPRESS)
+    ap.add_argument("--bundle-child", action="store_true", help=argparse.SUPPRESS)
     # `exports update` hand-off: the target set is materialized as --sessions, but
     # the run's provenance stays the base run's scope; the update itself is named
     # so the index/metadata can say where it came from. Never preset keys.
@@ -504,7 +511,12 @@ def _main() -> None:
                 file=sys.stderr,
             )
 
-    out_dir = make_outdir_final(out_base, args.profile, args.stamp, getattr(args, 'preset', None))
+    out_dir = make_outdir_final(
+        out_base,
+        args.stamp,
+        getattr(args, "preset", None),
+        bundle_child=args.bundle_child,
+    )
     try:
         con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
         con.row_factory = sqlite3.Row
@@ -595,11 +607,11 @@ def _main() -> None:
         sub_tree = list(walk_subagents(root_id, children_of))
         subs = [sid for sid, _depth in sub_tree]
         sub_depth = dict(sub_tree)
-        rfolder = out_dir / f"{len(written) + 1:02d}-{safe_filename(root['title'] or root['slug'])}_{root_id[:8]}"
-        rfolder.mkdir()
+        rfolder = out_dir / session_folder_name(root)
+        rfolder.mkdir(exist_ok=args.bundle_child)
 
         stem = safe_filename(root['title'] or root['slug'])
-        rfile = rfolder / f"{stem}.md"
+        rfile = rfolder / session_product_filename(stem, "transcript", ".md", args)
         message_sizes = []
         n_msgs, n_comp = write_transcript(
             con, renderer, root, rfile, chunk=args.sub != "inline",
@@ -613,7 +625,10 @@ def _main() -> None:
                 sub = sessions[sid_]
                 subdir = rfolder / "subagents"
                 subdir.mkdir(exist_ok=True)
-                sfile = subdir / f"{safe_filename(sub['title'] or sub['slug'])}_{sid_[:8]}.md"
+                sstem = f"{safe_filename(sub['title'] or sub['slug'])}_{sid_[:8]}"
+                sfile = subdir / session_product_filename(
+                    sstem, "transcript", ".md", args
+                )
                 sn, sc = write_transcript(con, renderer, sub, sfile)
                 total_msgs += sn
                 total_comp += sc
@@ -646,7 +661,7 @@ def _main() -> None:
         written.append((root, subs, rfolder))
 
     # ------- index -------
-    index_path = out_dir / "index.md"
+    index_path = product_artifact_path(out_dir, "index.md", args)
     write_index(index_path, out_dir, args, db_path, sessions, written, total_msgs, total_comp,
                 total_digest, n_backfilled, scope=scope, children_of=children_of)
 
@@ -683,9 +698,9 @@ def _main() -> None:
         "digests": total_digest,
         "messages": total_msgs,
         "last_backup": last_bkp,
-        "artifacts": [str(p.relative_to(out_dir)) for p in sorted(out_dir.rglob("*")) if p.is_file()],
+        "artifacts": product_artifact_files(out_dir, args),
     }
-    (out_dir / "metadata.json").write_text(
+    product_artifact_path(out_dir, "metadata.json", args).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 

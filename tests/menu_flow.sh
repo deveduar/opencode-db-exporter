@@ -46,8 +46,19 @@ FZF_HIST="$TMP/fzf.log"
 # reset -> restore real function definitions (undo test overrides).
 # menu_pause is neutralised: its real body would block on a TTY stdin.
 reset() { unset FZF_QUEUE FZF_FAIL; . "$MOD/menu.sh"; menu_pause() { return 0; }; : > "$FZF_HIST"; }
-count_meta() { find "$OUT" -path "*/$1/*" -type f -name metadata.json 2>/dev/null | wc -l; }
-newest_meta() { find "$OUT" -path "*/$1/*" -type f -name metadata.json -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
+count_meta() {
+    find "$OUT" -type f \( -name metadata.json -o -name "metadata.$1.json" \) -print0 2>/dev/null \
+        | while IFS= read -r -d '' meta; do
+            jq -e --arg profile "$1" '.profile == $profile' "$meta" >/dev/null 2>&1 && printf '.\n'
+        done | wc -l
+}
+newest_meta() {
+    find "$OUT" -type f \( -name metadata.json -o -name "metadata.$1.json" \) -print0 2>/dev/null \
+        | while IFS= read -r -d '' meta; do
+            jq -e --arg profile "$1" '.profile == $profile' "$meta" >/dev/null 2>&1 || continue
+            printf '%s\t%s\n' "$(stat -c %y "$meta")" "$meta"
+        done | sort -k1,1 -k2,2 | tail -1 | cut -f2-
+}
 CALLS="$TMP/calls.txt"
 call_log() { run_oced_tool() { printf '%s\n' "$*" >> "$CALLS"; }; }
 # FZF queue lives in a FILE: fzf() runs inside $(...) pipelines (subshells), so
@@ -675,7 +686,7 @@ grep -qx 'archive (transcript + memory + faithful)' <<<"$PLAN" \
     && ok "the plan drops the per-product intro legend (the header names them)" || bad "plan still has an intro: $(grep -E '^(transcript|memory)$' <<<"$PLAN" | paste -sd, -)"
 grep -q '^  flags: full tool outputs · touched files$' <<<"$PLAN" \
     && ok "the plan lists the effective flags on the flags: line, wrapped to 72" || bad "plan flags: $(grep 'flags:' <<<"$PLAN")"
-grep -qx '  <stamp>/' <<<"$PLAN" && grep -q '└── faithful/' <<<"$PLAN" \
+grep -qx '  <stamp>/' <<<"$PLAN" && grep -q 'faithful.json' <<<"$PLAN" \
     && ok "the plan shows an example file tree" || bad "plan tree: $(grep -c '──' <<<"$PLAN")"
 # review plan has no sanitize (a preset that redacted silently would promise a safety it cannot keep)
 ! oc_export_plan review | grep -q 'sanitize' && ok "oc_export_plan review has no sanitize" || bad "plan review should not have sanitize: $(oc_export_plan review)"
@@ -1087,7 +1098,7 @@ jq -e '(.session_records | length) == 6' "$MA" >/dev/null && ok "ALL exported 6 
 
 qset "__ALL__" "__MAKE__" "__PRESET_rag"
 oc_export_sessions_pick >/dev/null
-MEM=$(newest_meta memory); MEM="${MEM%/metadata.json}"
+MEM=$(newest_meta memory); MEM=$(dirname "$MEM")
 [ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
 [ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
 export OCED_PRESETS="$TMP/no-presets.json"
@@ -1229,7 +1240,7 @@ MH=$(newest_meta transcript)
 jq -e '.flags.no_subagents == false and (.session_records | length) == 6
        and ([.session_records[] | select(.kind == "subagent")] | length) == 3' "$MH" >/dev/null \
     && ok "real untouched hidden run exports the whole DB (3 roots + 3 subagents)" || bad "hidden run: $(jq -c '{n:.flags.no_subagents,h:.subagents_hidden,s:.session_records}' "$MH")"
-MH="${MH%/metadata.json}"
+MH=$(dirname "$MH")
 [ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run" || bad "subagents folder missing"
 # A NARROWED hidden run: the cascade is named in the confirm.
 reset; confirm_action() { return 0; }
@@ -1311,8 +1322,9 @@ oc_export_plan transcript | grep -qx 'fidelity: lossy (no faithful JSON: the Mar
     && ok "the keyword plan states its fidelity too (lossy)" || bad "keyword fidelity: $(oc_export_plan transcript | grep 'fidelity:')"
 # The tree names every file the writer really emits: a json preset writes the
 # subagent JSON next to its Markdown (cli.py), so the tree must show it.
-printf '%s\n' "$PLANOUT" | grep -q '<descendant>_<id>.json' \
-    && ok "the tree shows the subagent JSON of a json preset" || bad "tree hides the subagent JSON: $(grep '<descendant>' <<<"$PLANOUT")"
+printf '%s\n' "$PLANOUT" | grep -q '<descendant>_<id>.faithful.json' \
+    && ok "the tree shows the bundle subagent JSON beside transcript files" \
+    || bad "tree subagent outputs: $(grep '<descendant>' <<<"$PLANOUT")"
 # The bits are emitted verbatim: every one of them is present (the wrap may
 # split the flags: line, so flatten it before matching).
 PLANFLAT=$(tr '\n' ' ' <<<"$PLANOUT" | tr -s ' ')

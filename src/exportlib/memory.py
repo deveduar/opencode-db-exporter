@@ -15,7 +15,11 @@ from exportlib.util import (
     sha256_file,
     ts_iso,
 )
-from exportlib.writers import last_backup_info
+from exportlib.writers import (
+    last_backup_info,
+    product_artifact_files,
+    product_artifact_path,
+)
 
 
 def memory_session_entry(con, s: dict, cap: int = 0, files: bool = False, sanitize_on: bool = False) -> dict:
@@ -182,7 +186,9 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "everything, the default). This is not a full transcript.",
         "",
     ]
-    (out_dir / "index.md").write_text("\n".join(idx_rows), encoding="utf-8")
+    product_artifact_path(out_dir, "index.md", args).write_text(
+        "\n".join(idx_rows), encoding="utf-8"
+    )
 
     corpus_bytes = (out_dir / "corpus.jsonl").stat().st_size
 
@@ -212,9 +218,9 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         "session_records": records,
         "messages": total_msgs,
         "last_backup": lb,
-        "artifacts": ["corpus.jsonl", "index.md"],
+        "artifacts": product_artifact_files(out_dir, args),
     }
-    (out_dir / "metadata.json").write_text(
+    product_artifact_path(out_dir, "metadata.json", args).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 

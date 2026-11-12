@@ -12,6 +12,11 @@ exports_runs_find() {
         ! -name '.*' ! -name '*~*' | sort $cmp
 }
 
+oced_export_meta_files() {
+    find "$1" -maxdepth 1 -type f \
+        \( -name metadata.json -o -name 'metadata.*.json' \) -print 2>/dev/null | sort
+}
+
 # oced_export_require_meta <metadata.json> -> reject an incomplete run contract.
 oced_export_require_meta() {
     local meta="$1"
@@ -111,7 +116,7 @@ oced_exports_list() {
     local -a broken_runs=()
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
-        mapfile -t run_metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t run_metas < <(oced_export_meta_files "$run")
         if [ "${#run_metas[@]}" -eq 0 ]; then
             # Partial run (e.g. an aborted export whose output dir was created but never written).
             broken_runs+=("$stamp")
@@ -134,7 +139,7 @@ oced_exports_list() {
             [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
                 human_date="${stamp:0:10} ${stamp:11:2}:${stamp:14:2} UTC" ;;
         esac
-        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t metas < <(oced_export_meta_files "$run")
         profiles="" roots=0 subs=0 msgs=0 comp=0 found=0
         lrsess=""
         lrpreset=""
@@ -262,7 +267,7 @@ oced_exports_verify() {
     local -A run_meta=()
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
-        mapfile -t mlist < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t mlist < <(oced_export_meta_files "$run")
         rmeta=$(oced_export_rec_meta "${mlist[@]}")
         run_meta["$stamp"]="$rmeta"
         [ -n "$rmeta" ] && freshness_metas+=("$rmeta")
@@ -396,7 +401,7 @@ oced_exports_view() {
     [ -d "$target" ] || { echo "Not found: $target"; echo "Try: opencode-db exports list"; return 1; }
 
     local -a metas
-    mapfile -t metas < <(find "$target" -type f -name metadata.json 2>/dev/null | sort)
+    mapfile -t metas < <(oced_export_meta_files "$target")
     [ "${#metas[@]}" -gt 0 ] || { echo "No metadata.json found in $target"; return 1; }
     # Every product in a run must satisfy the same canonical contract, including
     # machine mode: `view --json` is raw metadata, not a bypass around validation.

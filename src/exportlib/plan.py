@@ -330,14 +330,14 @@ def plan_text(
 # tree), reused by `plan_text()` so the runtime plan and the catalog cannot drift.
 
 def _session_tree(product: str, cfg: dict) -> dict:
-    """The nested tree of ONE product's output dir (dict = dir, None = file)."""
+    """Files and session folders written by one standalone product."""
     if product == "memory":
         return {"corpus.jsonl": None, "index.md": None, "metadata.json": None}
     if product == "faithful":
         # JSON only, always one folder per session with subagents/ inside (there
         # is no `sub` layout: inline/omit only make sense for Markdown).
         return {
-            "01-<title>_<id>": {
+            "YYYY-MM-DD__<title>_<id>": {
                 "<title>.json": None,
                 "subagents": {"<descendant>_<id>.json": None},
             },
@@ -353,7 +353,11 @@ def _session_tree(product: str, cfg: dict) -> dict:
         }
     if cfg.get("sub", "separate") == "separate":
         session["subagents"] = {"<descendant>_<id>.md": None}
-    return {"01-<title>_<id>": session, "index.md": None, "metadata.json": None}
+    return {
+        "YYYY-MM-DD__<title>_<id>": session,
+        "index.md": None,
+        "metadata.json": None,
+    }
 
 
 def _tree_lines(children: dict, prefix: str = "") -> list[str]:
@@ -375,8 +379,34 @@ def example_tree(profile: str, presets: dict | None = None) -> list[str]:
     root: dict = {}
     if plan["bundle"]:
         root["index.md"] = None
+        sessions: dict = {}
+        for item in plan["items"]:
+            product = item["product"]
+            root[f"index.{product}.md"] = None
+            root[f"metadata.{product}.json"] = None
+            cfg = item.get("config", {})
+            if product == "memory":
+                root["corpus.jsonl"] = None
+                continue
+            folder: dict = sessions.setdefault("YYYY-MM-DD__<title>_<id>", {})
+            if product == "faithful":
+                folder["<title>.faithful.json"] = None
+                folder.setdefault("subagents", {})["<descendant>_<id>.faithful.json"] = None
+            else:
+                folder[f"<title>.{product}.md"] = None
+                if product == "transcript" and cfg.get("chunk_mb", 1) > 0:
+                    folder["<title>.transcript.parts (only when over limit)"] = {
+                        "<title>.transcript-part-NNN.md": None,
+                        "index.md": None,
+                    }
+                if cfg.get("sub", "separate") == "separate":
+                    folder.setdefault("subagents", {})[
+                        f"<descendant>_<id>.{product}.md"
+                    ] = None
+        root.update(sessions)
+        return ["<stamp>/"] + _tree_lines(root)
     for item in plan["items"]:
-        root[item["product"]] = _session_tree(item["product"], item.get("config", {}))
+        root.update(_session_tree(item["product"], item.get("config", {})))
     return ["<stamp>/"] + _tree_lines(root)
 
 

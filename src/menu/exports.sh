@@ -37,7 +37,7 @@ oc_exports_rows() {
     local -A meta_files_by_run=()
     mapfile -t runs < <(exports_runs_find "$dorder")
     for run in "${runs[@]}"; do
-        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t metas < <(oced_export_meta_files "$run")
         [ "${#metas[@]}" -gt 0 ] || continue
         meta_files_by_run["${run##*/}"]=$(printf '%s\n' "${metas[@]}")
         recmeta=$(oced_export_rec_meta "${metas[@]}")
@@ -84,7 +84,7 @@ oc_exports_run_row() {
     local row_title="" row_notes="" rm="" rdate=""
     local -a metas=("$@")
     if [ "${#metas[@]}" -eq 0 ]; then
-        mapfile -t metas < <(find "$run" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t metas < <(oced_export_meta_files "$run")
     fi
     [ "${#metas[@]}" -gt 0 ] || { echo "error: $run has no metadata.json; re-export this run" >&2; return 1; }
     for m in "${metas[@]}"; do
@@ -265,7 +265,7 @@ oc_exports_update_runs() {
         local -A meta_files_by_run=()
         local r recmeta freshness_json
         for r in "${runs[@]}"; do
-            mapfile -t run_metas < <(find "$r" -type f -name metadata.json 2>/dev/null | sort)
+            mapfile -t run_metas < <(oced_export_meta_files "$r")
             [ "${#run_metas[@]}" -gt 0 ] || continue
             meta_files_by_run["${r##*/}"]=$(printf '%s\n' "${run_metas[@]}")
             recmeta=$(oced_export_rec_meta "${run_metas[@]}")
@@ -446,7 +446,7 @@ _oc_exports_update_one() {
     # the existing value; omitting the flags lets update.py preserve metadata.
     local -a meta_args=() metas=()
     if [ -t 0 ]; then
-        mapfile -t metas < <(find "$OCED_OUT/$stamp" -type f -name metadata.json 2>/dev/null | sort)
+        mapfile -t metas < <(oced_export_meta_files "$OCED_OUT/$stamp")
         local current_title="" current_notes="" current_notes_kind="" answer
         if [ "${#metas[@]}" -gt 0 ]; then
             current_title=$(jq -r '.title // empty' "${metas[0]}" 2>/dev/null)
@@ -493,4 +493,3 @@ _oc_exports_update_all() {
     menu_pause "Update all" || return 0
     return 0
 }
-

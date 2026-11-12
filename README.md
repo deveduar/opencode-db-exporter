@@ -133,7 +133,7 @@ Named **presets** (a product or bundle + config + optional selection) live in `O
 ```bash
 opencode-db export review                # run the named preset
 opencode-db export review --sanitize     # opt into best-effort redaction for one run
-opencode-db export complete              # bundle: transcript + memory under ONE stamp
+opencode-db export complete              # transcript + memory + faithful, grouped by session
 opencode-db export transcript --last 5   # 5 most recently used roots (+ their subagents)
 opencode-db export rag --cap 3000        # per-run override
 ```

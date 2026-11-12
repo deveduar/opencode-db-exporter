@@ -60,11 +60,12 @@ LIVE_SQL = ("SELECT id, title, slug, parent_id, time_created, time_updated "
 
 # ---------------------------------------------------------------- discovery ---
 def _products_of(run_dir: Path) -> list[dict]:
-    """One entry per product subdir: {"profile", "dir", "meta"}. A run without any
-    metadata.json that carries .session_records cannot be refreshed — there is no
+    """One entry per product metadata file: {"profile", "dir", "meta"}. A run
+    without metadata carrying .session_records cannot be refreshed — there is no
     record of WHICH sessions it contains, so the only honest move is re-export."""
     out = []
-    for meta_path in sorted(run_dir.glob("*/metadata.json")):
+    meta_paths = set(run_dir.glob("metadata.json")) | set(run_dir.glob("metadata.*.json"))
+    for meta_path in sorted(meta_paths):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception as e:
@@ -78,7 +79,7 @@ def _products_of(run_dir: Path) -> list[dict]:
             "meta": meta,
         })
     if not out:
-        die(f"{run_dir}: no metadata.json (legacy export? re-export it instead)")
+        die(f"{run_dir}: no metadata.json; re-export this run")
     return out
 
 
@@ -339,6 +340,8 @@ def execute(plan: dict, args) -> str:
                     "--source", args.source or "update",
                     "--title", args.title if args.title is not None
                     else (meta.get("title") or "")]
+            if len(plan["_prods"]) > 1:
+                argv.append("--bundle-child")
             if args.notes is not None:
                 # Explicit input makes the note user-owned, even when empty.
                 argv += ["--notes", args.notes]
