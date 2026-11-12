@@ -744,8 +744,8 @@ deliberately excluded. `exportlib/freshness.py` backs both `== Changed since exp
 `== New in scope ==` and is shared with `exports update`. A direct `--sessions ID` run
 records that exact ID set as `.scope`; preset/menu narrowing can still preserve their
 explicitly broader scope so refresh reopens only that intended gap.
-`exports update <stamp>` refreshes in place (see §5 of `architecture.md` and the
-metadata subsection above).
+`exports update <stamp>` is a Bash run-management command backed by the Python update
+engine (see [Bash operations](bash-operations.md) and the [export architecture](export-architecture.md)).
 
 `exports view <stamp>` is a **detail screen**, so it leads with a banner
 (`== Export run: <stamp> ==`), then one summary line per product, the aggregate
@@ -802,7 +802,8 @@ picker consumes — same aggregation as `shrinks list`):
 `shrinklib/plan.py rule-tag` (the compact selection tag: `keep 1 newest`, `discard 2 ids +strip`,
 etc.); `<kept>/<total> kept` is the session survival count; ONE size delta replaces the
 three size fields the old format repeated; `<state>` is the copy's own state only when
-anomalous (`(swapped/no copy)`). Numbers come from that run's `shrink.json` (see §6); size
+anomalous (`(swapped/no copy)`). Numbers come from that run's `shrink.json` (see
+[shrink architecture](shrink.md)); size
 fields are human-readable. Without `--tsv` the same row is printed numbered with a
 `view <stamp> · remove <stamp> · prune <N>` footer.
 

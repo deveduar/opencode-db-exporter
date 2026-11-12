@@ -93,5 +93,5 @@ else
 fi
 
 echo "[OK] opencode-db-exporter installed in $PREFIX"
-echo "   CLI: $BIN_DIR/opencode-db   (also: bash $SOURCE_ROOT/src/opencode-db.sh)"
+echo "   CLI: $BIN_DIR/opencode-db   (also: bash $SOURCE_ROOT/opencode-db.sh)"
 echo "   Try: $BIN_DIR/opencode-db status"

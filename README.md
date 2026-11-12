@@ -2,7 +2,7 @@
 
 Export the local **opencode** session database to Markdown, a searchable corpus, compaction digests, or faithful JSON. Python is the stable, primary interface for creating exports and never writes to the opencode database. The optional Bash suite handles database inspection, backups, shrink/run management, and the interactive menu; its export command delegates to the same Python exporter.
 
-The Python exporter runs from a checkout without installation and supports native Windows. On Windows it asks `opencode debug paths db` for the active database path ([OpenCode path docs](https://opencode.ai/docs/cli/#paths)); set `OPENCODE_DB` to override it.
+The Python exporter runs from a checkout without installation and supports native Windows. On Windows it asks `opencode debug paths db` for the active database path ([OpenCode path docs](https://opencode.ai/docs/cli/#paths)); set this project's `OPENCODE_DB` environment variable to override discovery. Python does not read `opencode-db.conf`.
 
 ## Quick start
 
@@ -46,7 +46,7 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 Use the Python entry point for exporting without installation. The Bash suite is optional:
 
 ```bash
-bash src/opencode-db.sh menu    # portable menu from a checkout; no install required
+./opencode-db.sh menu            # portable Bash menu from a checkout; no install required
 ./install.sh                    # optional Bash command shim + user configuration
 opencode-db status
 ```
@@ -196,233 +196,60 @@ support here means export access, not the Bash backup/shrink/menu suite.
 
 ## Bash command suite
 
-These commands provide database/run management and the interactive menu; they are
-not prerequisites for the Python exporter.
+The optional Bash interface provides database inspection, backup and run management,
+shrink copies, and the fzf menu. Its `export` command delegates to the Python exporter.
+From a checkout, use `./opencode-db.sh`; `./install.sh` installs the `opencode-db`
+command and its Bash configuration on Linux/WSL.
 
 ```bash
-opencode-db menu                      # interactive fzf menu
-opencode-db status                    # DB state + alignment with the last backup + version/schema + dependency check
-opencode-db version                   # tool version + opencode CLI version + schema probe
-opencode-db list [--root|--sub] [--filter PATTERN] [--info]
-                                      # --order: created-asc|created-desc|updated-asc|updated-desc
-opencode-db info <session_id> [--json] [--no-digest]
-                                      # banner + tokens, cost, digests, counts
-                                      # --json = the row as JSON (no banner)
-                                      # --no-digest = drop the compaction-digest block
-opencode-db digest <session_id> [show [last|N|all]]
-                                      # compaction MARKERS (points); 'show' prints
-                                      # the DIGEST written for each one
-                                      # ('compactions' is the deprecated alias)
-opencode-db backup [--no-compress] [--dry-run] [--yes]   # consistent snapshot (.backup), gzip + sha256 + manifest
-                                          # --dry-run prints the plan (source/target/est. size) and writes nothing
-                                          # --yes skips the question AND the plan (the caller owns the gate)
-opencode-db backups [list|view <file> [--json]|verify <file>|remove <file> [--yes]|prune <N>]
-opencode-db export <product> [FLAGS]    # products: transcript | memory | digest | faithful
-opencode-db export --list-presets       # list the named presets in the presets file
-opencode-db export --check --json       # read-only preflight (database + session count)
-opencode-db export <name> --show         # the resolved plan only (static, no DB read)
-opencode-db export <name> --dry-run      # plan + sessions the selection would match (writes nothing)
-opencode-db exports [list|remove <stamp> [--yes]|prune <N> [--yes]]
-opencode-db shrink [preset|--keep N|--older-than DAYS|--since DATE|--keep-all
-                    |--keep-sessions ID[,ID]|--discard-sessions ID[,ID]]
-                    [--strip-reasoning] [--list-presets] [--dry-run] [--swap]
-                                      # pruned + VACUUMed COPY (never touches the live DB
-                                      # unless --swap replaces it safely)
-opencode-db shrinks [list [--tsv]|view <stamp>|verify [--tsv] [--yes]|remove <stamp> [--yes]|prune <N>]
-                                      # manage the produced shrink copies
-opencode-db deps [--check]              # idempotent dependency check/install (apt|pacman|dnf)
-opencode-db help
+opencode-db status
+opencode-db list --root --order updated-desc
+opencode-db backup --dry-run
+opencode-db backups list
+opencode-db exports list
+opencode-db exports update <stamp>
+opencode-db shrink --keep 10 --dry-run
+opencode-db shrinks verify
+opencode-db menu
 ```
 
-## Menu (opencode-db menu)
+`--from-backup <file>` is a global Bash option placed before the command. Backups use
+SQLite's WAL-aware `.backup`; shrink builds a separate copy by default. Only explicit,
+guarded `shrink --swap` replaces the live database. For command details, menu behavior,
+and install/uninstall scope, see [Bash operations](docs/bash-operations.md),
+[shrink architecture](docs/shrink.md), [menu design](docs/menu-design.md), and
+[swap safety](docs/swap-safety.md).
 
-The interactive menu is **picker-driven**: real fzf lists, no nested menus, no TAB multi-select.
-Mode switching and bulk operations are their own rows.
+## Configuration and portability
 
-| Marker | What the row does | Examples |
-| --- | --- | --- |
-| `[>]` | opens a flow (create / swap / continue) | `[>] create backup`, `[>] swap a copy into the LIVE DB` |
-| `[?]` | inspects something | `[?] verify` |
-| `[*]` | flips a mode and re-renders (shows both states) | `[*] view → remove`, `[*] newest first → old first` |
-| `[word]` | bulk action | `[mark all]`, `[unmark all]`, `[delete all]` |
-| `[x]` / `[ ]` | whether a session is included | `[x] My session (2 sub)` |
+`OPENCODE_DB` is **this exporter's environment variable**, not an OpenCode setting.
+Python reads it directly and does not load `opencode-db.conf`. Bash loads
+`opencode-db.conf` (or `OCED_CONF`); explicitly exported environment variables take
+precedence. Python runs on Linux, WSL, and native Windows (where OpenCode CLI discovery
+is used unless `OPENCODE_DB` is set). Bash management commands are for Linux/WSL.
 
-**Pickers** (each with a `view`/`remove` toggle + `newest first`/`old first` sort):
-- **status** — full report (DB, backups alignment, version/schema, deps); header counts refresh on every loop.
-- **backups** — create (plan → y/N → run) + manage; `view` runs sha256 check + live-DB compare.
-- **sessions** — details only; pick a row for `info` + digests.
-- **shrinks** — create (3-step wizard: sessions → recipe → plan) + manage; `swap` requires typing `confirm`, checks staleness first.
-- **export** — preset-only: (1) mark root sessions (subagents hidden by default, cascade included), (2) pick preset, (3) confirm with effective selection shown.
-- **export runs** — view/update/remove/prune past runs.
+From a checkout, Bash runs in portable mode: the repo config/presets are used and
+exports, backups, and the activity log default to gitignored repo directories. An
+installed prefix does not use this portable mode. WSL access to a Windows-mounted DB
+can be affected by SQLite WAL locking; keep its DB and sidecars together. Details:
+[shared configuration and safety](docs/configuration-and-safety.md).
 
-## Export
+## Documentation and validation
 
-**Four products** (what a document is):
-
-| Product | Document | Typical use |
-| --- | --- | --- |
-| `transcript` | conversation in Markdown (text + tools + patches + digests) | read, share, audit |
-| `memory` | `corpus.jsonl` — one JSON line per root session (goal, outcome, digests, metadata) | feed another AI (RAG) |
-| `digest` | only the compacted-context digests | quick knowledge review |
-| `faithful` | lossless machine archive: one native JSON file per session (all messages, parts, reasoning) | recoverable source / tools |
-
-Named **presets** (a product or bundle + config + optional selection) live in `OCED_PRESETS`
-(default `~/.config/opencode-db/presets.json`, auto-created by `install.sh`).
+- [Architecture overview](docs/architecture.md)
+- [Export pipeline](docs/export-architecture.md)
+- [Artifact schemas](docs/schemas.md)
 
 ```bash
-opencode-db export review                # run the named preset
-opencode-db export review --sanitize     # opt into best-effort redaction for one run
-opencode-db export complete              # transcript + memory + faithful, grouped by session
-opencode-db export transcript --last 5   # 5 most recently used roots (+ their subagents)
-opencode-db export rag --cap 3000        # per-run override
+bash tests/export_smoke.sh
+bash tests/menu_flow.sh
 ```
 
-- **One selection rule per run**: `--filter`, `--sessions`, `--last`, `--since` (mutually exclusive; CLI-only, never preset keys).
-- **CLI wins over preset**: flags/selection on the command line override the preset.
-- `export --list-presets` / `--show <name>` / `--dry-run <name>` / `--explain` inspect plans without DB.
-- `--sanitize` redacts high-confidence secret prefixes — best-effort; review output before sharing.
+## Roadmap
 
-## Managing export runs
-
-Run management is exposed by the optional Bash suite; `exports update` uses the Python
-export engine internally, but is not a separate public Python CLI command.
-
-```bash
-opencode-db exports list              # date / profile / counts / size / preset / status / refresh
-opencode-db exports view <stamp>      # detail: sessions, "Changed since export" and "New in scope", excluded
-opencode-db exports view <stamp> --files   # + produced files with sizes
-opencode-db exports freshness <stamp> --tsv    # stale/missing/unverifiable plus new in-scope (--json = array)
-opencode-db exports update <stamp>    # refresh in place (delta by default; --mode accumulative to reopen scope)
-opencode-db exports remove <stamp>    # delete one run (asks; --yes to skip)
-opencode-db exports prune 5           # keep only the 5 most recent runs
-```
-
-## Compaction digests
-
-`opencode-db digest <id> show` prints a session's digests; the `digest` export product
-writes one markdown file per session with them. `compactions` is a deprecated alias.
-
-## shrink — a lighter DB copy to swap over opencode
-
-The opencode DB only grows. `opencode-db shrink` builds a pruned + VACUUMed **copy** from a snapshot; by default it never touches the live DB, while `--swap` installs it safely after a safety snapshot.
-
-```bash
-opencode-db shrink                         # default: 10 most recent sessions
-opencode-db shrink lean                    # + strip reasoning parts (recommended)
-opencode-db shrink quiet                   # prune + vacuum only, keep full text
-opencode-db shrink --keep 5 --dry-run      # only report what would be pruned
-opencode-db shrink --older-than 30         # keep sessions updated in the last 30 days
-opencode-db shrink --since 2026-01-15      # keep sessions updated since date (UTC)
-opencode-db shrink --keep-sessions ID...   # keep ONLY the listed ids + their parents/subagents
-opencode-db shrink --discard-sessions ID...# keep everything EXCEPT the ids + their subagents
-                                           # (offers export complete --sessions <cascade> first)
-opencode-db shrink lean --keep 30          # raw flags compose over a recipe
-opencode-db shrink lean --swap             # build copy AND replace live DB (safe)
-```
-
-A shrink has two independent parts:
-- **Selection** (exactly one): `--keep N` (default 10), `--older-than DAYS`, `--since DATE`, `--keep-all`, `--keep-sessions`, `--discard-sessions`.
-- **Operations** (recipe only): `lean` = strip reasoning, `quiet` = prune + vacuum only.
-
-Built-in recipes exist; a custom recipes file (`OCED_SHRINK_PRESETS`,
-`~/.config/opencode-db/shrink-presets.json`) extends/overrides them.
-
-Output: `backups/shrink/<timestamp>/opencode.shrunk.db` + `shrink.json` (criteria, counts, per-table removed rows, sizes, integrity checks). The copy is verified before being stored.
-
-## Managing shrink copies
-
-```bash
-opencode-db shrinks list              # date / tag / kept/total / size delta
-opencode-db shrinks view <stamp> [--json]  # detail screen (sessions/size/criteria/freshness/ids)
-opencode-db shrinks verify [--tsv] [--yes]  # audit: orphan dirs, freshness of EVERY copy vs live DB,
-                                            # and that every discard's cascade still has a covering export run
-opencode-db shrinks remove <stamp>    # delete one copy (asks; --yes to skip)
-opencode-db shrinks prune 3           # keep only the 3 most recent copies
-```
-
-## Activity log (opt-in)
-
-`OCED_LOG=1` appends mutations (backup created, exports/prune, shrink) to `OCED_ACTIVITY_LOG`
-(default `~/.local/state/opencode-db/activity.log`, or `./activity.log` when running portably
-from the repo), one tab-separated line per event. Nothing is ever logged by default.
-
-## Reading from a backup
-
-The global flag `--from-backup` (before the subcommand) points every read command at a stored backup instead of the live DB. It accepts a filename under `OCED_BACKUP_DIR` or an absolute path, and transparently decompresses `.gz` backups to a temp file. The live DB is never touched.
-
-```bash
-opencode-db --from-backup opencode-20260920-155652.db.gz status
-opencode-db --from-backup opencode-20260920-155652.db.gz list --root
-opencode-db --from-backup opencode-20260920-155652.db.gz export memory
-```
-
-`status`/`version` report whether the backup is `[OK] aligned` with the live DB or `[!] out of sync`.
-
-## Uninstall
-
-```bash
-./uninstall.sh          # removes the installed code + shim; keeps config/backups/exports
-./uninstall.sh --all    # also removes config, backups and exports
-```
-
-It never removes system packages: dependencies installed by `opencode-db deps` stay on the system.
-
-## Design notes
-
-The detailed architecture — the data-access model (WAL, `.backup`, `--from-backup`),
-the opencode data model, the export pipeline (products, sanitization **in memory on
-native types before serializing**, token backfill, streaming corpus), the menu design and
-the `shrink --swap` safeguards — lives in **[docs/architecture.md](docs/architecture.md)**.
-
-Machine contracts (presets, `metadata.json`, corpus, faithful archive, manifests):
-**[docs/schemas.md](docs/schemas.md)**.
-
-This README covers usage only. One fact worth knowing here: dates are stored and printed
-in **UTC** everywhere (ISO-8601, `Z`), except the **menu picker rows**, which show your
-local time — set `OCED_TZ` (e.g. `Europe/Madrid`) to pin the display zone instead of
-auto-detecting the system one. It never affects files or the CLI.
-
-## Portability (WSL / Windows / portable)
-
-| Scenario | Works? | Notes |
-|----------|--------|-------|
-| Linux (Debian/Ubuntu) | Yes | `opencode-db deps` installs missing packages via `apt`. |
-| Linux (Arch/omarchy, pacman) | Yes | `deps` installs via `pacman -S --needed`; all packages are in the repos. |
-| Linux (Fedora, dnf) | Yes | `deps` installs via `dnf install -y`. |
-| WSL, opencode inside WSL | Yes | Defaults match; `deps` uses `apt`/`sudo`. |
-| WSL, opencode is native Windows | Yes, with config | Set `OPENCODE_DB=/mnt/c/Users/<user>/.local/share/opencode/opencode.db`. Residual risk: SQLite WAL file locking over `drvfs`. |
-| Native Windows | Generate exports only | Use `python opencode-db-export.py <preset>`; the OpenCode CLI resolves its database path. Bash run management, backups, shrink and menu remain Linux/WSL.|
-| Git Bash / MSYS2 | Partial | Runs only if you install those tools yourself; `deps` refuses to install (no `apt`/`pacman`/`dnf`). |
-| Portable (no install) | Yes | Run `bash src/opencode-db.sh …` straight from the repo. The repo-shipped config is read directly; exports/backups/activity log default into the repo (`./exports`, `./backups`, `./activity.log`, gitignored). |
-
-- **Portable run**: the repo ships three real config files — `opencode-db.conf`, `presets.json`, `shrink-presets.json` — the single source of truth (there are no `.example` copies anymore). Running from the checkout auto-discovers them; `~/.config/opencode-db/` is only consulted when it already has a file there (your config wins over the repo's, never the reverse). Exports/backups/activity log default into the repo (`./exports`, `./backups`, `./activity.log` — gitignored), so a clone sandbox stays fully local. The repo's shipped conf is read, never chmod'ed; a conf under `~/.config/opencode-db/` still gets `chmod 600` as before.
-- **Removing data**: portable data lives in the repo (`./exports`, `./backups`, `./activity.log`) and is gitignored — `uninstall.sh --all` only knows the installed `~/.local/share/opencode-db-exporter/` and does not reach repo data. Delete those directories yourself (or keep them; they are yours).
-
-### Portable configuration
-
-In portable mode you do not need `install.sh` and nothing is created for you: running the CLI from the checkout reads the repo-shipped files. Per config file the resolution is `~/.config/opencode-db/<file>` if present, else the repo-shipped copy (a prefix that ships no config at all, like an install, never goes portable). You can still point `OCED_CONF`/`OCED_PRESETS`/`OCED_SHRINK_PRESETS` at any file on your machine:
-
-```bash
-cp opencode-db.conf ./portable.conf
-OCED_CONF=./portable.conf bash src/opencode-db.sh status
-```
-
-Environment variables still win over that file, which in turn wins over the per-file default: **environment > conf file > `~/.config` > repo-shipped > built-in default**.
-
-## Tests
-
-```bash
-bash tests/export_smoke.sh   # end-to-end against a fake DB; never touches real data
-bash tests/menu_flow.sh      # menu logic with fzf stubbed
-```
-
-## Roadmap / Status
-
-- ✅ **Export**: 4 products (`transcript`, `memory`, `digest`, `faithful`), presets, bundles, CLI discovery/preflight (`--show/--dry-run/--check --json`), no-data exit status, sanitization, token backfill, corpus streaming.
-- ✅ **Shrink**: selection (keep/older/since/keep-sessions/discard), recipes (`lean`/`quiet`), `shrinks verify` (freshness + discard-export coverage), `--swap` **designed and tested** (not yet validated manually in real environment).
-- ✅ **Backups**: WAL-safe snapshots, sha256 manifest, `view` with embedded check, `--from-backup` global.
-- ✅ **Menu**: preset-only export, sessions picker (subagents hidden/shown), backups/shrinks/exports pickers with toggle view/remove, integrated verify.
-- 🔄 **To validate**: `shrink --swap` in real environment (stop opencode → swap → verify).
-- 🔄 **To validate**: install and run the Python exporter in a real native Windows environment.
-- 📋 **Next**: consume `corpus.jsonl`/`faithful` with `consolidation-memory` / LangChain, evaluate `schema_version: 2` if a multi-source consumer emerges.
-- 📋 **Nice-to-have**: native Windows run management/backups/shrink/menu, pre-commit hooks for tests, complete `help` for subcommands.
+- ✅ Python-first exporter, presets/bundles, JSON preflight/plans, no-data exit code,
+  progress control, sanitization, and streaming corpus.
+- ✅ Optional Bash inspection, WAL-safe backups, run management, shrink copies, and menu.
+- 🔄 Validate `shrink --swap` in a real environment.
+- 🔄 Install and run the Python exporter on native Windows.
+- 📋 Evaluate the exported corpus with `consolidation-memory` / LangChain.
