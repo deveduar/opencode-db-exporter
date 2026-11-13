@@ -228,10 +228,17 @@ Python reads it directly and does not load `opencode-db.conf`. Bash loads
 precedence. Python runs on Linux, WSL, and native Windows (where OpenCode CLI discovery
 is used unless `OPENCODE_DB` is set). Bash management commands are for Linux/WSL.
 
-From a checkout, Bash runs in portable mode: the repo config/presets are used and
-exports, backups, and the activity log default to gitignored repo directories. An
-installed prefix does not use this portable mode. WSL access to a Windows-mounted DB
-can be affected by SQLite WAL locking; keep its DB and sidecars together. Details:
+From a checkout, Bash defaults exports, backups, and the activity log to gitignored
+repo directories, even if an installed user config exists. This data-path default is
+separate from config and preset lookup: each uses the user's `~/.config/opencode-db/`
+file when present, falling back to the repo-shipped file. Explicit environment values
+take precedence over `OCED_CONF`; values in the selected config can override the
+repo-local data paths. `./install.sh` and `./uninstall.sh` manage only the optional
+Linux/WSL Bash installation; installing does not change Python's checkout defaults.
+Re-run `./install.sh` after updating the checkout to refresh the separate installed
+Bash copy. An installed prefix itself defaults to app-data paths.
+WSL access to a Windows-mounted DB can be affected by SQLite WAL locking; keep its DB
+and sidecars together. Details:
 [shared configuration and safety](docs/configuration-and-safety.md).
 
 ## Documentation and validation

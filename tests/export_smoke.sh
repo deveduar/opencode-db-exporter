@@ -200,6 +200,25 @@ PBK=$(printf '%s\n' "$PORT_DEFAULTS" | sed -n 3p)
 [ "$POUT" = "$PORT_ROOT/exports" ] && ok "portable OCED_OUT defaults into the repo" || bad "portable OCED_OUT: $POUT"
 [ "$PBK" = "$PORT_ROOT/backups" ] && ok "portable OCED_BACKUP_DIR defaults into the repo" || bad "portable OCED_BACKUP_DIR: $PBK"
 
+# A checkout keeps repo-local data defaults even if a Linux install left its
+# user config behind. Only an explicit OCED_OUT in that config changes it.
+INSTALLED_HOME="$TMP/installed-home"
+mkdir -p "$INSTALLED_HOME/.config/opencode-db"
+printf '# installed user config; output remains unset\n' > "$INSTALLED_HOME/.config/opencode-db/opencode-db.conf"
+CHECKOUT_WITH_HOME_CONF=$(HOME="$INSTALLED_HOME" env -u OCED_CONF -u OCED_OUT -u OCED_BACKUP_DIR \
+    bash -c '. "$1"; printf "%s\n%s\n%s\n" "$OCED_OUT" "$OCED_BACKUP_DIR" "$OCED_ACTIVITY_LOG"' _ "$MOD/common.sh")
+[ "$(printf '%s\n' "$CHECKOUT_WITH_HOME_CONF" | sed -n 1p)" = "$PORT_ROOT/exports" ] \
+    && ok "a leftover install config does not redirect checkout exports" \
+    || bad "checkout with install config OCED_OUT: $(printf '%s\n' "$CHECKOUT_WITH_HOME_CONF" | sed -n 1p)"
+[ "$(printf '%s\n' "$CHECKOUT_WITH_HOME_CONF" | sed -n 2p)" = "$PORT_ROOT/backups" ] \
+    && ok "checkout backup default stays repo-local with a user config" \
+    || bad "checkout with install config backup dir: $(printf '%s\n' "$CHECKOUT_WITH_HOME_CONF" | sed -n 2p)"
+CHECKOUT_OVERRIDE=$(HOME="$INSTALLED_HOME" env -u OCED_CONF OCED_OUT="$TMP/custom-exports" \
+    bash -c '. "$1"; printf "%s" "$OCED_OUT"' _ "$MOD/common.sh")
+[ "$CHECKOUT_OVERRIDE" = "$TMP/custom-exports" ] \
+    && ok "explicit OCED_OUT still overrides checkout default" \
+    || bad "checkout OCED_OUT override: $CHECKOUT_OVERRIDE"
+
 # End-to-end: the repo presets are actually usable — `complete` exists only in the
 # shipped presets.json, so resolving it proves the portable default kicked in.
 PO="$TMP/po"

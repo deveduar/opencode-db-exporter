@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # no-install case). Precedence stays env > conf file > (user config | repo config) > built-in.
 OCED_HOME_CONF_DIR="$HOME/.config/opencode-db"
 OCED_REPO_ROOT="${SCRIPT_DIR%/src}"
+OCED_CHECKOUT=0
+[ -f "$OCED_REPO_ROOT/opencode-db.conf" ] && OCED_CHECKOUT=1
 OCED_PORTABLE=0
 # Install markers (both overridable so tests never touch the real HOME): the
 # symlink install.sh creates is what "already installed" means. Additive, not
@@ -27,8 +29,9 @@ o_cfg_default() { # <file> -> path; home file wins, repo shipped fallback.
 
 # Config precedence: environment > conf file > built-in default.
 OCED_CONF="${OCED_CONF:-$(o_cfg_default opencode-db.conf)}"
-# The repo IS our config home only when its conf is the one in charge (home config
-# wins when both exist; an installed prefix never ships a conf at all).
+# Portable config controls whether we chmod the selected conf. Checkout detection
+# controls data defaults independently: a user config can override paths, but
+# merely having an installed user config must not redirect a checkout to app-data.
 [ "$OCED_CONF" = "$OCED_REPO_ROOT/opencode-db.conf" ] && [ -f "$OCED_CONF" ] && OCED_PORTABLE=1
 
 # Optional path config (no secrets): $OCED_CONF (permissions 600; the repo-shipped
@@ -59,9 +62,9 @@ load_conf
 
 # Built-in defaults for whatever neither the environment nor the conf defined.
 : "${OPENCODE_DB:=$HOME/.local/share/opencode/opencode.db}"
-if [ "$OCED_PORTABLE" = 1 ]; then
-    # Portable (repo-shipped conf active): data lives in the repo (gitignored),
-    # so a no-install run needs no ~/.local/share/opencode-db-exporter prefix.
+if [ "$OCED_CHECKOUT" = 1 ]; then
+    # A checkout defaults data into its own gitignored folders, matching the
+    # Python entry point. Explicit environment/config paths still win above.
     : "${OCED_OUT:=$OCED_REPO_ROOT/exports}"
     : "${OCED_BACKUP_DIR:=$OCED_REPO_ROOT/backups}"
 else
@@ -85,7 +88,7 @@ todo:session_id,content,status
 # Opt-in activity log: OCED_LOG=1 appends one timestamped line per significant
 # action (backup, prune, shrink, ...) to OCED_ACTIVITY_LOG.
 : "${OCED_LOG:=0}"
-if [ "$OCED_PORTABLE" = 1 ]; then
+if [ "$OCED_CHECKOUT" = 1 ]; then
     : "${OCED_ACTIVITY_LOG:=$OCED_REPO_ROOT/activity.log}"
 else
     : "${OCED_ACTIVITY_LOG:=$HOME/.local/state/opencode-db/activity.log}"

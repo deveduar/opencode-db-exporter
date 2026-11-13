@@ -733,6 +733,18 @@ oc_exports_run_row bbb '{}' | grep -qE 'notes$' \
 oc_exports_run_row aaa '{}' | grep -qE '[0-9]B +$' \
     && ok "a canonical run with no preset leaves the preset column empty" \
     || bad "preset column not empty: $(oc_exports_run_row aaa)"
+mkdir -p "$OUT/bundle-run"
+for product in transcript memory; do
+    jq -n --arg profile "$product" \
+        '{profile:$profile,preset:"complete",selection:{rule:"all"},scope:{rule:"all"},
+          flags:{},session_records:[],excluded:[],artifacts:[],messages:1}' \
+        > "$OUT/bundle-run/metadata.$product.json"
+done
+BUNDLE_ROWS=$(oc_exports_rows view 2>/dev/null)
+printf '%s\n' "$BUNDLE_ROWS" | grep -q "^bundle-run${TAB}.*memory+transcript.*complete" \
+    && ok "the exports picker reads product-suffixed bundle metadata" \
+    || bad "bundle metadata was not listed: $(printf '%s\n' "$BUNDLE_ROWS" | grep '^bundle-run')"
+rm -rf -- "$OUT/bundle-run"
 mkdir -p "$OUT/newrow"
 echo '{"profile":"transcript","selection":{"rule":"all"},"scope":{"rule":"all"},"flags":{},"session_records":[{"id":"ses_A0001","kind":"root","updated":"2026-01-01T00:00:00Z"}],"excluded":[],"artifacts":[],"messages":1}' > "$OUT/newrow/metadata.json"
 NEW_STATE=$(jq -cn --arg path "$OUT/newrow/metadata.json" \

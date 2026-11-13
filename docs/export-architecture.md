@@ -27,13 +27,13 @@ describe an invented schema):
 - Config precedence: **env > conf file > per-file default** (`load_conf` in `common.sh` snapshots
   the variables before sourcing `$OCED_CONF`). The per-file default is `~/.config/opencode-db/<file>`
   if present, else the repo-shipped copy when running portably, else the built-in.
-- **Portable mode**: running the CLI from a checkout that ships real config (`opencode-db.conf`,
-  `presets.json`, `shrink-presets.json` — there are no `.example` copies anymore, these files
-  ARE the single source of truth) goes `OCED_PORTABLE=1` and reads those files directly: the
-  data dirs default into the repo (`<repo>/{exports,backups,activity.log}`, gitignored) and the
-  repo conf is read without the `chmod 600` an installed conf gets. An install prefix ships no
-  config (install.sh copies only `src/`), so it never goes portable. A user
-  `~/.config/opencode-db` file always wins over the repo copy.
+- **Checkout defaults**: Python run from the checkout defaults data to the repo's
+  gitignored `exports/` and `backups/` regardless of an installed user's config; Python
+  does not read `opencode-db.conf`. Bash run from the checkout uses the same repo-local
+  data defaults unless `OCED_OUT`/`OCED_BACKUP_DIR` is explicitly set in the environment
+  or selected `OCED_CONF`. Its config/preset lookup can still prefer per-user files. The
+  Bash install copies only `src/` and therefore defaults to the user's app-data exporter
+  directory; re-run `install.sh` after updating a checkout to refresh the installed copy.
 
 ## 3. Export pipeline
 
