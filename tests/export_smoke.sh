@@ -638,6 +638,37 @@ printf '%s' "$(sed -n '1p' "$MB/corpus.jsonl")" | jq -e '.schema_version == 1 an
 jq -e '.flags.files == false and .artifacts == ["corpus.jsonl", "index.md"] and .profile == "memory"' "$MB/metadata.json" >/dev/null \
     && ok "memory metadata: flags.files false + artifacts list" \
     || bad "memory meta contract: $(jq -c '{flags,artifacts,profile}' "$MB/metadata.json")"
+# The index is a data table: no explanatory prose, no memory-irrelevant --role row,
+# and every table line is well formed (the old Role filter row lacked its last |).
+MIDX="$MB/index.md"
+awk '/^\|/ && !/\|$/ {bad=1} END {exit bad}' "$MIDX" \
+    && ok "memory index: every table row closes with |" \
+    || bad "memory index malformed table: $(grep -n '^|' "$MIDX" | grep -v '|$' | head -1)"
+grep -q '^| Role filter' "$MIDX" \
+    && bad "memory index still prints the ignored Role filter row" \
+    || ok "memory index omits the ignored Role filter row"
+grep -q 'Each entry is a reusable memory' "$MIDX" \
+    && bad "memory index still carries explanatory prose" \
+    || ok "memory index is data only (no prose paragraph)"
+grep -q '^| Corpus | \[`corpus.jsonl`\](corpus.jsonl) - one JSON object per root session |$' "$MIDX" \
+    && ok "memory index keeps the corpus link" \
+    || bad "memory index corpus row: $(grep '^| Corpus' "$MIDX")"
+
+echo "== shipped corpus preset (thin memory alias) =="
+jq -e '.presets.corpus.product == "memory" and .presets.rag == null' "$EX_PRESETS" >/dev/null \
+    && ok "shipped presets: corpus is memory, rag is gone" \
+    || bad "shipped preset names: $(jq -c '.presets | keys' "$EX_PRESETS")"
+PRESET_LIST=$(OCED_PRESETS="$EX_PRESETS" run export --list-presets)
+printf '%s' "$PRESET_LIST" | grep -qE '^corpus[[:space:]]+lossy[[:space:]]+corpus\.jsonl:' \
+    && ok "--list-presets lists corpus with its lossy verdict" \
+    || bad "corpus preset row: $(printf '%s' "$PRESET_LIST" | grep corpus)"
+printf '%s' "$PRESET_LIST" | grep -qE '^rag[[:space:]]' \
+    && bad "--list-presets still lists rag" \
+    || ok "--list-presets no longer lists rag"
+CORPUS_SHOW=$(OCED_PRESETS="$EX_PRESETS" run export corpus --show 2>&1)
+printf '%s' "$CORPUS_SHOW" | grep -q '^== Export plan: corpus ==' \
+    && ok "shipped corpus preset resolves without a DB" \
+    || bad "corpus --show: $CORPUS_SHOW"
 
 echo "== faithful product (lossless JSON archive) =="
 run export faithful --filter ses_A0001 >/dev/null

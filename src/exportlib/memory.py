@@ -1,4 +1,4 @@
-# Memory product: RAG corpus (corpus.jsonl, streamed line by line).
+# Memory product: memory corpus (corpus.jsonl, streamed line by line).
 import json
 from datetime import datetime, timezone
 
@@ -184,15 +184,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         f"| Tuning | `--cap {'0 (unlimited)' if not args.cap else args.cap}` · `--files {'on' if args.files else 'off'}` |",
         f"| Sanitize | `{'on' if args.sanitize else 'off'}` |",
         f"| Tokens backfilled from step-finish | {total_backfilled} session(s) |",
-        "| Role filter | `--role {0}` (applies to transcripts; memory ignores it)".format(args.role),
         "| Corpus | [`corpus.jsonl`](corpus.jsonl) - one JSON object per root session |",
-        "",
-        "Each entry is a reusable memory for RAG: metadata (id/title/agent/model/",
-        "dates/tokens/cost) for filtering, the first user request (the goal), the",
-        "last assistant answer (the outcome), ALL compaction digests (the durable",
-        "knowledge opencode distilled), and optionally the touched files (`--files`).",
-        "Text is unlimited by default; truncate any value with `--cap N` (0 = keep",
-        "everything, the default). This is not a full transcript.",
         "",
     ]
     product_artifact_path(out_dir, "index.md", args).write_text(

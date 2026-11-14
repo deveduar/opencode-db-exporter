@@ -85,7 +85,7 @@ PRODUCT_ALIASES = {"compactions": "digest"}
 # Product keyword -> one-line description for the plan confirm / index.
 PRODUCT_INTRO: Dict[str, str] = {
     "transcript": "Markdown conversation per session, with reasoning and tool calls",
-    "memory": "RAG corpus in corpus.jsonl, one line per root session: tokens, todos, tools and digests",
+    "memory": "Memory corpus in corpus.jsonl: one JSON summary per root session (goal, outcome, todos, tool counts, tokens, digests)",
     "digest": "Markdown digests only: the compacted knowledge arc",
     "faithful": "The complete session as native JSON (info + messages), one file per session: the unfiltered machine archive",
 }
@@ -309,9 +309,9 @@ PRODUCT_HELP: Dict[str, str] = {
         "               session use the 'faithful' product (native JSON, lossless)."
     ),
     "memory": (
-        "RAG/memory corpus: corpus.jsonl with one JSON per root session\n"
-        "               (metadata + first user text + last assistant text + all\n"
-        "               compaction digests) - ready for embeddings, not a transcript"
+        "Memory corpus: corpus.jsonl with one JSON summary per root session\n"
+        "               (metadata + first user text + last assistant text + todos +\n"
+        "               compaction digests) - lossy, not a transcript"
     ),
     "digest": "only the compacted-context digests (mode=compaction messages)",
     "faithful": (

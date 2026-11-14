@@ -53,7 +53,7 @@ phrase) — **lossless** iff the `faithful` product is part of the plan and no f
 data (`no_subagents` / `no_orphan_subagents`, or `sanitize`, which redacts
 best-effort), else **lossy** with the reasons. The reason depends on the product that
 carries the data: a content product (`transcript` / `digest`) without `faithful` is lossy
-for the filtered Markdown; a `memory`-only plan is lossy because the RAG corpus is a
+for the filtered Markdown; a `memory`-only plan is lossy because the memory corpus is a
 distilled summary, never the full session. `sub: omit` is a loss only when no `faithful`
 copy carries the subagents. It is the line each
 `--explain` / `--show` / `--dry-run` / menu-confirm card prints after `flags:`. The same
@@ -187,8 +187,9 @@ the run actually set them (same rule as `--no-subagents`) are:
 `Compactions` and `Compaction digests` are the two distinct counters (markers vs
 summary texts, see below). The `memory` product writes its own `index.md` with a
 memory-shaped row set (root/subagent counts, `Tuning` for `--cap`/`--files`,
-`Compaction markers`/`Compaction digests`, `Tokens backfilled`, `Role filter`) and
-the same conditional `Preset` row.
+`Compaction markers`/`Compaction digests`, `Tokens backfilled`) and
+the same conditional `Preset` row. It is a data table only: no explanatory prose,
+and no `Role filter` row (memory ignores `--role`).
 
 ### transcript / digest `metadata.json`
 
@@ -399,7 +400,7 @@ file order is the only record order. Key shape (`exportlib/memory.py`,
 
 Field notes:
 
-- `schema_version` — bump to `2` etc. on any incompatible shape change; RAG
+- `schema_version` — bump to `2` etc. on any incompatible shape change; retrieval
   pipelines key on it to re-ingest.
 - `slug` — short, stable machine id of the session (e.g. `alpha-alpha`),
   distinct from `title`.
@@ -409,12 +410,13 @@ Field notes:
 - `created`/`updated` and `compaction_digests[].created` / `todos` timestamps are
   ISO-8601 UTC; absent → `null`.
 
-### Consuming `corpus.jsonl` (RAG, claims, supersession)
+### Consuming `corpus.jsonl` (retrieval, claims, supersession)
 
-`rag` is **not** a separate artifact: it is a named **preset** whose content is
-`{"product": "memory"}` (`presets.json`), so `export rag` and `export memory`
-produce the **same** `corpus.jsonl`. Nothing here needs a change to be consumed —
-this section is the contract for *other tools*.
+`corpus` is **not** a separate artifact: it is a named **preset** whose content is
+`{"product": "memory"}` (`presets.json`), so `export corpus` and `export memory`
+produce the **same** `corpus.jsonl`. The preset exists as the menu entry and to
+record provenance. Nothing here needs a change to be consumed — this section is the
+contract for *other tools*.
 
 **Loading it.** Both artifacts are plain JSON and need no adapter:
 

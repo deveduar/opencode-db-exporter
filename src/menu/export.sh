@@ -4,7 +4,7 @@
 # + config + its own selection (filter/sessions). Without a presets file the
 # export entry prints guidance (the CLI still accepts raw product keywords and
 # flags). There is NO manual session/or-ALL + product flow in the menu anymore
-# — the shipped plans (notes/rag/digest + user presets) cover it.
+# — the shipped plans (notes/corpus/digest + user presets) cover it.
 # All preset plan logic lives in exportlib/plan.py (resolve() + CLI bridge);
 # these shell shims pin OCED_PRESETS for the python process (common.sh only
 # sets it as a shell variable when using the built-in default).

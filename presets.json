@@ -50,8 +50,8 @@
       "product": "transcript",
       "role": "user"
     },
-    "rag": {
-      "description": "one line per session — tokens, asks, todos, tools and digests (summary)",
+    "corpus": {
+      "description": "corpus.jsonl: one JSON summary per root session — goal, outcome, todos, tool counts, tokens and digests",
       "product": "memory"
     },
     "digest": {

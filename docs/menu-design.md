@@ -149,7 +149,7 @@ rows still come straight from `exportlib/plan.py products` but only as the CLI/t
 surface (no product-only menu flow). Menu labels
 explain *purpose and relative size*: product rows carry a "use it when…" tag;
 each preset carries its own `description` **in the presets file**, so the shipped
-plans (`complete`/`source`/`review`/`notes`/`conversation`/`prompts`/`rag`/`digest`) annotate themselves
+plans (`complete`/`source`/`review`/`notes`/`conversation`/`prompts`/`corpus`/`digest`) annotate themselves
 from the same source that defines them (a preset with no `description` shows the bare
 row). The confirm step prints the plan as the SAME **card** `--explain` prints, so a
 single builder describes every plan. `plan_text()` prints `card_lines()` for a preset: the

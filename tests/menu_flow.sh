@@ -613,7 +613,7 @@ cat > "$OCED_PRESETS" <<'EOF'
    "everything": {"description": "everything bundle", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}}},
    "archive": {"description": "full backup: complete tool outputs + faithful JSON + memory with files (heavy)", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}, "faithful": {}}},
    "notes": {"description": "plain transcript read", "product": "transcript"},
-   "rag": {"description": "memory corpus", "product": "memory"},
+   "corpus": {"description": "memory corpus", "product": "memory"},
    "digest": {"description": "compaction digests", "product": "compactions"},
    "snappy": {"description": "fresh-backup transcript", "product": "transcript", "snapshot": "fresh"},
    "review": {"description": "review copy", "product": "transcript", "no_reasoning": true},
@@ -637,8 +637,8 @@ printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*plain transcript' 
     && ok "presets mode row of notes uses the description from the presets file" || bad "notes description: $(printf '%s\n' "$(oc_export_rows)" | grep notes)"
 printf '%s\n' "$(oc_export_rows)" | grep -q "transcript defaults" \
     && bad "a preset row still claims 'transcript defaults'" || ok "no preset row falls back to 'transcript defaults'"
-printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_rag.*\[memory\]' \
-    && ok "presets mode lists default plan rag [memory]" || bad "rag row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_corpus.*\[memory\]' \
+    && ok "presets mode lists default plan corpus [memory]" || bad "corpus row missing"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_digest.*\[compactions\]' \
     && ok "presets mode lists default plan digest [compactions]" || bad "digest row missing"
 printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless' \
@@ -1108,7 +1108,7 @@ MA=$(newest_meta transcript)
 jq -e '.selection.rule == "all"' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
 jq -e '(.session_records | length) == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '(.session_records | length)' "$MA")"
 
-qset "__ALL__" "__MAKE__" "__PRESET_rag"
+qset "__ALL__" "__MAKE__" "__PRESET_corpus"
 oc_export_sessions_pick >/dev/null
 MEM=$(newest_meta memory); MEM=$(dirname "$MEM")
 [ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
@@ -1328,8 +1328,8 @@ printf '%s\n' "$PLANOUT" | grep -qx '  fidelity: lossless (the faithful JSON kee
     && ok "the card states the derived fidelity (archive: lossless)" || bad "archive fidelity: $(grep 'fidelity:' <<<"$PLANOUT")"
 oc_export_plan notes | grep -qx '  fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
     && ok "a json-less content preset says lossy (notes)" || bad "notes fidelity: $(oc_export_plan notes | grep 'fidelity:')"
-oc_export_plan rag | grep -qx '  fidelity: lossy (the RAG corpus is a summary, not the full session)' \
-    && ok "a memory-only preset says lossy for the corpus, not a missing JSON (rag)" || bad "rag fidelity: $(oc_export_plan rag | grep 'fidelity:')"
+oc_export_plan corpus | grep -qx '  fidelity: lossy (the memory corpus is a summary, not the full session)' \
+    && ok "a memory-only preset says lossy for the corpus, not a missing JSON (corpus)" || bad "corpus fidelity: $(oc_export_plan corpus | grep 'fidelity:')"
 oc_export_plan transcript | grep -qx 'fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
     && ok "the keyword plan states its fidelity too (lossy)" || bad "keyword fidelity: $(oc_export_plan transcript | grep 'fidelity:')"
 # The tree names every file the writer really emits: a json preset writes the

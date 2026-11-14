@@ -69,7 +69,7 @@ products into a bundle; multiple independent preset names are not accepted in on
 | `digest` | Compaction summaries |
 | `notes` | Markdown with truncated tool output |
 | `prompts` | User prompts only |
-| `rag` | Memory corpus (`corpus.jsonl`) |
+| `corpus` | Memory corpus (`corpus.jsonl`) |
 | `review` | Readable Markdown + faithful archive |
 | `source` | Faithful JSON archive |
 | `study` | Markdown + memory corpus |

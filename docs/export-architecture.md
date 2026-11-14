@@ -83,7 +83,7 @@ the Python exporter does not create backups.
 |---|---|
 | `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers), split near the 1 MB target between complete rendered messages by default when needed. A single oversized message stays whole. `full` is an accepted alias |
 | `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
-| `memory` | RAG corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
+| `memory` | Memory corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
 | `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |
 
 The Markdown products do not print the internal `step-start`/`step-finish` parts.
@@ -242,12 +242,12 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 |---|---|---|
 | keep a lossless backup of everything | `python opencode-db-export.py complete` | complete tool outputs + the raw session + corpus |
 | keep the raw session, losslessly | `python opencode-db-export.py source` (or `faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
-| read a conversation and keep its RAG corpus, no raw copy | `python opencode-db-export.py study` | readable log + corpus.jsonl, no faithful JSON |
+| read a conversation and keep its memory corpus, no raw copy | `python opencode-db-export.py study` | readable log + corpus.jsonl, no faithful JSON |
 | review or hand a session to someone | `python opencode-db-export.py review` | no reasoning + the raw session; it does **not** redact — **read the output before passing it on** |
 | read a conversation plain | `python opencode-db-export.py notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
 | read only the dialogue (no tools, patches or reasoning) | `python opencode-db-export.py conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `python opencode-db-export.py prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
-| give another AI the context of my sessions (RAG) | `python opencode-db-export.py rag` or `memory` | corpus.jsonl with defaults; add `--files` for touched files |
+| give another AI the context of my sessions (retrieval) | `python opencode-db-export.py corpus` or `memory` | corpus.jsonl with defaults; add `--files` for touched files |
 | skim the "knowledge arc" of a session | `python opencode-db-export.py digest` | just the compaction summaries (also in transcript + memory) |
 | archive-grade export, but make sure the backup is current first | `python opencode-db-export.py complete --snapshot fresh` | offers a fresh backup when the last one diverged, then exports all bundle products |
 | read one conversation in full **and** keep the raw copy | `python opencode-db-export.py complete --sessions ses_X` | the Markdown, corpus and native-JSON archive |

@@ -78,7 +78,7 @@ PRODUCT_PICKER_LEGEND = [
     "   transcript   HEAVY, human-readable: your asks, the answers, reasoning, every tool call + output",
     "                and the code patches, compaction digests inline (display-filtered).",
     "   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL",
-    "                compaction digests per session. For feeding another AI (RAG); streamed line by line.",
+    "                compaction digests per session. For retrieval or another AI; streamed line by line.",
     "   digest       TINY extract: only the compaction summaries (the knowledge arc of a session). Already",
     "                inside transcript AND memory — standalone is just a fast skim.",
     "   faithful     LOSSLESS: the native opencode JSON, one file per session, unfiltered (only --sanitize",
@@ -159,8 +159,8 @@ def fidelity_parts(
 
     The reason depends on WHICH product carries the data: a content product
     (`transcript`/`digest`) without `faithful` loses what its Markdown filters
-    out; `memory` is not a transcript but a distilled RAG corpus, so its reason
-    is the corpus shape, not a missing copy. `sub: omit` only affects the
+    out; `memory` is not a transcript but a distilled memory corpus, so its
+    reason is the corpus shape, not a missing copy. `sub: omit` only affects the
     Markdown layout (the subagents are still in the set), so it is a loss only
     when no `faithful` copy carries them.
 
@@ -175,7 +175,7 @@ def fidelity_parts(
         if content:
             reasons.append("no faithful JSON: the Markdown is filtered")
         elif products:
-            reasons.append("the RAG corpus is a summary, not the full session")
+            reasons.append("the memory corpus is a summary, not the full session")
     if has_sanitize:
         reasons.append("sanitized (best-effort)")
     if any(c.get("no_subagents") is True for c in configs):

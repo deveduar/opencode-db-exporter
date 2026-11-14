@@ -1,7 +1,7 @@
 # CLI entry: argument parsing, read-only DB access and run orchestration.
 # Products (transcript | memory | digest | faithful):
 #   transcript  markdown transcript with verbosity toggles
-#   memory      RAG corpus (corpus.jsonl, one entry per root session)
+#   memory      memory corpus (corpus.jsonl, one entry per root session)
 #   digest      the compacted-context digests (markdown)
 #   faithful    native {info, messages} JSON, one file per session (the lossless copy)
 # Global flags: --filter, --sanitize (redact secrets), --stamp. Transcript toggles:
