@@ -72,13 +72,22 @@ def _windows_db_from_opencode() -> str:
     return path
 
 
-def default_db() -> str:
+def default_db_with_origin() -> tuple[str, str]:
+    """The database path plus WHERE it came from.
+
+    `origin` is stable and machine-readable: `environment` (OPENCODE_DB),
+    `opencode-cli` (native Windows discovery) or `default` (the known XDG path).
+    """
     override = os.environ.get("OPENCODE_DB")
     if override:
-        return override
+        return override, "environment"
     if sys.platform == "win32":
-        return _windows_db_from_opencode()
-    return str(Path.home() / ".local" / "share" / "opencode" / "opencode.db")
+        return _windows_db_from_opencode(), "opencode-cli"
+    return str(Path.home() / ".local" / "share" / "opencode" / "opencode.db"), "default"
+
+
+def default_db() -> str:
+    return default_db_with_origin()[0]
 
 
 def readonly_db_uri(path: str | Path) -> str:

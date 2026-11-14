@@ -33,7 +33,7 @@ describe an invented schema):
   data defaults unless `OCED_OUT`/`OCED_BACKUP_DIR` is explicitly set in the environment
   or selected `OCED_CONF`. Its config/preset lookup can still prefer per-user files. The
   Bash install copies only `src/` and therefore defaults to the user's app-data exporter
-  directory; re-run `install.sh` after updating a checkout to refresh the installed copy.
+  directory; re-run `scripts/install.sh` after updating a checkout to refresh the installed copy.
 
 ## 3. Export pipeline
 
@@ -103,7 +103,7 @@ display filter too (`--tool-output`, `--patch`, `--role`, `--no-reasoning`,
 
 The product × flags combination is folded into a **presets** file (JSON in `OCED_PRESETS`,
 default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
-`install.sh` auto-creates it from the shipped `presets.json` when missing). A preset pins
+`scripts/install.sh` auto-creates it from the shipped `presets.json` when missing). A preset pins
 `product` + its config flags + optionally the selection (`filter` LIKE **or** exact
 `sessions`, never both). It is the source of truth for both the CLI and the menu:
 

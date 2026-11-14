@@ -29,6 +29,7 @@ from exportlib.config import (
     DatabasePathError,
     default_bkp_dir,
     default_db,
+    default_db_with_origin,
     default_out,
     default_presets,
     readonly_db_uri,
@@ -60,6 +61,7 @@ from exportlib.util import (
     selection_phrase,
     session_record,
     sha256_file,
+    ts_iso,
 )
 from exportlib.writers import (
     last_backup_info,
@@ -213,6 +215,12 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="list the named presets in the presets file and exit (no DB)")
     ap.add_argument("--list-products", action="store_true",
                     help="list the products (document kinds) and exit (no DB)")
+    ap.add_argument("--list-sessions", action="store_true",
+                    help="list sessions (text or --json) and exit without exporting")
+    ap.add_argument("--order", choices=("created-asc", "created-desc",
+                                        "updated-asc", "updated-desc"),
+                    default="updated-desc",
+                    help="--list-sessions ordering (default: updated-desc)")
     ap.add_argument("--show", action="store_true",
                     help="print the resolved plan for <profile> and exit (static, no DB)")
     ap.add_argument("--dry-run", action="store_true",
@@ -220,7 +228,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--check", action="store_true",
                     help="check the database and report its session count; do not export")
     ap.add_argument("--json", dest="json_output", action="store_true",
-                    help="emit JSON for --check, --show, or --dry-run")
+                    help="emit JSON for --check, --list-sessions, --show, or --dry-run")
     ap.add_argument("--explain", action="store_true",
                     help="catalog every preset: what it produces and an example file tree (no DB)")
     ap.add_argument("--no-progress", action="store_true",
@@ -427,6 +435,119 @@ def _check_database(json_output: bool) -> int:
     return 3 if no_data_reason else 0
 
 
+def _list_sessions(args, json_output: bool = False) -> int:
+    """Read-only session listing for launchers and automation.
+
+    Uses the SAME selection rules as an export (`--filter`, `--sessions`,
+    `--last`, `--since`) but writes nothing and never resolves a profile.
+    The JSON contract is stable; `source` names the resolved DB and `origin`
+    says how it was found (environment, OpenCode CLI, or default path).
+    """
+    db_path = None
+    origin = None
+    try:
+        raw_path, origin = default_db_with_origin()
+        db_path = Path(raw_path)
+        if not db_path.is_file():
+            raise FileNotFoundError(f"Database not found: {db_path}")
+        con = sqlite3.connect(readonly_db_uri(db_path), uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            sessions = load_sessions(
+                con, args.filter, args.sessions,
+                getattr(args, "last", None), getattr(args, "since", None),
+            )
+            db_ids = all_session_ids(con)
+        finally:
+            con.close()
+    except (DatabasePathError, OSError, sqlite3.Error) as exc:
+        if json_output:
+            _json_result({
+                "schema_version": 1,
+                "tool": "opencode-db/exportlib",
+                "version": TOOL_VERSION,
+                "ok": False,
+                "status": "error",
+                "source": {
+                    "resolved": str(db_path) if db_path else None,
+                    "exists": bool(db_path and db_path.exists()),
+                    "origin": origin,
+                },
+                "sessions_found": None,
+                "no_data_reason": None,
+                "error": str(exc),
+                "writes": False,
+                "sessions": [],
+            })
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    axis, direction = getattr(args, "order", "updated-desc").split("-", 1)
+    if axis == "created":
+        def sort_key(item):
+            sess = item[1]
+            return (sess["time_created"], sess["time_created"], sess["id"])
+    else:
+        def sort_key(item):
+            sess = item[1]
+            return (sess["time_updated"], sess["time_created"], sess["id"])
+    ordered = sorted(sessions.items(), key=sort_key, reverse=(direction == "desc"))
+
+    records = []
+    for sid, sess in ordered:
+        parent_id = sess["parent_id"] or None
+        records.append({
+            "id": sid,
+            "title": sess["title"] or sess["slug"],
+            "created": ts_iso(sess["time_created"]),
+            "updated": ts_iso(sess["time_updated"]),
+            "project_id": sess["project_id"] or None,
+            "directory": sess["directory"] or None,
+            "parent_id": parent_id,
+            # An orphan (parent row gone) is a root for every hierarchy purpose.
+            "kind": "subagent" if parent_id and parent_id in db_ids else "root",
+            "source": "opencode",
+            "source_file": str(db_path),
+        })
+
+    selected = bool(args.filter or args.sessions or getattr(args, "last", None)
+                    or getattr(args, "since", None))
+    no_data_reason = None
+    if not records:
+        no_data_reason = ("selection_matched_no_sessions" if selected
+                          else "database_has_no_sessions")
+    status = "no_data" if no_data_reason else "ready"
+
+    if json_output:
+        _json_result({
+            "schema_version": 1,
+            "tool": "opencode-db/exportlib",
+            "version": TOOL_VERSION,
+            "ok": status == "ready",
+            "status": status,
+            "source": {
+                "resolved": str(db_path),
+                "exists": True,
+                "origin": origin,
+            },
+            "sessions_found": len(records),
+            "no_data_reason": no_data_reason,
+            "error": None,
+            "writes": False,
+            "sessions": records,
+        })
+        return 3 if no_data_reason else 0
+
+    print(f"Sessions found: {len(records)}")
+    for record in records:
+        print(
+            f"{record['updated'] or '-'}  {record['id']}  "
+            f"{record['title'] or '(untitled)'}  [{record['directory'] or '-'}]"
+        )
+    return 3 if no_data_reason else 0
+
+
 def _matched_sessions(con, args) -> dict:
     """The selection's matched set, AFTER subagent inclusion — the same set the
     real run writes, so a count taken here cannot disagree with the pipeline."""
@@ -616,10 +737,14 @@ def _main() -> None:
         sys.exit(_print_products())
     if args.explain:
         sys.exit(_explain())
-    if args.json_output and not (args.check or args.show or args.dry_run):
-        ap.error("--json requires --check, --show, or --dry-run")
+    if args.json_output and not (args.check or args.show or args.dry_run
+                                 or args.list_sessions):
+        ap.error("--json requires --check, --list-sessions, --show, or --dry-run")
     if args.check:
         sys.exit(_check_database(args.json_output))
+    if args.list_sessions:
+        _normalize_session_ids(args)
+        sys.exit(_list_sessions(args, args.json_output))
 
     if args.chunk_mb < 0:
         ap.error("--chunk-mb must be non-negative (0 disables chunking)")

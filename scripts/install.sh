@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # install.sh — installs opencode-db-exporter to a local prefix and creates the opencode-db symlink.
-# Usage: ./install.sh
+# Usage: ./scripts/install.sh
 #   default prefix: ~/.local/share/opencode-db-exporter
 #   shim: ~/.local/bin/opencode-db
 
-SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREFIX="$HOME/.local/share/opencode-db-exporter"
 BIN_DIR="${HOME}/.local/bin"
 CONF_DIR="$HOME/.config/opencode-db"
@@ -53,8 +53,12 @@ for path in src; do
 done
 
 find "$PREFIX/src" -type f -name '*.sh' -exec chmod +x {} +
-cp -f "$SOURCE_ROOT/uninstall.sh" "$PREFIX/uninstall.sh"
-chmod +x "$PREFIX/uninstall.sh"
+mkdir -p "$PREFIX/scripts"
+cp -f "$SOURCE_ROOT/scripts/install.sh" "$SOURCE_ROOT/scripts/uninstall.sh" "$PREFIX/scripts/"
+chmod +x "$PREFIX/scripts/install.sh" "$PREFIX/scripts/uninstall.sh"
+# The lifecycle scripts live in scripts/; drop the pre-move root-level copies so
+# an upgraded prefix has exactly one layout.
+rm -f "$PREFIX/install.sh" "$PREFIX/uninstall.sh"
 if [ -f "$SOURCE_ROOT/LICENSE" ]; then
     cp -f "$SOURCE_ROOT/LICENSE" "$PREFIX/LICENSE"
 fi

@@ -851,3 +851,56 @@ as the tag, so the column never empties.
 
 **Machine mode (`--json`):** returns `shrink.json` **verbatim**, byte for byte, no banner,
 no aggregation. This is the contract the menu picker depends on.
+
+---
+
+## 10. Session listing — `--list-sessions --json`
+
+`opencode-db-export.py --list-sessions --json` is the read-only session feed for
+launchers (for example `ai-chat-exporter`). It reuses the export selection flags
+(`--filter`, `--sessions`, `--last`, `--since`), accepts
+`--order created-asc|created-desc|updated-asc|updated-desc` (default `updated-desc`),
+never resolves a profile, and creates no output.
+
+```json
+{
+  "schema_version": 1,
+  "tool": "opencode-db/exportlib",
+  "version": "…",
+  "ok": true,
+  "status": "ready",
+  "source": {
+    "resolved": "/path/opencode.db",
+    "exists": true,
+    "origin": "environment"
+  },
+  "sessions_found": 1,
+  "no_data_reason": null,
+  "error": null,
+  "writes": false,
+  "sessions": [
+    {
+      "id": "ses_…",
+      "title": "…",
+      "created": "2026-01-01T00:00:00Z",
+      "updated": "2026-01-01T00:00:00Z",
+      "project_id": "…",
+      "directory": "…",
+      "parent_id": null,
+      "kind": "root",
+      "source": "opencode",
+      "source_file": "/path/opencode.db"
+    }
+  ]
+}
+```
+
+- `source.origin` is `environment` (`OPENCODE_DB`), `opencode-cli` (Windows discovery),
+  or `default` (the OS path).
+- `created`/`updated` are ISO-8601 UTC (`ts_iso`); `title` falls back to the slug.
+- `kind` is `root` or `subagent`; an orphan whose parent row is gone is a root.
+- `sessions_found` is the number of records after selection and ordering.
+- Exit codes: `0` ready, `3` no data (`database_has_no_sessions` or
+  `selection_matched_no_sessions`), `1` missing/unreadable DB, `2` invalid usage.
+- The text form prints `Sessions found: N` followed by one
+  `updated  id  title  [directory]` line per session. `--json` is the stable contract.

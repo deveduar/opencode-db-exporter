@@ -178,17 +178,17 @@ echo "== root extra rows: Install when NOT installed, Uninstall when installed =
 NOSCRIPTS="$TMP/no-scripts"; mkdir -p "$NOSCRIPTS"
 ABSENT="$TMP/bin-absent"                       # never created -> not installed
 INSTALLED_BIN="$TMP/bin-installed"; : > "$INSTALLED_BIN"   # exists -> installed
-FAKEREPO="$TMP/fake-repo"; mkdir -p "$FAKEREPO"
+FAKEREPO="$TMP/fake-repo"; mkdir -p "$FAKEREPO/scripts"
 [ -z "$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)" ] \
     && ok "no rows when not installed and the checkout ships neither script" \
     || bad "extra rows leaked: $(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
-: > "$FAKEREPO/install.sh"
+: > "$FAKEREPO/scripts/install.sh"
 EXTRA1=$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$FAKEREPO" oc_root_extra_rows)
 printf '%s\n' "$EXTRA1" | grep -qxF 'install|Install|fn:oc_menu_install' \
     && ok "not installed offers Install" || bad "install row: [$EXTRA1]"
 printf '%s\n' "$EXTRA1" | grep -q '^uninstall' && bad "Uninstall shown while not installed" \
     || ok "not installed does NOT offer Uninstall"
-: > "$FAKEREPO/uninstall.sh"
+: > "$FAKEREPO/scripts/uninstall.sh"
 EXTRA2=$(OCED_BIN="$ABSENT" OCED_REPO_ROOT="$FAKEREPO" oc_root_extra_rows)
 printf '%s\n' "$EXTRA2" | grep -qxF 'install|Install|fn:oc_menu_install' \
     && ok "not installed + both scripts still offers Install only" || bad "install-only rows: [$EXTRA2]"
@@ -200,8 +200,8 @@ printf '%s\n' "$EXTRA3" | grep -qxF 'uninstall|Uninstall|fn:oc_menu_uninstall' \
 printf '%s\n' "$EXTRA3" | grep -q '^install' && bad "Install shown while installed" \
     || ok "installed does NOT offer Install"
 [ -z "$(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)" ] \
-    && ok "installed + no uninstall.sh offers nothing" \
-    || bad "rows leaked when installed without uninstall.sh: $(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
+    && ok "installed + no scripts/uninstall.sh offers nothing" \
+    || bad "rows leaked when installed without scripts/uninstall.sh: $(OCED_BIN="$INSTALLED_BIN" OCED_REPO_ROOT="$NOSCRIPTS" oc_root_extra_rows)"
 
 echo "== run_menu dispatches actions, builtin exit, ESC climbs =="
 printf '%s\n' "${oc_root[@]}" | grep -qxF 'exit|Exit|builtin:exit' \

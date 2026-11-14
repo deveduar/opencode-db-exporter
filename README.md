@@ -6,7 +6,7 @@ The Python exporter runs from a checkout without installation and supports nativ
 
 ## Quick start
 
-Python 3.10+ is enough; no `pip install` or `install.sh` is needed. This command
+Python 3.10+ is enough; no `pip install` or install step is needed. This command
 creates the `complete` bundle:
 
 ```bash
@@ -37,7 +37,8 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 |---|---|---|
 | Create exports from products/presets, including bundles | Primary, stable interface | `export` delegates to Python |
 | Inspect export plans, preflight the DB, preview selected count | Yes (`--show`, `--check`, `--dry-run`) | Export help/plan commands delegate to Python |
-| Browse sessions, show status/version/schema | No | Yes |
+| List sessions for launchers | Yes (`--list-sessions`, text/JSON) | Yes (`list`) |
+| Show status/version/schema | No | Yes |
 | Create/verify/manage backups; read via `--from-backup` | No | Yes |
 | Manage export runs, including `exports update` | No public run-manager command | Yes; update uses Python export code internally |
 | Shrink DB copies, optionally swap, and run the fzf menu | No | Yes |
@@ -47,7 +48,7 @@ Use the Python entry point for exporting without installation. The Bash suite is
 
 ```bash
 ./opencode-db.sh menu            # portable Bash menu from a checkout; no install required
-./install.sh                    # optional Bash command shim + user configuration
+./scripts/install.sh            # optional Bash command shim + user configuration
 opencode-db status
 ```
 
@@ -104,7 +105,7 @@ Important flags by scope:
 | Transcript | `--chunk-mb N`, `--patch full\|omit`, `--no-reasoning`, `--mark-compactions`, `--summary-diffs`, `--role all\|user\|assistant` | Chunking and message-content filters; `--chunk-mb 0` disables chunking |
 | Digest | `--no-reasoning`, `--mark-compactions`, `--summary-diffs`, `--role all\|user\|assistant` | Filter digest content |
 | Memory | `--cap N`, `--files` | Limit text value length (`0` = unlimited); include touched files |
-| Discovery/automation | `--list-products`, `--list-presets`, `--explain`, `--show`, `--dry-run`, `--check`, `--json` | Discover, inspect plans, preflight or preview; JSON is supported with `--check`, `--show`, and `--dry-run` |
+| Discovery/automation | `--list-products`, `--list-presets`, `--explain`, `--show`, `--dry-run`, `--check`, `--list-sessions`, `--json` | Discover, inspect plans, preflight, list sessions for launchers, or preview; JSON is supported with `--check`, `--list-sessions`, `--show`, and `--dry-run` |
 
 `--filter`, `--sessions`, `--last`, and `--since` are mutually exclusive. `--sessions`
 accepts repeated ids or a comma-separated list. `--last N` selects the N most recently
@@ -146,6 +147,23 @@ For JSON preflight, an empty database has `"status": "no_data"`,
 `"session_count":  0`, and `"no_data_reason": "database_has_no_sessions"`; a database
 or SQLite failure has `"status": "error"` and a non-null `error`. JSON is written to
 stdout; diagnostics for ordinary exports go to stderr.
+
+### Session listing for launchers
+
+`--list-sessions [--json]` is the read-only session feed for launchers such as
+`ai-chat-exporter`. It reuses `--filter`, `--sessions`, `--last`, and `--since`, never
+resolves a profile, and creates no output. `--order` accepts `created-asc`,
+`created-desc`, `updated-asc`, or `updated-desc` (default).
+
+```json
+{"schema_version":1,"tool":"opencode-db/exportlib","version":"…","ok":true,"status":"ready","source":{"resolved":"/path/opencode.db","exists":true,"origin":"environment"},"sessions_found":1,"no_data_reason":null,"error":null,"writes":false,"sessions":[{"id":"ses_…","title":"…","created":"…","updated":"…","project_id":"…","directory":"…","parent_id":null,"kind":"root","source":"opencode","source_file":"/path/opencode.db"}]}
+```
+
+`origin` is `environment`, `opencode-cli`, or `default`. `kind` is `root` or `subagent`
+(an orphan whose parent row is gone is a root). The text form prints
+`Sessions found: N` followed by one line per session. Exit codes match the contract
+above; an empty DB or an empty selection returns `3` with a `no_data_reason`, and a
+missing/unreadable DB returns `1` with `"status":"error"`.
 
 Progress is written to stderr only on an interactive terminal. `--no-progress` disables
 it, including for bundle products. Export summaries remain available after completion.
@@ -198,7 +216,7 @@ support here means export access, not the Bash backup/shrink/menu suite.
 
 The optional Bash interface provides database inspection, backup and run management,
 shrink copies, and the fzf menu. Its `export` command delegates to the Python exporter.
-From a checkout, use `./opencode-db.sh`; `./install.sh` installs the `opencode-db`
+From a checkout, use `./opencode-db.sh`; `./scripts/install.sh` installs the `opencode-db`
 command and its Bash configuration on Linux/WSL.
 
 ```bash
@@ -233,9 +251,9 @@ repo directories, even if an installed user config exists. This data-path defaul
 separate from config and preset lookup: each uses the user's `~/.config/opencode-db/`
 file when present, falling back to the repo-shipped file. Explicit environment values
 take precedence over `OCED_CONF`; values in the selected config can override the
-repo-local data paths. `./install.sh` and `./uninstall.sh` manage only the optional
+repo-local data paths. `./scripts/install.sh` and `./scripts/uninstall.sh` manage only the optional
 Linux/WSL Bash installation; installing does not change Python's checkout defaults.
-Re-run `./install.sh` after updating the checkout to refresh the separate installed
+Re-run `./scripts/install.sh` after updating the checkout to refresh the separate installed
 Bash copy. An installed prefix itself defaults to app-data paths.
 WSL access to a Windows-mounted DB can be affected by SQLite WAL locking; keep its DB
 and sidecars together. Details:

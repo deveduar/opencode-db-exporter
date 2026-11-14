@@ -86,6 +86,9 @@ exports list         list past export runs (date/profile/counts/size);
                        remove it. Restore with: opencode-db --from-backup
                        pre-shrink/<file> <command>
   deps [--check]       check/install the dependencies (apt/pacman/dnf, idempotent, needs sudo)
+  install              install the Bash command + user config (from a repo checkout)
+  uninstall [--all] [--yes]
+                       remove the installed Bash command; keeps data unless --all
   help                 this help
 
 EOF
@@ -162,12 +165,20 @@ fi
 # Resolve the DB source once (memoized) for the commands that read it, and clean
 # up the decompressed temp backup on exit. Meta/write-only commands skip this.
 case "${1:-help}" in
-    deps|help|-h|menu|backups|shrinks) ;;
+    deps|help|-h|menu|backups|shrinks|install|uninstall) ;;
     shrink) [ "${2:-}" = "--list-presets" ] || o_resolve_db ;;
     export) case "${2:-}" in --list-presets|--list-products|--show|--explain|--dry-run|--check) ;; *) o_resolve_db ;; esac ;;
     *) o_resolve_db ;;
 esac
 trap 'o_cleanup_tmp' EXIT
+
+# Lifecycle commands live in scripts/ (repo and installed prefix). Bash only.
+repo_script() {
+    local name="$1" script="$OCED_REPO_ROOT/scripts/$1.sh"
+    shift
+    [ -f "$script" ] || o_die "$name is only available from a repository checkout ($script not found)"
+    exec bash "$script" "$@"
+}
 
 case "${1:-help}" in
     menu)          . "$SCRIPT_DIR/menu.sh"; run_oc_menu ;;
@@ -185,6 +196,8 @@ case "${1:-help}" in
     export)        shift; oced_export "$@" ;;
     exports)       shift; oced_exports "$@" ;;
     deps)          shift; oced_deps "$@" ;;
+    install)       shift; repo_script install "$@" ;;
+    uninstall)     shift; repo_script uninstall "$@" ;;
     help|-h)       help ;;
     *) echo "Unrecognized subcommand: $1"; help; exit 1 ;;
 esac

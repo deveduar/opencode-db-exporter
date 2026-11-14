@@ -3,7 +3,7 @@
 This page is the map of the system, not a second usage guide. The project has two interfaces with deliberately different responsibilities:
 
 - **Python** (`opencode-db-export.py`) is the stable, primary interface for producing exports. It uses only Python's standard library and opens OpenCode's SQLite DB read-only.
-- **Bash** (`opencode-db.sh`, implemented in `src/opencode-db.sh`) provides database inspection, backups, export-run management, shrink operations, and the optional fzf menu. Its `export` command delegates to the Python exporter. `install.sh`/`uninstall.sh` manage this optional Bash command.
+- **Bash** (`opencode-db.sh`, implemented in `src/opencode-db.sh`) provides database inspection, backups, export-run management, shrink operations, and the optional fzf menu. Its `export` command delegates to the Python exporter. `scripts/install.sh`/`scripts/uninstall.sh` manage this optional Bash command (also exposed as `opencode-db install`/`uninstall`).
 
 ## Design documents
 

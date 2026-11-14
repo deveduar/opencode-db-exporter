@@ -19,15 +19,16 @@ oc_root=(
 )
 
 # Roots extra rows: INSTALL when the tool is not installed yet (and the running
-# checkout ships install.sh); UNINSTALL once it is installed (and the running
-# tree ships uninstall.sh). The two are mutually exclusive: an installed tool
-# offers Uninstall only, a portable checkout not yet installed offers Install
-# only. "Installed" is the shim install.sh creates (oc_is_installed).
+# checkout ships scripts/install.sh); UNINSTALL once it is installed (and the
+# running tree ships scripts/uninstall.sh). The two are mutually exclusive: an
+# installed tool offers Uninstall only, a portable checkout not yet installed
+# offers Install only. "Installed" is the shim install.sh creates
+# (oc_is_installed).
 oc_root_extra_rows() {
     if oc_is_installed; then
-        [ -f "$OCED_REPO_ROOT/uninstall.sh" ] && printf 'uninstall|Uninstall|fn:oc_menu_uninstall\n'
+        [ -f "$OCED_REPO_ROOT/scripts/uninstall.sh" ] && printf 'uninstall|Uninstall|fn:oc_menu_uninstall\n'
     else
-        [ -f "$OCED_REPO_ROOT/install.sh" ] && printf 'install|Install|fn:oc_menu_install\n'
+        [ -f "$OCED_REPO_ROOT/scripts/install.sh" ] && printf 'install|Install|fn:oc_menu_install\n'
     fi
     return 0
 }
@@ -40,8 +41,8 @@ oc_repo_script() {
     bash "$script"
     menu_pause "$label" || return 0
 }
-oc_menu_install()   { oc_repo_script "Install"   "$OCED_REPO_ROOT/install.sh"; }
-oc_menu_uninstall() { oc_repo_script "Uninstall" "$OCED_REPO_ROOT/uninstall.sh"; }
+oc_menu_install()   { oc_repo_script "Install"   "$OCED_REPO_ROOT/scripts/install.sh"; }
+oc_menu_uninstall() { oc_repo_script "Uninstall" "$OCED_REPO_ROOT/scripts/uninstall.sh"; }
 
 # oc_root_status -> builds ACTION_STATUS for the root menu header
 # Shows: DB path/size, sessions count, WAL state, last backup alignment, export runs count

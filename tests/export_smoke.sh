@@ -110,6 +110,68 @@ MISSING_CHECK=$(OPENCODE_DB="$TMP/missing.db" \
     && printf '%s' "$MISSING_CHECK" | jq -e '.schema_version == 1 and .status == "error" and .session_count == null and .error != null' >/dev/null \
     && ok "Python preflight distinguishes runtime/path errors from no data" \
     || bad "missing database preflight rc=$MISSING_RC: $MISSING_CHECK"
+
+echo "== Python --list-sessions =="
+PY_LS=$(OCED_OUT="$TMP/list-must-not-exist" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" --list-sessions --json 2>&1)
+printf '%s' "$PY_LS" | jq -e --arg db "$FAKE" '
+    .schema_version == 1 and .tool == "opencode-db/exportlib"
+    and .ok == true and .status == "ready" and .writes == false
+    and .sessions_found == 6 and (.sessions | length) == 6
+    and .source.resolved == $db and .source.exists == true and .source.origin == "environment"
+    and .sessions[0].id == "ses_ORPHAN01"
+    and ([.sessions[] | select(.id == "ses_A0002") | .kind] == ["subagent"])
+    and ([.sessions[] | select(.id == "ses_ORPHAN01") | .kind] == ["root"])
+    and ([.sessions[] | select(.id == "ses_A0001")
+          | {title, directory, project_id, source, source_file,
+             created_ok: (.created | length > 0), updated_ok: (.updated | length > 0)}]
+         == [{title: "Project Alpha", directory: "/tmp/projA", project_id: "proj1",
+              source: "opencode", source_file: $db, created_ok: true, updated_ok: true}])
+' >/dev/null && [ ! -e "$TMP/list-must-not-exist" ] \
+    && ok "Python --list-sessions --json is stable, read-only and ordered updated-desc" \
+    || bad "list-sessions JSON: $PY_LS"
+PY_LS_TEXT=$(python3 "$TESTS_DIR/../opencode-db-export.py" --list-sessions 2>&1)
+printf '%s' "$PY_LS_TEXT" | grep -q '^Sessions found: 6$' \
+    && printf '%s' "$PY_LS_TEXT" | grep -q 'ses_ORPHAN01' \
+    && printf '%s' "$PY_LS_TEXT" | grep -q 'ses_A0001' \
+    && ok "Python --list-sessions prints one line per session" \
+    || bad "list-sessions text: $PY_LS_TEXT"
+PY_LS_ORDER=$(python3 "$TESTS_DIR/../opencode-db-export.py" \
+    --list-sessions --order created-asc --json 2>&1)
+printf '%s' "$PY_LS_ORDER" | jq -e '.sessions[0].id == "ses_A0001"' >/dev/null \
+    && ok "Python --list-sessions honors --order created-asc" \
+    || bad "list-sessions created-asc: $PY_LS_ORDER"
+PY_LS_LAST=$(python3 "$TESTS_DIR/../opencode-db-export.py" \
+    --list-sessions --last 1 --json 2>&1)
+printf '%s' "$PY_LS_LAST" | jq -e '.sessions_found == 1 and .sessions[0].id == "ses_ORPHAN01"' >/dev/null \
+    && ok "Python --list-sessions reuses --last" \
+    || bad "list-sessions --last: $PY_LS_LAST"
+PY_LS_IDS=$(python3 "$TESTS_DIR/../opencode-db-export.py" \
+    --list-sessions --sessions ses_A0001 --json 2>&1)
+printf '%s' "$PY_LS_IDS" | jq -e '.sessions_found == 1 and .sessions[0].id == "ses_A0001"' >/dev/null \
+    && ok "Python --list-sessions reuses exact --sessions" \
+    || bad "list-sessions --sessions: $PY_LS_IDS"
+EMPTY_LS="$TMP/empty-list.db"; cp "$FAKE" "$EMPTY_LS"
+sqlite3 "$EMPTY_LS" 'DELETE FROM session;'
+PY_LS_EMPTY=$(OPENCODE_DB="$EMPTY_LS" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" --list-sessions --json 2>&1); PY_LS_EMPTY_RC=$?
+[ "$PY_LS_EMPTY_RC" -eq 3 ] \
+    && printf '%s' "$PY_LS_EMPTY" | jq -e \
+        '.status == "no_data" and .sessions_found == 0 and .no_data_reason == "database_has_no_sessions" and .writes == false' >/dev/null \
+    && ok "Python --list-sessions distinguishes a valid empty database" \
+    || bad "empty list-sessions rc=$PY_LS_EMPTY_RC: $PY_LS_EMPTY"
+PY_LS_MISSING=$(OPENCODE_DB="$TMP/missing-list.db" \
+    python3 "$TESTS_DIR/../opencode-db-export.py" --list-sessions --json 2>&1); PY_LS_MISSING_RC=$?
+[ "$PY_LS_MISSING_RC" -eq 1 ] \
+    && printf '%s' "$PY_LS_MISSING" | jq -e \
+        '.status == "error" and .sessions_found == null and .error != null and .writes == false' >/dev/null \
+    && ok "Python --list-sessions reports a missing database as an error" \
+    || bad "missing list-sessions rc=$PY_LS_MISSING_RC: $PY_LS_MISSING"
+python3 "$TESTS_DIR/../opencode-db-export.py" --json >/dev/null 2>&1; PY_JSON_RC=$?
+[ "$PY_JSON_RC" -eq 2 ] \
+    && ok "Python --json still refuses to run without a JSON-producing command" \
+    || bad "bare --json rc=$PY_JSON_RC"
+
 PY_COMPLETE=$(HOME="$TMP/python-home" env -u OCED_PRESETS \
     python3 "$TESTS_DIR/../opencode-db-export.py" complete --show 2>&1)
 printf '%s' "$PY_COMPLETE" | grep -q '^== Export plan: complete ==' \
@@ -1111,9 +1173,31 @@ UVT5=$(OCED_BACKUP_DIR="$UMK" OCED_OUT="$UOU" run shrinks verify --tsv)
     && ok "verify never flags a non-discard copy (discard-only scope)" \
     || bad "keep copy flagged: [$(printf '%s\n' "$UVT5" | grep '^unexported')]"
 
+# The update section needs its OWN DB/output: it edits sessions in place, so the
+# shared $FAKE must never move.
+UPDB="$TMP/upd-fake.db"
+bash "$TESTS_DIR/make_fake_db.sh" "$UPDB" >/dev/null
+UPD="$TMP/upd"; UPBK="$TMP/upd-bk"
+rm -rf "$UPD" "$UPBK"; mkdir -p "$UPD"
+runu() { OPENCODE_DB="$UPDB" OCED_OUT="$UPD" OCED_BACKUP_DIR="$UPBK" \
+         OCED_PRESETS="$UPRESETS" run "$@"; }
+usql() { sqlite3 "$UPDB" "$@"; }
+cat > "$TMP/presets-upd.json" <<'EOF'
+{"presets": {
+  "narrow": {"product": "transcript", "filter": "ses_%"},
+  "pair":   {"products": {"transcript": {}, "memory": {}}}
+}}
+EOF
+UPRESETS="$TMP/presets-upd.json"
+# A session that exists only in this private DB, so the narrowed run has a real
+# excluded id that the live DB can edit later.
+usql "INSERT INTO session (id,project_id,slug,directory,title,version,parent_id,agent,model,cost,time_created,time_updated) VALUES ('ses_NEW01','p','n','/tmp','Fresh subagent (@build subagent)','v1','ses_A0001','build','m',0,1789003000000,1789003100000);"
+# Keep the narrowed gap easy to read: the nested subagent is not in the scope.
+usql "DELETE FROM session WHERE id='ses_A0003';"
+
 # 7) a narrowed run keeps its gap: the base scope is remembered, the run stays
 #    as narrow as the menu left it, and --sticky decides revivals.
-NRUN=$(runu export transcript --filter ses_A0001,ses_A0002)
+NRUN=$(runu export narrow --sessions ses_A0001,ses_A0002)
 NSTAMP=$(stamp_of "$NRUN")
 NSMETA="$UPD/$NSTAMP/metadata.json"
 jq -e '.scope == {"rule":"filter","value":"ses_%"} and ([.excluded[].id]|sort) == ["ses_B0001","ses_B0002","ses_NEW01","ses_ORPHAN01"]' "$NSMETA" >/dev/null \
@@ -1123,11 +1207,27 @@ printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "After the u
     && ok "update keeps a narrowed run narrow (no silent widening)" \
     || bad "narrow update: $(runu exports update "$NSTAMP" --dry-run)"
 usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_NEW01';"
-NSPJ=$(runu exports update "$NSTAMP" --dry-run --json)
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run)" | grep -qE "revived  : 1" \
+    && ok "an edited excluded session is revived (--sticky stale, the default)" \
+    || bad "sticky stale: $(runu exports update "$NSTAMP" --dry-run)"
+printf '%s' "$(runu exports update "$NSTAMP" --dry-run --sticky never)" | grep -qE "revived  : 0" \
+    && ok "--sticky never keeps a deliberate skip skipped" \
+    || bad "sticky never: $(runu exports update "$NSTAMP" --dry-run --sticky never)"
+
+# 7b) the run's OWN subagent policy is not a selection gap: `.excluded` stays
+#     empty, and an edited subagent can never be revived only to be dropped again.
+NSRUN=$(runu export transcript --no-subagents)
+NSSTAMP=$(stamp_of "$NSRUN")
+NSMETA="$UPD/$NSSTAMP/metadata.json"
+jq -e '(.excluded|length) == 0 and (.subagents_hidden // 0) > 0 and .flags.no_subagents == true' "$NSMETA" >/dev/null \
+    && ok "a --no-subagents run records its drop in the flags, not in .excluded" \
+    || bad "no-subagents meta: $(jq -c '{excluded,subagents_hidden,no_subagents:.flags.no_subagents}' "$NSMETA")"
+usql "UPDATE session SET time_updated=time_updated+9000000 WHERE id='ses_A0002';"
+NSPJ=$(runu exports update "$NSSTAMP" --dry-run --json)
 printf '%s' "$NSPJ" | jq -e '.up_to_date == true and .counts.revived == 0 and .counts.excluded_total == 0' >/dev/null \
     && ok "a policy-dropped subagent is never revived (plan and artifacts agree)" \
     || bad "no-subagents plan: $NSPJ"
-printf '%s' "$(runu exports update "$NSTAMP" --yes)" | grep -q "Nothing to do" \
+printf '%s' "$(runu exports update "$NSSTAMP" --yes)" | grep -q "Nothing to do" \
     && ok "a --no-subagents run stays up to date after a dropped subagent is edited" \
     || bad "no-subagents idempotent: $(runu exports update "$NSSTAMP" --yes)"
 # A stray `.excluded` entry is not a policy drop: the recorded flags still make
@@ -1135,7 +1235,7 @@ printf '%s' "$(runu exports update "$NSTAMP" --yes)" | grep -q "Nothing to do" \
 # dropped again.
 jq '.excluded=[{"id":"ses_A0002","title":"Explore gaps (@explore subagent)"}]' "$NSMETA" > "$NSMETA.tmp" \
     && mv "$NSMETA.tmp" "$NSMETA"
-NSPJ2=$(runu exports update "$NSTAMP" --dry-run --json)
+NSPJ2=$(runu exports update "$NSSTAMP" --dry-run --json)
 printf '%s' "$NSPJ2" | jq -e '.up_to_date == true and .counts.revived == 0 and (.target|length) == 3' >/dev/null \
     && ok "a stray .excluded entry cannot revive a policy-dropped subagent" \
     || bad "no-subagents stray excluded plan: $NSPJ2"

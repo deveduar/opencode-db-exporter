@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # uninstall.sh — removes the installed opencode-db-exporter copy and the shim.
-# Usage: ./uninstall.sh [--all] [--yes]
+# Usage: ./scripts/uninstall.sh [--all] [--yes]
 #   default: removes the installed code + ~/.local/bin/opencode-db symlink,
 #            and KEEPS config, backups and exports.
 #   --all:   also removes the config dir and the backups/exports data.
