@@ -33,23 +33,17 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 
 ## Which interface does what?
 
-| Capability | Python (`opencode-db-export.py`) | Bash (`opencode-db`) |
-|---|---|---|
-| Create exports from products/presets, including bundles | Primary, stable interface | `export` delegates to Python |
-| Inspect export plans, preflight the DB, preview selected count | Yes (`--show`, `--check`, `--dry-run`) | Export help/plan commands delegate to Python |
-| List sessions for launchers | Yes (`--list-sessions`, text/JSON) | Yes (`list`) |
-| Show status/version/schema | No | Yes |
-| Create/verify/manage backups; read via `--from-backup` | No | Yes |
-| Manage export runs, including `exports update` | No public run-manager command | Yes; update uses Python export code internally |
-| Shrink DB copies, optionally swap, and run the fzf menu | No | Yes |
-| Dependencies | Python standard library only | External CLI dependencies listed above |
-
-Use the Python entry point for exporting without installation. The Bash suite is optional:
+Use the Python entry point (`opencode-db-export.py`) to export without installing; it is the primary interface and needs only the standard library. The optional Bash suite (`opencode-db`) adds database status/version, backups, export-run management, shrink copies, and the fzf menu; its `export` command delegates to the same Python engine.
 
 ```bash
-./opencode-db.sh menu            # portable Bash menu from a checkout; no install required
-./scripts/install.sh            # optional Bash command shim + user configuration
-opencode-db status
+python3 opencode-db-export.py complete              # export (also --show/--check/--dry-run)
+python3 opencode-db-export.py --list-sessions --json # read-only session feed for launchers
+./opencode-db.sh status                              # Bash: DB/schema/dependency status
+./opencode-db.sh backups list                        # Bash: WAL-safe backups
+./opencode-db.sh exports update <stamp>              # Bash: refresh a stored export run
+./opencode-db.sh shrink --keep 10 --dry-run          # Bash: plan a shrink copy
+./opencode-db.sh menu                                # Bash: fzf menu from a checkout
+./scripts/install.sh                                 # optional shim + user config
 ```
 
 ## Python exporter CLI
@@ -114,7 +108,7 @@ flags override preset settings. Product-specific flags are validated; for the fu
 and exact defaults run `python3 opencode-db-export.py --help`. `--sanitize` is best
 effort; inspect the export before sharing it.
 
-### Stable automation contract: preflight, plan, and exit codes
+### Automation contract: preflight, plan, and exit codes
 
 The root `opencode-db-export.py` script is the supported Python-only entry point.
 `--check --json` reports whether the database can be read and the total session count.
@@ -148,12 +142,32 @@ For JSON preflight, an empty database has `"status": "no_data"`,
 or SQLite failure has `"status": "error"` and a non-null `error`. JSON is written to
 stdout; diagnostics for ordinary exports go to stderr.
 
-### Session listing for launchers
+### Session listing
 
-`--list-sessions [--json]` is the read-only session feed for launchers such as
-`ai-chat-exporter`. It reuses `--filter`, `--sessions`, `--last`, and `--since`, never
-resolves a profile, and creates no output. `--order` accepts `created-asc`,
-`created-desc`, `updated-asc`, or `updated-desc` (default).
+`--list-sessions [--json]` is the read-only session.
+
+```bash
+# All sessions, newest updated first (the default order).
+python3 opencode-db-export.py --list-sessions
+
+# Stable JSON for a launcher; no output directory is created.
+python3 opencode-db-export.py --list-sessions --json
+
+# The 5 most recently used roots plus their subagents.
+python3 opencode-db-export.py --list-sessions --last 5 --json
+
+# Exact ids (repeat --sessions or use one comma-separated list).
+python3 opencode-db-export.py --list-sessions --sessions ses_abc123,ses_def456
+
+# Sessions updated on/after a UTC date, oldest created first.
+python3 opencode-db-export.py --list-sessions --since 2026-01-01 --order created-asc
+
+# id or title LIKE pattern, newest created first.
+python3 opencode-db-export.py --list-sessions --filter '%refactor%' --order created-desc
+```
+
+`--order` accepts `created-asc`, `created-desc`, `updated-asc`, or `updated-desc`
+(default). The JSON shape is:
 
 ```json
 {"schema_version":1,"tool":"opencode-db/exportlib","version":"…","ok":true,"status":"ready","source":{"resolved":"/path/opencode.db","exists":true,"origin":"environment"},"sessions_found":1,"no_data_reason":null,"error":null,"writes":false,"sessions":[{"id":"ses_…","title":"…","created":"…","updated":"…","project_id":"…","directory":"…","parent_id":null,"kind":"root","source":"opencode","source_file":"/path/opencode.db"}]}
@@ -272,9 +286,9 @@ bash tests/menu_flow.sh
 
 ## Roadmap
 
-- ✅ Python-first exporter, presets/bundles, JSON preflight/plans, no-data exit code,
+- [x] Python-first exporter, presets/bundles, JSON preflight/plans, no-data exit code,
   progress control, sanitization, and streaming corpus.
-- ✅ Optional Bash inspection, WAL-safe backups, run management, shrink copies, and menu.
-- 🔄 Validate `shrink --swap` in a real environment.
-- 🔄 Install and run the Python exporter on native Windows.
-- 📋 Evaluate the exported corpus with `consolidation-memory` / LangChain.
+- [x] Optional Bash inspection, WAL-safe backups, run management, shrink copies, and menu.
+- [ ] Validate `shrink --swap` in a real environment.
+- [ ] Test on a Windows machine with OpenCode installed, end to end. is (Python-level only).
+- [ ] Evaluate the exported corpus with `consolidation-memory` / LangChain.
