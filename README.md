@@ -21,7 +21,7 @@ interactive terminals and can be disabled with `--no-progress`.
 
 OpenCode's CLI binds sessions to Git states and working directories, so switching branches or HEAD can hide older sessions even though the data is still in the global SQLite file. The exporter reads that database directly, so every prompt history, agent path and metric stays reachable, including roots and subagents:
 
-- **Export** to readable Markdown (`transcript`), a RAG-ready `corpus.jsonl` (`memory`), the compaction digests (`digest`) or a lossless native-JSON archive (`faithful`) — with named **presets** and **bundles**.
+- **Export** to readable Markdown (`transcript`), a  `corpus.jsonl` (`memory`), the compaction digests (`digest`) or a lossless native-JSON archive (`faithful`) — with named **presets** and **bundles**.
 - The optional Bash suite can **back up** the DB with a WAL-safe snapshot and sha256 manifest, **shrink** a copy, manage export/shrink runs, and launch the **fzf menu**.
 
 ## Requirements
@@ -36,14 +36,22 @@ OpenCode's CLI binds sessions to Git states and working directories, so switchin
 Use the Python entry point (`opencode-db-export.py`) to export without installing; it is the primary interface and needs only the standard library. The optional Bash suite (`opencode-db`) adds database status/version, backups, export-run management, shrink copies, and the fzf menu; its `export` command delegates to the same Python engine.
 
 ```bash
-python3 opencode-db-export.py complete              # export (also --show/--check/--dry-run)
-python3 opencode-db-export.py --list-sessions --json # read-only session feed for launchers
-./opencode-db.sh status                              # Bash: DB/schema/dependency status
-./opencode-db.sh backups list                        # Bash: WAL-safe backups
-./opencode-db.sh exports update <stamp>              # Bash: refresh a stored export run
-./opencode-db.sh shrink --keep 10 --dry-run          # Bash: plan a shrink copy
-./opencode-db.sh menu                                # Bash: fzf menu from a checkout
-./scripts/install.sh                                 # optional shim + user config
+# export (also --show/--check/--dry-run)
+python3 opencode-db-export.py complete
+# read-only session feed
+python3 opencode-db-export.py --list-sessions --json
+# Bash: DB/schema/dependency status
+./opencode-db.sh status
+# Bash: WAL-safe backups
+./opencode-db.sh backups list
+# Bash: refresh a stored export run
+./opencode-db.sh exports update <stamp>
+# Bash: plan a shrink copy
+./opencode-db.sh shrink --keep 10 --dry-run
+# Bash: fzf menu from a checkout
+./opencode-db.sh menu
+# optional shim + user config
+./scripts/install.sh
 ```
 
 ## Python exporter CLI
@@ -76,30 +84,59 @@ python3 opencode-db-export.py review --show
 python3 opencode-db-export.py complete --dry-run
 ```
 
-Examples of product/preset combinations and CLI overrides:
+Examples (command-line flags override preset settings):
 
 ```bash
-python3 opencode-db-export.py transcript --last 5 --tool-output full --patch omit
-python3 opencode-db-export.py memory --sessions ses_abc123 --cap 3000 --files
-python3 opencode-db-export.py digest --since 2026-10-01 --no-reasoning
-python3 opencode-db-export.py faithful --filter 'ses_project_%' --sanitize
+# Selection: exactly one of --filter/--sessions/--last/--since.
+# 5 newest roots + their subagents
+python3 opencode-db-export.py transcript --last 5
+# exact ids (comma-separated)
+python3 opencode-db-export.py memory --sessions ses_abc123,ses_def456
+# updated on/after a UTC date
+python3 opencode-db-export.py digest --since 2026-10-01
+# id/title LIKE pattern
+python3 opencode-db-export.py faithful --filter 'ses_project_%'
+
+# All products: output, subagent policy, redaction, progress, run metadata.
+python3 opencode-db-export.py complete --out ./my-exports
+# drop every subagent
+python3 opencode-db-export.py complete --no-subagents
+# keep only subagents whose parent is selected
+python3 opencode-db-export.py faithful --no-orphan-subagents
+# best-effort secret redaction
+python3 opencode-db-export.py transcript --sanitize
+# no stderr progress
 python3 opencode-db-export.py conversation --no-progress
-python3 opencode-db-export.py complete --out ./my-exports --no-subagents
+python3 opencode-db-export.py review --title "October review" --notes "before cleanup"
+
+# Single-product workflows can guard on backup freshness.
+# warn if the backup is missing or stale
+python3 opencode-db-export.py transcript --snapshot fresh
+
+# Transcript: subagent layout and tool content.
+python3 opencode-db-export.py transcript --sub separate --tool-output truncated
+python3 opencode-db-export.py transcript --sub inline --tool-input-limit 2000 --tool-output-limit 4000
+python3 opencode-db-export.py transcript --sub omit --tool-output omit --patch omit
+
+# Transcript: chunking and content filters (0 disables chunking).
+python3 opencode-db-export.py transcript --chunk-mb 0
+python3 opencode-db-export.py transcript --no-reasoning --mark-compactions --summary-diffs --role user
+
+# Digest content filters.
+python3 opencode-db-export.py digest --no-reasoning --mark-compactions --summary-diffs --role assistant
+
+# Memory: cap text values (0 = unlimited) and include touched files.
+python3 opencode-db-export.py memory --cap 3000 --files
+
+# Discovery and automation (no export).
+python3 opencode-db-export.py --list-products
+python3 opencode-db-export.py --list-presets
+python3 opencode-db-export.py --explain
+python3 opencode-db-export.py complete --show
+python3 opencode-db-export.py complete --dry-run --json
+python3 opencode-db-export.py --check --json
+python3 opencode-db-export.py --list-sessions --json
 ```
-
-Important flags by scope:
-
-| Scope | Flags | Effect |
-|---|---|---|
-| Selection (choose one) | `--filter LIKE`, `--sessions ID[,ID]`, `--last N`, `--since YYYY-MM-DD` | Select matching sessions; `--last` counts roots and includes descendants |
-| All products | `--out DIR`, `--no-subagents`, `--no-orphan-subagents`, `--sanitize`, `--no-progress` | Output location; subagent policy; best-effort secret redaction; progress control |
-| Single-product workflow | `--snapshot fresh` | Warn if a backup is missing or out of sync |
-| All products | `--title TEXT`, `--notes TEXT` | Set run metadata |
-| Transcript | `--sub separate\|inline\|omit`, `--tool-output full\|truncated\|omit`, `--tool-input-limit N`, `--tool-output-limit N` | Control subagent rendering and tool content |
-| Transcript | `--chunk-mb N`, `--patch full\|omit`, `--no-reasoning`, `--mark-compactions`, `--summary-diffs`, `--role all\|user\|assistant` | Chunking and message-content filters; `--chunk-mb 0` disables chunking |
-| Digest | `--no-reasoning`, `--mark-compactions`, `--summary-diffs`, `--role all\|user\|assistant` | Filter digest content |
-| Memory | `--cap N`, `--files` | Limit text value length (`0` = unlimited); include touched files |
-| Discovery/automation | `--list-products`, `--list-presets`, `--explain`, `--show`, `--dry-run`, `--check`, `--list-sessions`, `--json` | Discover, inspect plans, preflight, list sessions for launchers, or preview; JSON is supported with `--check`, `--list-sessions`, `--show`, and `--dry-run` |
 
 `--filter`, `--sessions`, `--last`, and `--since` are mutually exclusive. `--sessions`
 accepts repeated ids or a comma-separated list. `--last N` selects the N most recently
