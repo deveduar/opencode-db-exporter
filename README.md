@@ -207,11 +207,14 @@ python3 opencode-db-export.py --list-sessions --filter '%refactor%' --order crea
 (default). The JSON shape is:
 
 ```json
-{"schema_version":1,"tool":"opencode-db/exportlib","version":"…","ok":true,"status":"ready","source":{"resolved":"/path/opencode.db","exists":true,"origin":"environment"},"sessions_found":1,"no_data_reason":null,"error":null,"writes":false,"sessions":[{"id":"ses_…","title":"…","created":"…","updated":"…","project_id":"…","directory":"…","parent_id":null,"kind":"root","source":"opencode","source_file":"/path/opencode.db"}]}
+{"schema_version":1,"tool":"opencode-db/exportlib","version":"…","ok":true,"status":"ready","source":{"resolved":"/path/opencode.db","exists":true,"origin":"environment"},"sessions_found":1,"no_data_reason":null,"error":null,"writes":false,"sessions":[{"id":"ses_…","title":"…","created":"…","updated":"…","revision":1731840421000,"project_id":"…","directory":"…","parent_id":null,"kind":"root","source":"opencode","source_file":"/path/opencode.db"}]}
 ```
 
 `origin` is `environment`, `opencode-cli`, or `default`. `kind` is `root` or `subagent`
-(an orphan whose parent row is gone is a root). The text form prints
+(an orphan whose parent row is gone is a root). Each JSON session also has
+`revision`, the source database's `time_updated` value used by change-aware
+launchers. Use `updated` for display; the numeric revision is a comparison token.
+The text form prints
 `Sessions found: N` followed by one line per session. Exit codes match the contract
 above; an empty DB or an empty selection returns `3` with a `no_data_reason`, and a
 missing/unreadable DB returns `1` with `"status":"error"`.

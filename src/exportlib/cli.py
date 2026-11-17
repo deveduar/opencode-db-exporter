@@ -502,6 +502,7 @@ def _list_sessions(args, json_output: bool = False) -> int:
             "title": sess["title"] or sess["slug"],
             "created": ts_iso(sess["time_created"]),
             "updated": ts_iso(sess["time_updated"]),
+            "revision": int(sess["time_updated"] or 0),
             "project_id": sess["project_id"] or None,
             "directory": sess["directory"] or None,
             "parent_id": parent_id,
