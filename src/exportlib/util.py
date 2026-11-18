@@ -108,6 +108,8 @@ def session_record(sess: dict, kind: str) -> dict:
         "parent_id": sess["parent_id"] or None,
         "created": ts_iso(sess["time_created"]),
         "updated": ts_iso(sess["time_updated"]),
+        "created_at": ts_iso(sess["time_created"]),
+        "updated_at": ts_iso(sess["time_updated"]),
     }
 
 

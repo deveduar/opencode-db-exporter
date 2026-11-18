@@ -15,14 +15,14 @@ from exportlib.util import (
 
 
 def _preset_suffix_for_name(name: str | None) -> str:
-    """Short human suffix to append to the run folder, e.g. __review.
+    """Short human suffix to append to the run folder, e.g. _review.
     The suffix is only used for naming; the preset name is still recorded in metadata."""
     if not name:
         return ""
     clean = str(name).strip().replace(" ", "-")
     clean = ''.join(ch if ch.isalnum() or ch in "-_" else "-" for ch in clean)
     clean = clean.strip("-")
-    return f"__{clean}" if clean else ""
+    return f"_{clean}" if clean else ""
 
 
 def make_outdir_final(
@@ -32,7 +32,7 @@ def make_outdir_final(
     *,
     bundle_child: bool = False,
 ):
-    stamp = stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if bundle_child:
         target = base / stamp
         target.mkdir(parents=True, exist_ok=True)
@@ -47,14 +47,20 @@ def make_outdir_final(
     return target
 
 
-def session_folder_name(session: dict) -> str:
-    title = session["title"] or session["slug"]
-    updated = session.get("time_updated")
+def session_updated_date(session: dict) -> str:
     try:
-        updated_date = ts_iso(updated)[:10] or "unknown-date"
+        return ts_iso(session.get("time_updated"))[:10] or "unknown-date"
     except (OverflowError, OSError, TypeError, ValueError):
-        updated_date = "unknown-date"
-    return f"{updated_date}__{safe_filename(title)}_{session['id'][:8]}"
+        return "unknown-date"
+
+
+def session_file_stem(session: dict) -> str:
+    title = session["title"] or session["slug"]
+    return f"{session_updated_date(session)}_{safe_filename(title)}_{session['id'][:8]}"
+
+
+def session_folder_name(session: dict) -> str:
+    return session_file_stem(session)
 
 
 def product_artifact_path(out_dir, filename: str, args):
@@ -161,7 +167,7 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         for i, (root, subs, rfolder) in enumerate(written, 1):
             rt = root["title"] or root["slug"]
             root_md = rfolder / session_product_filename(
-                safe_filename(rt), "transcript", ".md", args
+                session_file_stem(root), "transcript", ".md", args
             )
             rel_d = root_md.relative_to(out_dir)
             f.write(f"{i}. **[{rt}]({rel_d})**  — `{root['id']}`  · agent `{root.get('agent') or '?'}`\n")
@@ -175,7 +181,7 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
                         indent = "   " * depth
                         if getattr(args, "sub", "separate") == "separate":
                             sub_name = session_product_filename(
-                                f"{safe_filename(st)}_{sub['id'][:8]}",
+                                session_file_stem(sub),
                                 "transcript",
                                 ".md",
                                 args,

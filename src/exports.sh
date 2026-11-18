@@ -133,11 +133,13 @@ oced_exports_list() {
     freshness_json=$(oced_exports_freshness_batch "${freshness_metas[@]}" 2>/dev/null) || freshness_json='{}'
     for run in "${runs[@]}"; do
         stamp="${run##*/}"
-        # Format stamp YYYY-MM-DD_HH-MM -> YYYY-MM-DD HH:MM UTC
+        # Format legacy and UTC run stamps for display; keep the folder name intact.
         human_date="$stamp"
         case "$stamp" in
             [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9]-[0-5][0-9])
                 human_date="${stamp:0:10} ${stamp:11:2}:${stamp:14:2} UTC" ;;
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-2][0-9][0-5][0-9][0-5][0-9]Z*)
+                human_date="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2} UTC" ;;
         esac
         mapfile -t metas < <(oced_export_meta_files "$run")
         profiles="" roots=0 subs=0 msgs=0 comp=0 found=0

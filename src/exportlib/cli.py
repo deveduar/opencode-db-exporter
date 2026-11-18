@@ -55,7 +55,6 @@ from exportlib.transcript import (
 )
 from exportlib.util import (
     die,
-    safe_filename,
     selection_label,
     selection_meta,
     selection_phrase,
@@ -64,11 +63,13 @@ from exportlib.util import (
     ts_iso,
 )
 from exportlib.writers import (
+    _preset_suffix_for_name,
     last_backup_info,
     make_outdir_final,
     product_artifact_path,
     product_artifact_files,
     session_folder_name,
+    session_file_stem,
     session_product_filename,
     write_index,
 )
@@ -144,7 +145,12 @@ def run_bundle(args) -> None:
     if not db_path.exists():
         die(f"Database not found: {db_path}")
     out_base = Path(args.out) if args.out else Path(default_out())
-    base_stamp = args.stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    if args.stamp:
+        # Updates and callers that provide a stamp target an existing run name.
+        base_stamp = args.stamp
+    else:
+        base_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        base_stamp += _preset_suffix_for_name(args.preset)
     products = list(args.bundle)
     stamp = _free_bundle_stamp(out_base, base_stamp)
     entry = Path(__file__).resolve()  # this same file IS the CLI entry (no shim)
@@ -502,6 +508,8 @@ def _list_sessions(args, json_output: bool = False) -> int:
             "title": sess["title"] or sess["slug"],
             "created": ts_iso(sess["time_created"]),
             "updated": ts_iso(sess["time_updated"]),
+            "created_at": ts_iso(sess["time_created"]),
+            "updated_at": ts_iso(sess["time_updated"]),
             "revision": int(sess["time_updated"] or 0),
             "project_id": sess["project_id"] or None,
             "directory": sess["directory"] or None,
@@ -910,7 +918,7 @@ def _main() -> None:
         rfolder = out_dir / session_folder_name(root)
         rfolder.mkdir(exist_ok=args.bundle_child)
 
-        stem = safe_filename(root['title'] or root['slug'])
+        stem = session_file_stem(root)
         rfile = rfolder / session_product_filename(stem, "transcript", ".md", args)
         message_sizes = []
         n_msgs, n_comp = write_transcript(
@@ -925,7 +933,7 @@ def _main() -> None:
                 sub = sessions[sid_]
                 subdir = rfolder / "subagents"
                 subdir.mkdir(exist_ok=True)
-                sstem = f"{safe_filename(sub['title'] or sub['slug'])}_{sid_[:8]}"
+                sstem = session_file_stem(sub)
                 sfile = subdir / session_product_filename(
                     sstem, "transcript", ".md", args
                 )

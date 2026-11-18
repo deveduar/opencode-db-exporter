@@ -11,7 +11,6 @@ from exportlib.db import load_faithful, walk_subagents
 from exportlib.sanitize import sanitize_json
 from exportlib.util import (
     model_str,
-    safe_filename,
     selection_label,
     selection_meta,
     selection_phrase,
@@ -24,6 +23,7 @@ from exportlib.writers import (
     product_artifact_files,
     product_artifact_path,
     session_folder_name,
+    session_file_stem,
     session_product_filename,
 )
 from exportlib.progress import Progress
@@ -101,7 +101,7 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     for rid in roots:
         root = sessions[rid]
         subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
-        stem = safe_filename(root["title"] or root["slug"])
+        stem = session_file_stem(root)
         rfolder = out_dir / session_folder_name(root)
         rfolder.mkdir(exist_ok=args.bundle_child)
         root_name = session_product_filename(stem, "faithful", ".json", args)
@@ -117,9 +117,8 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
             subdir.mkdir(exist_ok=args.bundle_child)
             for sid_ in subs:
                 sub = sessions[sid_]
-                sstem = safe_filename(sub["title"] or sub["slug"])
                 sub_name = session_product_filename(
-                    f"{sstem}_{sid_[:8]}", "faithful", ".json", args
+                    session_file_stem(sub), "faithful", ".json", args
                 )
                 sdata = _write_session_json(con, sub, subdir / sub_name, args.sanitize)
                 total_msgs += len(sdata["messages"])
@@ -172,7 +171,7 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     idx_rows += ["## Sessions", ""]
     for rid in roots:
         root = sessions[rid]
-        rstem = safe_filename(root["title"] or root["slug"])
+        rstem = session_file_stem(root)
         rfolder_name = session_folder_name(root)
         idx_rows.append(
             f"- [{root['title'] or root['slug']}]"
@@ -182,9 +181,9 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
         def append_children(parent_id: str, depth: int) -> None:
             for child_id in children_of.get(parent_id, []):
                 child = sessions[child_id]
-                cstem = safe_filename(child["title"] or child["slug"])
+                cstem = session_file_stem(child)
                 sub_name = session_product_filename(
-                    f"{cstem}_{child_id[:8]}", "faithful", ".json", args
+                    cstem, "faithful", ".json", args
                 )
                 rel = f"{rfolder_name}/subagents/{sub_name}"
                 idx_rows.append(
