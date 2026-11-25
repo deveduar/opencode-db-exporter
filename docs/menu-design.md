@@ -111,7 +111,7 @@ frames never reach stdout, so a pipe or the streamed log cannot see them (see
 default, recency-ordered with a flip row, marks in a 1/0 array so a re-sort or a bulk row
 cannot resurrect an unmarked session). Then the **preset-only** picker lists each named
 preset as a direct action (rows/descriptions/plans resolved by `exportlib/plan.py`;
-bundle presets render as `[transcript+memory]`); **without the file it prints setup guidance**
+bundle presets render their actual products, e.g. `[transcript+memory+corpus+faithful]` for `complete`); **without the file it prints setup guidance**
 (`cp presets.json …`) plus the raw CLI — **there is no manual session→product
 fallback** (`oc_pick_product`, `oc_export_flow` and `oc_export_manual_picker` are gone).
 Asking for the selection *after* the plan was the old order and it was wrong twice
@@ -340,6 +340,6 @@ Backups deliberately has **no** such row: its per-row view already hashes the fi
 hashing the whole shelf would take seconds per gigabyte.
 
 The term **plan/preset** always means the named config; **product** always the keyword
-(`transcript|memory|digest|faithful`). The Python CLI decision matrix is in
+(`transcript|memory|corpus|digest|faithful`). The Python CLI decision matrix is in
 [export architecture](export-architecture.md); short usage is in the
 [README command suite](../README.md#bash-command-suite).

@@ -1,10 +1,11 @@
 {
   "presets": {
     "complete": {
-      "description": "full backup — complete tool outputs and the raw session, with touched-file lists (heavy)",
+      "description": "full backup — complete tool outputs, both JSONL products and the raw session, with touched-file lists (heavy)",
       "products": {
         "transcript": {"tool_output": "full"},
         "memory": {"files": true},
+        "corpus": {"files": true},
         "faithful": {}
       }
     },
@@ -13,10 +14,11 @@
       "product": "faithful"
     },
     "study": {
-      "description": "a readable log plus a searchable corpus, no raw copy (medium)",
+      "description": "a readable log plus structured memory and a searchable text corpus, no raw copy (medium)",
       "products": {
         "transcript": {"tool_output": "truncated"},
-        "memory": {"files": true}
+        "memory": {"files": true},
+        "corpus": {"files": true}
       }
     },
     "review": {
@@ -50,9 +52,13 @@
       "product": "transcript",
       "role": "user"
     },
-    "corpus": {
-      "description": "corpus.jsonl: one JSON summary per root session — goal, outcome, todos, tool counts, tokens and digests",
+    "memory": {
+      "description": "memory.jsonl: one structured memory profile per root session — first ask, last answer, todos, tools, tokens and digests",
       "product": "memory"
+    },
+    "corpus": {
+      "description": "corpus.jsonl: one flat text document per root session, with all message parts inline",
+      "product": "corpus"
     },
     "digest": {
       "description": "only the compaction summaries (knowledge arc)",

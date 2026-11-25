@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from exportlib import TOOL_VERSION
 from exportlib.flags import effective_flags
-from exportlib.db import load_faithful, walk_subagents
+from exportlib.db import load_faithful
 from exportlib.sanitize import sanitize_json
 from exportlib.util import (
     model_str,
@@ -22,9 +22,8 @@ from exportlib.writers import (
     last_backup_info,
     product_artifact_files,
     product_artifact_path,
-    session_folder_name,
-    session_file_stem,
-    session_product_filename,
+    session_layouts,
+    session_product_path,
 )
 from exportlib.progress import Progress
 
@@ -82,9 +81,8 @@ def _write_session_json(con, s: dict, json_path, sanitize_on: bool) -> dict:
 
 def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, hidden: int = 0,
                     scope: dict | None = None, excluded: list | None = None) -> None:
-    """Write one `.json` per session. All descendants live under the root's
-    `subagents/` folder; each payload keeps its own parent id. Root session folders
-    use the session's last-update date, matching the transcript product."""
+    """Write one `.json` per session. All descendants live in the family folder
+    inside the project folder; each payload keeps its own parent id."""
     n_root = 0
     n_subs = 0
     total_msgs = 0
@@ -98,14 +96,16 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
         disabled=args.no_progress,
     )
     progress.start()
+    layouts = session_layouts(sessions, roots, children_of)
     for rid in roots:
         root = sessions[rid]
-        subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
-        stem = session_file_stem(root)
-        rfolder = out_dir / session_folder_name(root)
-        rfolder.mkdir(exist_ok=args.bundle_child)
-        root_name = session_product_filename(stem, "faithful", ".json", args)
-        data = _write_session_json(con, root, rfolder / root_name, args.sanitize)
+        project, family, subs = layouts[rid]
+        pdir = out_dir / project
+        pdir.mkdir(parents=True, exist_ok=True)
+        root_path = session_product_path(
+            out_dir, root, "faithful", ".json", args, project=project
+        )
+        data = _write_session_json(con, root, root_path, args.sanitize)
         total_msgs += len(data["messages"])
         total_comp += root.get("compactions") or 0
         total_digest += root.get("digests") or 0
@@ -113,14 +113,14 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
             total_backfilled += 1
         records.append(session_record(root, "root"))
         if subs:
-            subdir = rfolder / "subagents"
-            subdir.mkdir(exist_ok=args.bundle_child)
+            (pdir / family).mkdir(parents=True, exist_ok=True)
             for sid_ in subs:
                 sub = sessions[sid_]
-                sub_name = session_product_filename(
-                    session_file_stem(sub), "faithful", ".json", args
+                sub_path = session_product_path(
+                    out_dir, sub, "faithful", ".json", args,
+                    project=project, family=family, subagent=True,
                 )
-                sdata = _write_session_json(con, sub, subdir / sub_name, args.sanitize)
+                sdata = _write_session_json(con, sub, sub_path, args.sanitize)
                 total_msgs += len(sdata["messages"])
                 total_comp += sub.get("compactions") or 0
                 total_digest += sub.get("digests") or 0
@@ -171,24 +171,25 @@ def faithful_export(con, sessions, roots, children_of, out_dir, args, db_path, h
     idx_rows += ["## Sessions", ""]
     for rid in roots:
         root = sessions[rid]
-        rstem = session_file_stem(root)
-        rfolder_name = session_folder_name(root)
+        project, family, _subs = layouts[rid]
+        root_path = session_product_path(
+            out_dir, root, "faithful", ".json", args, project=project
+        )
         idx_rows.append(
             f"- [{root['title'] or root['slug']}]"
-            f"({rfolder_name}/{session_product_filename(rstem, 'faithful', '.json', args)})  `{rid}`"
+            f"({root_path.relative_to(out_dir)})  `{rid}`"
         )
 
         def append_children(parent_id: str, depth: int) -> None:
             for child_id in children_of.get(parent_id, []):
                 child = sessions[child_id]
-                cstem = session_file_stem(child)
-                sub_name = session_product_filename(
-                    cstem, "faithful", ".json", args
+                sub_path = session_product_path(
+                    out_dir, child, "faithful", ".json", args,
+                    project=project, family=family, subagent=True,
                 )
-                rel = f"{rfolder_name}/subagents/{sub_name}"
                 idx_rows.append(
                     f"{'  ' * (depth + 1)}- [{child['title'] or child['slug']}]"
-                    f"({rel})  `{child_id}`"
+                    f"({sub_path.relative_to(out_dir)})  `{child_id}`"
                 )
                 append_children(child_id, depth + 1)
 

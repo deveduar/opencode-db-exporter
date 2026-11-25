@@ -21,6 +21,7 @@ export OPENCODE_DB="$FAKE"
 export OCED_OUT="$OUT"
 export OCED_BACKUP_DIR="$BK"
 EX_PRESETS="$TESTS_DIR/../presets.json"
+export OCED_PRESETS="$EX_PRESETS"
 # Hermetic config: a missing OCED_CONF keeps the suite independent of the
 # developer's ~/.config AND of the repo-shipped portable conf (env > conf; the
 # portable-detection tests below override this with env -u OCED_CONF ...).
@@ -175,7 +176,7 @@ python3 "$TESTS_DIR/../opencode-db-export.py" --json >/dev/null 2>&1; PY_JSON_RC
 PY_COMPLETE=$(HOME="$TMP/python-home" env -u OCED_PRESETS \
     python3 "$TESTS_DIR/../opencode-db-export.py" complete --show 2>&1)
 printf '%s' "$PY_COMPLETE" | grep -q '^== Export plan: complete ==' \
-    && printf '%s' "$PY_COMPLETE" | grep -q 'transcript + memory + faithful' \
+    && printf '%s' "$PY_COMPLETE" | grep -q 'transcript + memory + corpus + faithful' \
     && ok "Python entry point resolves the shipped complete bundle preset" \
     || bad "Python complete plan: $PY_COMPLETE"
 PY_FULL=$(python3 "$TESTS_DIR/../opencode-db-export.py" full --show 2>&1)
@@ -189,7 +190,7 @@ printf '%s' "$PY_EXPORT" | grep -q '\[OK\] Exported (transcript)' && [ -n "$PY_M
     && ok "root Python entry point writes a transcript without Bash" \
     || bad "root Python export: $PY_EXPORT"
 last_transcript() { # $1=profile $2=title (newest by mtime)
-    find "$OUT" -type f \( -name "$2.md" -o -name "$2.transcript.md" \) \
+    find "$OUT" -type f -name "*$2*.$1.md" \
         -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-
 }
 last_meta() { # $1=profile (newest by mtime, path breaks a tie)
@@ -543,6 +544,63 @@ MT=$(last_meta transcript)
 jq -e '.profile == "transcript" and .flags.sanitize == false and .flags.no_reasoning == false and .flags.tool_output == "truncated"' "$MT" >/dev/null \
     && ok "transcript metadata reflects the flags" || bad "transcript metadata: $(jq -c '{profile,flags}' "$MT")"
 
+echo "== transcript chunk and subagent family layout =="
+CHUNK_DB="$TMP/chunk.db"
+cp "$FAKE" "$CHUNK_DB"
+python3 - "$CHUNK_DB" <<'PY'
+import json
+import sqlite3
+import sys
+with sqlite3.connect(sys.argv[1]) as con:
+    con.execute(
+        "INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)",
+        ("prt_A_huge", "msg_A_2", "ses_A0001", 1789000100003, 1789000100003,
+         json.dumps({"type": "text", "text": "x" * 1_200_000})),
+    )
+PY
+CHUNK_RUN=$(OPENCODE_DB="$CHUNK_DB" run export transcript --sessions ses_A0001 --chunk-mb 1 --stamp chunk-layout)
+CHUNK_DIR=$(out_dir_of "$CHUNK_RUN")
+CHUNK_MD=$(find "$CHUNK_DIR" -maxdepth 2 -type f -name '*Project-Alpha*.transcript.md' -print -quit)
+CHUNK_PARENT=$(dirname "$CHUNK_MD")
+CHUNK_PARTS="$CHUNK_PARENT/$(basename "$CHUNK_MD" .md).parts"
+[ -f "$CHUNK_MD" ] && [ "$(dirname "$CHUNK_PARENT")" = "$CHUNK_DIR" ] && [ -d "$CHUNK_PARTS" ] && [ -f "$CHUNK_PARTS/index.md" ] \
+    && [ -n "$(find "$CHUNK_PARTS" -maxdepth 1 -type f -name '*-part-*.md' -print -quit)" ] \
+    && ok "transcript chunks are written under the project folder" \
+    || bad "chunk layout: $CHUNK_DIR"
+
+COLLISION_DB="$TMP/collision.db"
+cp "$FAKE" "$COLLISION_DB"
+python3 - "$COLLISION_DB" <<'PY'
+import sqlite3
+import sys
+with sqlite3.connect(sys.argv[1]) as con:
+    con.executescript("""
+        UPDATE session SET id='ses_dup0001' WHERE id='ses_A0001';
+        UPDATE session SET parent_id='ses_dup0001' WHERE parent_id='ses_A0001';
+        UPDATE message SET session_id='ses_dup0001' WHERE session_id='ses_A0001';
+        UPDATE part SET session_id='ses_dup0001' WHERE session_id='ses_A0001';
+        UPDATE session SET id='ses_dup0002' WHERE id='ses_B0001';
+        UPDATE session SET parent_id='ses_dup0002' WHERE parent_id='ses_B0001';
+        UPDATE message SET session_id='ses_dup0002' WHERE session_id='ses_B0001';
+        UPDATE part SET session_id='ses_dup0002' WHERE session_id='ses_B0001';
+        UPDATE session SET title='Root', slug='root', directory='/work/dup', time_updated=1789086600000
+          WHERE id IN ('ses_dup0001','ses_dup0002');
+        UPDATE session SET time_updated=1789000200000 WHERE id IN ('ses_A0002','ses_B0002');
+    """)
+PY
+COLL_RUN=$(OPENCODE_DB="$COLLISION_DB" run export transcript --stamp family-collision)
+COLL_DIR=$(out_dir_of "$COLL_RUN")
+DUP_FOLDER=$(find "$COLL_DIR" -mindepth 1 -maxdepth 1 -type d -name '2026-09-11_dup_*' -printf '%f\n' | head -1)
+[[ "$DUP_FOLDER" =~ ^2026-09-11_dup_[0-9a-f]{12}$ ]] \
+    && FAMILY="2026-09-10__${DUP_FOLDER}__ses_dup0_Root__subagents" \
+    && FAMILY_SUFFIXED="2026-09-10__${DUP_FOLDER}__ses_dup0_Root__subagents@2" \
+    && [ -d "$COLL_DIR/$DUP_FOLDER/$FAMILY" ] \
+    && [ -d "$COLL_DIR/$DUP_FOLDER/$FAMILY_SUFFIXED" ] \
+    && [ -n "$(find "$COLL_DIR/$DUP_FOLDER/$FAMILY" -maxdepth 1 -type f -name '*.transcript.md' -print -quit)" ] \
+    && [ -n "$(find "$COLL_DIR/$DUP_FOLDER/$FAMILY_SUFFIXED" -maxdepth 1 -type f -name '*.transcript.md' -print -quit)" ] \
+    && ok "project folders use date+hash and subagent families keep @N collisions" \
+    || bad "collision layout: $(find "$COLL_DIR" -maxdepth 2 -type d -print)"
+
 echo "== export transcript --no-reasoning =="
 run export transcript --no-reasoning --filter ses_A0001 >/dev/null
 TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
@@ -572,7 +630,7 @@ ALIASMETA=$(meta_of "$ALIASOUT")
 jq -e '.profile == "digest"' "$ALIASMETA" >/dev/null \
     && ok "the compactions alias normalises to the digest profile" || bad "alias profile: $(jq -r '.profile' "$ALIASMETA")"
 DIGRUN=$(run export digest --filter ses_A0001 --stamp "digest-run")
-CC=$(cat "$(out_dir_of "$DIGRUN")"/*/'Project-Alpha'*.md)
+CC=$(cat "$(find "$(out_dir_of "$DIGRUN")" -name '*Project-Alpha*.digest.md' -type f -print -quit)")
 echo "$CC" | grep -q "DIGEST_A" && ok "digest profile exported" || bad "digest profile"
 echo "$CC" | grep -q "\*\*Tool:\*\*" && bad "digest profile has tools" || ok "digest profile no tools"
 printf '%s\n' "$CC" | sed -n '1,14p' | grep -q '^profile: "digest"$' \
@@ -582,8 +640,12 @@ printf '%s\n' "$CC" | sed -n '1,14p' | grep -q '^profile: "digest"$' \
 
 echo "== long output truncation =="
 run export transcript --filter ses_B0001 >/dev/null
-FT=$(cat "$(last_transcript transcript 'Project-Beta')")
+FT_PATH=$(last_transcript transcript 'Project-Beta')
+FT=$(cat "$FT_PATH")
 echo "$FT" | grep -q "truncated:" && ok "long output truncated" || bad "output not truncated"
+[[ "$(basename "$(dirname "$FT_PATH")")" =~ ^2026-09-10_projB_[0-9a-f]{12}$ ]] \
+    && ok "a Windows session directory maps to a dated hashed project folder" \
+    || bad "Windows project folder: $FT_PATH"
 
 echo "== transcript toggles: compaction markers + summary diffs =="
 run export transcript --mark-compactions --summary-diffs --filter ses_A0001 >/dev/null
@@ -605,7 +667,7 @@ INSERT INTO part VALUES
 SQL
 CONV_RUN=$(run export conversation --sessions ses_A0001)
 CONV_DIR=$(out_dir_of "$CONV_RUN")
-CONV_FILE=$(find "$CONV_DIR" -name 'Project-Alpha.md' -type f -print -quit)
+CONV_FILE=$(find "$CONV_DIR" -name '*Project-Alpha*.transcript.md' -type f -print -quit)
 [ -f "$CONV_DIR/metadata.json" ] && [ ! -d "$CONV_DIR/transcript" ] \
     && ok "conversation writes directly into its run root" \
     || bad "conversation created an extra product directory: $CONV_DIR"
@@ -627,15 +689,15 @@ run export transcript --filter ses_A0001 >/dev/null
 MT=$(last_meta transcript)
 jq -e '.tokens_backfilled == 1' "$MT" >/dev/null && ok "metadata records the backfill" || bad "tokens_backfilled: $(jq '.tokens_backfilled' "$MT")"
 run export memory --filter ses_A0001 >/dev/null
-MB=$(last_meta memory); MB="${MB%/metadata.json}"
-printf '%s' "$(sed -n '1p' "$MB/corpus.jsonl")" | jq -e '.tokens.input == 1100 and .tokens.output == 600 and .tokens.reasoning == 80 and .tokens.cache.read == 50 and .tokens.cache.write == 120 and .tokens.backfilled == true and .cost == 0.05' >/dev/null \
-    && ok "memory corpus exposes the backfilled tokens + cost" || bad "memory backfill: $(sed -n '1p' "$MB/corpus.jsonl" | jq -c '.tokens')"
+MB=$(dirname "$(last_meta memory)")
+printf '%s' "$(sed -n '1p' "$MB/memory.jsonl")" | jq -e '.tokens.input == 1100 and .tokens.output == 600 and .tokens.reasoning == 80 and .tokens.cache.read == 50 and .tokens.cache.write == 120 and .tokens.backfilled == true and .cost == 0.05' >/dev/null \
+    && ok "memory profile exposes the backfilled tokens + cost" || bad "memory backfill: $(sed -n '1p' "$MB/memory.jsonl" | jq -c '.tokens')"
 
 echo "== contract hardening: schema_version / model / null / ISO dates =="
-printf '%s' "$(sed -n '1p' "$MB/corpus.jsonl")" | jq -e '.schema_version == 1 and .model == "model-a" and .parent_id == null and .created == "2026-09-10T00:26:40Z"' >/dev/null \
-    && ok "corpus line: schema_version, plain model id, null parent, ISO date" \
-    || bad "corpus contract: $(sed -n '1p' "$MB/corpus.jsonl" | jq -c '{schema_version,model,parent_id,created}')"
-jq -e '.flags.files == false and .artifacts == ["corpus.jsonl", "index.md"] and .profile == "memory"' "$MB/metadata.json" >/dev/null \
+printf '%s' "$(sed -n '1p' "$MB/memory.jsonl")" | jq -e '.schema_version == 1 and .model == "model-a" and .parent_id == null and .created == "2026-09-10T00:26:40Z"' >/dev/null \
+    && ok "memory line: schema_version, plain model id, null parent, ISO date" \
+    || bad "memory contract: $(sed -n '1p' "$MB/memory.jsonl" | jq -c '{schema_version,model,parent_id,created}')"
+jq -e '.flags.files == false and .artifacts == ["index.md", "memory.jsonl"] and .profile == "memory"' "$MB/metadata.json" >/dev/null \
     && ok "memory metadata: flags.files false + artifacts list" \
     || bad "memory meta contract: $(jq -c '{flags,artifacts,profile}' "$MB/metadata.json")"
 # The index is a data table: no explanatory prose, no memory-irrelevant --role row,
@@ -650,18 +712,21 @@ grep -q '^| Role filter' "$MIDX" \
 grep -q 'Each entry is a reusable memory' "$MIDX" \
     && bad "memory index still carries explanatory prose" \
     || ok "memory index is data only (no prose paragraph)"
-grep -q '^| Corpus | \[`corpus.jsonl`\](corpus.jsonl) - one JSON object per root session |$' "$MIDX" \
-    && ok "memory index keeps the corpus link" \
-    || bad "memory index corpus row: $(grep '^| Corpus' "$MIDX")"
+grep -q '^| Memory | \[`memory.jsonl`\](memory.jsonl) - one JSON object per root session |$' "$MIDX" \
+    && ok "memory index keeps the memory link" \
+    || bad "memory index memory row: $(grep '^| Memory' "$MIDX")"
 
-echo "== shipped corpus preset (thin memory alias) =="
-jq -e '.presets.corpus.product == "memory" and .presets.rag == null' "$EX_PRESETS" >/dev/null \
-    && ok "shipped presets: corpus is memory, rag is gone" \
+echo "== shipped memory and corpus presets =="
+jq -e '.presets.corpus.product == "corpus" and .presets.memory.product == "memory" and .presets.rag == null' "$EX_PRESETS" >/dev/null \
+    && ok "shipped presets: memory and corpus are distinct products, rag is gone" \
     || bad "shipped preset names: $(jq -c '.presets | keys' "$EX_PRESETS")"
 PRESET_LIST=$(OCED_PRESETS="$EX_PRESETS" run export --list-presets)
 printf '%s' "$PRESET_LIST" | grep -qE '^corpus[[:space:]]+lossy[[:space:]]+corpus\.jsonl:' \
     && ok "--list-presets lists corpus with its lossy verdict" \
     || bad "corpus preset row: $(printf '%s' "$PRESET_LIST" | grep corpus)"
+printf '%s' "$PRESET_LIST" | grep -qE '^memory[[:space:]]+lossy[[:space:]]+memory\.jsonl:' \
+    && ok "--list-presets lists memory with its lossy verdict" \
+    || bad "memory preset row: $(printf '%s' "$PRESET_LIST" | grep memory)"
 printf '%s' "$PRESET_LIST" | grep -qE '^rag[[:space:]]' \
     && bad "--list-presets still lists rag" \
     || ok "--list-presets no longer lists rag"
@@ -669,10 +734,25 @@ CORPUS_SHOW=$(OCED_PRESETS="$EX_PRESETS" run export corpus --show 2>&1)
 printf '%s' "$CORPUS_SHOW" | grep -q '^== Export plan: corpus ==' \
     && ok "shipped corpus preset resolves without a DB" \
     || bad "corpus --show: $CORPUS_SHOW"
+run export corpus >/dev/null
+CB=$(dirname "$(last_meta corpus)")
+CORPUS_DOC=$(jq -c 'select(.id == "ses_A0001")' "$CB/corpus.jsonl")
+printf '%s' "$CORPUS_DOC" | jq -e '.schema_version == 1 and .id == "ses_A0001" and .model == "model-a" and .parent_id == null and .content == .text and (.content | contains("Here is the report.")) and (.content | contains("[reasoning] Let me think first.")) and (.content | contains("[tool · read · success]")) and (.content | contains("def hello(): pass"))' >/dev/null \
+    && ok "corpus inlines root + subagent text, reasoning and tool parts with labels" \
+    || bad "corpus document: $CORPUS_DOC"
+jq -e '.profile == "corpus" and .artifacts == ["corpus.jsonl", "index.md"] and .messages > 0' "$CB/metadata.json" >/dev/null \
+    && ok "corpus metadata: profile + artifacts + message totals" \
+    || bad "corpus meta: $(jq -c '{profile,artifacts,messages}' "$CB/metadata.json")"
+grep -q '^| Corpus | \[`corpus.jsonl`\](corpus.jsonl) - one flat text document per root session |$' "$CB/index.md" \
+    && ok "corpus index links corpus.jsonl" \
+    || bad "corpus index row: $(grep '^| Corpus' "$CB/index.md")"
+[ ! -e "$CB/memory.jsonl" ] \
+    && ok "corpus product does not write a memory profile" \
+    || bad "corpus product leaked memory.jsonl"
 
 echo "== faithful product (lossless JSON archive) =="
 run export faithful --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -type f \( -name 'Project-Alpha.json' -o -name 'Project-Alpha.faithful.json' \) \
+FR=$(find "$OUT" -type f -name '*Project-Alpha*.faithful.json' \
     -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 [ -n "$FR" ] && ok "faithful JSON file written in the run/session folder" || bad "faithful json file missing"
 jq -e '.info.id == "ses_A0001" and .info.tokens.input == 1100 and .info.tokens.backfilled == true and .info.cost == 0.05' "$FR" >/dev/null \
@@ -692,7 +772,7 @@ TC=$(cat "$(last_transcript transcript 'Project-Alpha')")
 printf '%s' "$TC" | grep -q "sk-test1234567890abcdefghijkl" && bad "sanitize leaked the API key" || ok "sanitize redacts the API key"
 printf '%s' "$TC" | grep -q "sk-\[REDACTED\]" && ok "sanitize shows the redaction marker" || bad "sanitize marker missing"
 run export faithful --sanitize --filter ses_A0001 >/dev/null
-FR=$(find "$OUT" -type f \( -name 'Project-Alpha.json' -o -name 'Project-Alpha.faithful.json' \) \
+FR=$(find "$OUT" -type f -name '*Project-Alpha*.faithful.json' \
     -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 printf '%s' "$(cat "$FR")" | grep -q "sk-test1234567890abcdefghijkl" && bad "faithful sanitize leaked" || ok "faithful sanitize redacts recursively"
 MT=$(last_meta faithful)
@@ -703,13 +783,14 @@ BSTAMP="stplug-$(date -u +%s)"
 SELRUN="selrun-$(date -u +%s)"
 run export study --stamp "$BSTAMP" --filter ses_A0001 >/dev/null
 [ -f "$OUT/$BSTAMP/metadata.transcript.json" ] && [ -f "$OUT/$BSTAMP/metadata.memory.json" ] \
-    && [ ! -d "$OUT/$BSTAMP/transcript" ] && [ ! -d "$OUT/$BSTAMP/memory" ] \
-    && ok "two products are siblings directly under the stamp" || bad "stamp bundle dirs"
+    && [ -f "$OUT/$BSTAMP/metadata.corpus.json" ] \
+    && [ ! -d "$OUT/$BSTAMP/transcript" ] && [ ! -d "$OUT/$BSTAMP/memory" ] && [ ! -d "$OUT/$BSTAMP/corpus" ] \
+    && ok "three products are siblings directly under the stamp" || bad "stamp bundle dirs"
 ALROW=$(run exports list | awk -v s="$BSTAMP" '$0 ~ s {print; exit}')
-printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "memory" \
+printf '%s' "$ALROW" | grep -q "transcript" && printf '%s' "$ALROW" | grep -q "memory" && printf '%s' "$ALROW" | grep -q "corpus" \
     && ok "exports list aggregates products joined with +" || bad "exports list aggregate: $ALROW"
 VIEW=$(run exports view "$BSTAMP")
-printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "memory" && printf '%s' "$VIEW" | grep -q "totals:" \
+printf '%s' "$VIEW" | grep -q "transcript" && printf '%s' "$VIEW" | grep -q "memory" && printf '%s' "$VIEW" | grep -q "corpus" && printf '%s' "$VIEW" | grep -q "totals:" \
     && ok "exports view shows every product of the run" || bad "exports view aggregate: $(printf '%s' "$VIEW" | sed -n '1,6p')"
 # A detail screen must lead with a banner, like info/backups/shrinks.
 printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
@@ -717,7 +798,7 @@ printf '%s' "$VIEW" | sed -n '1p' | grep -q "^== Export run: $BSTAMP ==" \
 printf '%s' "$VIEW" | grep -c "== Export run:" | grep -qx "1" \
     && ok "exports view repeats the run header once (per product)" || bad "exports view header repeated"
 VJSON=$(run exports view "$BSTAMP" --json)
-printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["memory","transcript"]' >/dev/null \
+printf '%s' "$VJSON" | jq -e 'type == "array" and (map(.profile) | sort) == ["corpus","memory","transcript"]' >/dev/null \
     && ok "exports view --json is one metadata record per product" || bad "exports view --json: $VJSON"
 printf '%s' "$VJSON" | grep -q "== Export run" && bad "exports view --json header" || ok "exports view --json has no header"
 echo "== named bundle folder layout =="
@@ -733,35 +814,44 @@ SESSION_FOLDER=$(find "$BUNDLE_OUT/$BUNDLE_STAMP" -mindepth 1 -maxdepth 1 \
 [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.transcript.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.memory.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.corpus.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.faithful.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.transcript.json" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.memory.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.corpus.json" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.faithful.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/memory.jsonl" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/corpus.jsonl" ] \
     && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/transcript" ] \
     && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/memory" ] \
+    && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/corpus" ] \
     && [ ! -d "$BUNDLE_OUT/$BUNDLE_STAMP/faithful" ] \
-    && [[ "$SESSION_FOLDER" == ????-??-??__Project-Alpha_ses_A000* ]] \
-    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.transcript.md" ] \
-    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.faithful.json" ] \
-    && ! [[ "$SESSION_FOLDER" =~ ^[0-9]{2}- ]] \
+    && [[ "$SESSION_FOLDER" =~ ^2026-09-10_projA_[0-9a-f]{12}$ ]] \
+    && [ -n "$(find "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER" -name '*Project-Alpha*.transcript.md' -type f -print -quit)" ] \
+    && [ -n "$(find "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER" -name '*Project-Alpha*.faithful.json' -type f -print -quit)" ] \
     && [ ! -e "$BUNDLE_OUT/${BUNDLE_STAMP}__complete" ] \
-    && ok "bundle products are siblings without product directories" \
-    || bad "bundle layout: $(find "$BUNDLE_OUT" -maxdepth 3 -type f | sort)"
+    && ok "bundle products live at the run root; session files live under the project folder" \
+    || bad "bundle layout: $(find "$BUNDLE_OUT" -maxdepth 4 -type f | sort)"
 sqlite3 "$BUNDLE_DB" "UPDATE session SET time_updated=time_updated+1000000 WHERE id='ses_A0001';"
 OPENCODE_DB="$BUNDLE_DB" OCED_OUT="$BUNDLE_OUT" OCED_PRESETS="$EX_PRESETS" \
     run exports update "$BUNDLE_STAMP" --yes >/dev/null
+SESSION_FOLDER=$(find "$BUNDLE_OUT/$BUNDLE_STAMP" -mindepth 2 -maxdepth 2 -type f \
+    -name '*Project-Alpha*.transcript.md' -printf '%h\n' | head -1 | xargs -r basename)
 [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.transcript.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.memory.md" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.corpus.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/index.faithful.md" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.transcript.json" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.memory.json" ] \
+    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.corpus.json" ] \
     && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/metadata.faithful.json" ] \
-    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.transcript.md" ] \
-    && [ -f "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER/Project-Alpha.faithful.json" ] \
+    && [[ "$SESSION_FOLDER" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_projA_[0-9a-f]{12}$ ]] \
+    && [ -n "$(find "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER" -name '*Project-Alpha*.transcript.md' -type f -print -quit)" ] \
+    && [ -n "$(find "$BUNDLE_OUT/$BUNDLE_STAMP/$SESSION_FOLDER" -name '*Project-Alpha*.faithful.json' -type f -print -quit)" ] \
     && [ ! -e "$BUNDLE_OUT/${BUNDLE_STAMP}__complete" ] \
     && ok "updating a bundle preserves the same product folder layout" \
-    || bad "updated bundle layout: $(find "$BUNDLE_OUT" -maxdepth 3 -type f | sort)"
+    || bad "updated bundle layout: $(find "$BUNDLE_OUT" -maxdepth 4 -type f | sort)"
 IDX=$(cat "$BUNDLE_OUT/$BUNDLE_STAMP/index.md")
 printf '%s' "$IDX" | grep -q 'Updated from' \
     && ok "updated bundle index remains in the shared run directory" \

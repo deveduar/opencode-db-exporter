@@ -73,8 +73,8 @@ class Flag:
 
 
 # ---- Product registry ----
-PRODUCTS = ["transcript", "memory", "digest", "faithful", "full"]
-PRODUCT_KEYWORDS = ["transcript", "memory", "digest", "faithful"]  # 'full' is alias
+PRODUCTS = ["transcript", "memory", "corpus", "digest", "faithful", "full"]
+PRODUCT_KEYWORDS = ["transcript", "memory", "corpus", "digest", "faithful"]
 # Accepted spelling of a product keyword that is NOT its real name. `compactions`
 # was the original name of the `digest` product and is kept working as a deprecated
 # alias. Two things are deliberately NOT renamed: the marker/event (opencode writes
@@ -85,7 +85,8 @@ PRODUCT_ALIASES = {"compactions": "digest"}
 # Product keyword -> one-line description for the plan confirm / index.
 PRODUCT_INTRO: Dict[str, str] = {
     "transcript": "Markdown conversation per session, with reasoning and tool calls",
-    "memory": "Memory corpus in corpus.jsonl: one JSON summary per root session (goal, outcome, todos, tool counts, tokens, digests)",
+    "memory": "Structured memory profiles in memory.jsonl: one JSON record per root session (first ask, last answer, todos, tools, tokens, digests, subagent refs)",
+    "corpus": "Flattened text corpus in corpus.jsonl: one text document per root session, with all message parts inline",
     "digest": "Markdown digests only: the compacted knowledge arc",
     "faithful": "The complete session as native JSON (info + messages), one file per session: the unfiltered machine archive",
 }
@@ -278,7 +279,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="cap",
         flag_type="int",
-        products=["memory"],
+        products=["memory", "corpus"],
         default=0,
         min_value=0,
         description="Truncate each text value to N chars (0 = unlimited)",
@@ -287,7 +288,7 @@ FLAGS: list[Flag] = [
     Flag(
         name="files",
         flag_type="bool",
-        products=["memory"],
+        products=["memory", "corpus"],
         default=False,
         description="Include touched files per session",
         cli_help="Include touched files per session"
@@ -309,9 +310,13 @@ PRODUCT_HELP: Dict[str, str] = {
         "               session use the 'faithful' product (native JSON, lossless)."
     ),
     "memory": (
-        "Memory corpus: corpus.jsonl with one JSON summary per root session\n"
-        "               (metadata + first user text + last assistant text + todos +\n"
-        "               compaction digests) - lossy, not a transcript"
+        "Structured memory profiles: memory.jsonl with one JSON record per root\n"
+        "               session (first user text + last assistant text + todos + tools +\n"
+        "               tokens + compaction digests + subagent refs) - lossy, not a transcript"
+    ),
+    "corpus": (
+        "Flattened text corpus: corpus.jsonl with one text document per root\n"
+        "               session; all message parts are inline - lossy, not a transcript"
     ),
     "digest": "only the compacted-context digests (mode=compaction messages)",
     "faithful": (
@@ -383,8 +388,8 @@ FLAG_HELP: Dict[str, str] = {
         "                     so a reference archive is only sound when they agree)"
     ),
     "cap": (
-        "  --cap N  --files   memory tuning: truncate each text value to N chars\n"
-        "                     (0 = unlimited, default) and/or include touched files"
+        "  --cap N  --files   memory/corpus tuning: truncate each text value to N\n"
+        "                     chars (0 = unlimited, default) and/or include touched files"
     ),
 }
 
@@ -463,7 +468,7 @@ PRODUCT_FLAG_KEYS: Dict[str, list[str]] = {
         and f.name not in SINGLE_ONLY_KEYS
         and f.name not in CLI_ONLY_KEYS
     ]
-    for p in ("transcript", "memory", "digest", "faithful")
+    for p in ("transcript", "memory", "corpus", "digest", "faithful")
 }
 
 # For bundle presets: per-product allowed keys

@@ -83,7 +83,8 @@ the Python exporter does not create backups.
 |---|---|
 | `transcript` | the conversation in markdown (text + reasoning + tools + patches + markers), split near the 1 MB target between complete rendered messages by default when needed. A single oversized message stays whole. `full` is an accepted alias |
 | `digest` | only the `mode=compaction` digests (`compactions` = deprecated alias) |
-| `memory` | Memory corpus: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, all digests) |
+| `memory` | Structured memory profiles in `memory.jsonl`: one JSON object per **root** session (metadata, `first_user`, `last_assistant`, digests, todos, recursive subagent refs) |
+| `corpus` | Flat searchable text in `corpus.jsonl`: one JSON document per **root** session with all root/descendant message parts inline and `content`/`text` aliases |
 | `faithful` | the lossless machine archive: one native `{info, messages:[{info, parts}]}` JSON file per session, nothing display-filtered |
 
 The Markdown products do not print the internal `step-start`/`step-finish` parts.
@@ -107,7 +108,7 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
 `product` + its config flags + optionally the selection (`filter` LIKE **or** exact
 `sessions`, never both). It is the source of truth for both the CLI and the menu:
 
-- `export <name>` resolves: if `name` ∈ `transcript|memory|digest|faithful|full` it is a
+- `export <name>` resolves: if `name` ∈ `transcript|memory|corpus|digest|faithful|full` it is a
   product; if it is a known preset, `apply_preset()` applies its keys over the argparse
   `args` (validating `choices`/types with `die()` on an invalid value); otherwise
   `ap.error` lists the known products and presets. `metadata.json` records `"preset"`
@@ -123,21 +124,23 @@ default `~/.config/opencode-db/presets.json`, same env > conf > default rules;
   before exporting; the menu turns that into an offer to create a fresh backup first.
   Skipped silently under `--from-backup` (the source *is* the snapshot).
 - **Bundle presets** (`products` instead of `product`): a map `{product: {flags}}` over
-  `transcript|memory|digest|faithful` (mutually exclusive with `product`). The selection is
-  top-level and shared; `apply_bundle()` validates it and stores `args.bundle`. Dispatch
-  (`run_bundle()` in `cli.py`) computes one shared collision-free stamp (bumped to
-  `stamp@N` only when the run directory already exists), then re-executes `exportlib/cli.py
-  <product>` per product with the shared `--stamp`, a hidden `--preset-name` for
-  provenance, and an internal bundle-child marker that writes all session products as
-  siblings in `<stamp>/<UTC-updated-date>__<session-folder>`. The date comes from
-  `session.time_updated` in epoch milliseconds and is formatted in UTC, so folder
-  names do not vary by machine timezone. Session filenames carry their product suffix;
-  only `subagents/` and transcript `.parts/` add a nested directory. Product indexes and
-  metadata are named `index.<product>.md` and `metadata.<product>.json` at the run root;
-  the aggregated memory `corpus.jsonl` also remains at the root. The root `index.md`
-  links those product indexes. `exports update` uses the same layout when rebuilding a
-  multi-product run. `bundle_child_argv()` forwards user-explicit flags as-is (CLI wins)
-  and only emits a per-product value when it was not explicit.
+  `transcript|memory|corpus|digest|faithful` (mutually exclusive with `product`). The
+  selection is top-level and shared; `apply_bundle()` validates it and stores
+  `args.bundle`. Dispatch (`run_bundle()` in `cli.py`) computes one shared
+  collision-free stamp (bumped to `stamp@N` only when the run directory already exists),
+  then re-executes `exportlib/cli.py <product>` per product with the shared `--stamp`, a
+  hidden `--preset-name` for provenance, and an internal bundle-child marker. The run
+  root is shared; session documents are grouped by a canonical
+  `<YYYY-MM-DD>_<project>_<hash12>` folder from `session.directory`
+  (`no-project_<hash12>` fallback) and named from the UTC last-update date, title
+  and short id with a product suffix for `transcript`/`faithful`. Subagent families
+  use a dated `<family>__subagents/` folder under the same project, and
+  transcript chunks use `<stem>.transcript.parts/`. Product indexes and metadata are
+  named `index.<product>.md` and `metadata.<product>.json` at the run root;
+  `memory.jsonl` and `corpus.jsonl` are separate root-level artifacts. The root
+  `index.md` links those product indexes. `exports update` uses the same layout when
+  rebuilding a multi-product run. `bundle_child_argv()` forwards user-explicit flags
+  as-is (CLI wins) and only emits a per-product value when it was not explicit.
 - `load_sessions()` now accepts exact ids: `WHERE s.id IN (…)` when `--sessions` is given,
   the previous LIKE when only `--filter`, and the whole table when there is no selection.
 - Without a file (or no matches) there are no presets: the raw-flags path is unchanged.
@@ -166,9 +169,11 @@ can never be exported. If the flags leave nothing to export, the run dies with a
 explanatory message instead of writing an empty artifact.
 
 After inclusion, writers walk every selected descendant recursively. Transcript and
-faithful files for all levels live under the root's `subagents/` directory; the run
-index nests their links by `parent_id`, and memory nests child references in the root
-corpus record. A fork has no subagent `parent_id`, so it remains an independent root.
+faithful files for all levels live under the root's dated `<family>__subagents/`
+folder in the same project; the run index nests their links by `parent_id`. Memory
+nests child references in the root profile; corpus flattens descendant messages into
+the root text document. A fork has no subagent `parent_id`, so it remains an
+independent root.
 
 In the menu this is the sessions picker's `subagents: shown ⇄ hidden` row
 (`get_sub_ids` in the generic picker), which **starts hidden** so browse and export both
@@ -181,8 +186,8 @@ explicitly unmarked.
 
 ### `faithful`: the lossless JSON archive
 
-The `faithful` product writes one `.json` file per root session (subagents under
-its `subagents/` folder) with the native shape
+The `faithful` product writes one `<stem>.faithful.json` file per root session
+(subagents under the dated `<family>__subagents/` folder) with the native shape
 `{"info": {...}, "messages": [{"info": {...}, "parts": [...]}]}` (parity with
 `session_faithful`). It is a product, not a flag on `transcript` — the Markdown and
 the machine copy are two different documents, and a plan includes the one it needs
@@ -218,19 +223,26 @@ contextual secret (a password in prose without `=`/`:`) can slip through; it is 
 substitute for rotating real keys. The "sanitize vs faithful JSON" tension is resolved by
 making `--sanitize` opt-in.
 
-### `memory`: streamed corpus
+### `memory` and `corpus`: streamed JSONL
 
-`corpus.jsonl` can weigh more than the DB itself (untruncated text + all digests +
-`--files`). So `memory_export` **writes line by line** (one root + its subagents = one
-JSON line) with `flush()`, never accumulating the corpus in memory; the RAM peak stays
-bounded to one root session at a time. `--cap N` bounds every text value (optional guard);
-if the corpus exceeds ~50 MB without `--cap`, it suggests bounding.
+`memory.jsonl` holds structured profiles (metadata, first user, last assistant,
+digests, todos, recursive child refs). `corpus.jsonl` holds flat text documents with
+the root and descendant message parts inline; its `content` and `text` fields are identical
+aliases. Both can grow very large, so their exporters **write line by line** (one root =
+one JSON line) with `flush()`, never accumulating the corpus in memory; the RAM peak
+stays bounded to one root session at a time. `--cap N` bounds every corpus text block
+and the memory profile's capped strings (0 = unlimited); `--files` includes touched
+files. If `corpus.jsonl` exceeds ~50 MB without `--cap`, the exporter suggests
+bounding it.
 
 ### index.md / metadata.json
 
 Each run writes directly into its stamp directory, without a product subdirectory.
-Single-product runs use `index.md` + `metadata.json`; bundles use product-suffixed
-`index.<product>.md` + `metadata.<product>.json` alongside the bundle `index.md`.
+Per-session documents still carry a product suffix (`<stem>.transcript.md`,
+`<stem>.faithful.json`) in both single-product and bundle runs. Single-product runs use
+`index.md` + `metadata.json`; bundles use product-suffixed `index.<product>.md` +
+`metadata.<product>.json` alongside the bundle `index.md`. `memory.jsonl` and
+`corpus.jsonl` stay at the run root.
 `metadata.json` (tool/version/date, `db` +
 `db_sha256` to correlate the export with a snapshot, `profile`, flags such as
 `sanitize`/`reasoning`/`tokens_backfilled`, counts). `exports.sh` aggregates
@@ -240,17 +252,17 @@ these `metadata.json` per stamp for `exports list/remove/prune`.
 
 | I want to… | use | notes |
 |---|---|---|
-| keep a lossless backup of everything | `python opencode-db-export.py complete` | complete tool outputs + the raw session + corpus |
+| keep a lossless backup of everything | `python opencode-db-export.py complete` | complete tool outputs + memory profiles + flat corpus + the raw session |
 | keep the raw session, losslessly | `python opencode-db-export.py source` (or `faithful`) | one native-JSON file per session, no Markdown; only `--sanitize` redacts |
-| read a conversation and keep its memory corpus, no raw copy | `python opencode-db-export.py study` | readable log + corpus.jsonl, no faithful JSON |
+| read a conversation and keep both JSONL artifacts, no raw copy | `python opencode-db-export.py study` | readable log + memory.jsonl + corpus.jsonl, no faithful JSON |
 | review or hand a session to someone | `python opencode-db-export.py review` | no reasoning + the raw session; it does **not** redact — **read the output before passing it on** |
 | read a conversation plain | `python opencode-db-export.py notes` | every message; tool output truncated (~500 chars), patches and reasoning kept |
 | read only the dialogue (no tools, patches or reasoning) | `python opencode-db-export.py conversation` | user + assistant text only; the leanest readable transcript |
 | collect just the prompts I typed (task log / prompt library) | `python opencode-db-export.py prompts` | user messages only (`role user`); no assistant replies, reasoning or tools |
-| give another AI the context of my sessions (retrieval) | `python opencode-db-export.py corpus` or `memory` | corpus.jsonl with defaults; add `--files` for touched files |
+| give another AI the context of my sessions (retrieval) | `python opencode-db-export.py corpus` | flat text in corpus.jsonl; add `--files` for touched files. Use `memory` for structured profiles |
 | skim the "knowledge arc" of a session | `python opencode-db-export.py digest` | just the compaction summaries (also in transcript + memory) |
 | archive-grade export, but make sure the backup is current first | `python opencode-db-export.py complete --snapshot fresh` | offers a fresh backup when the last one diverged, then exports all bundle products |
-| read one conversation in full **and** keep the raw copy | `python opencode-db-export.py complete --sessions ses_X` | the Markdown, corpus and native-JSON archive |
+| read one conversation in full **and** keep the raw copy | `python opencode-db-export.py complete --sessions ses_X` | Markdown, memory profiles, flat corpus and native-JSON archive |
 | audit what opencode actually ran | `transcript` + `--tool-output full` `--patch full` | evidence = tool calls + diffs |
 | skim the "knowledge arc" of a session **without exporting** | `opencode-db info <id>` / `opencode-db digest <id> show` | Bash inspection commands; `info --no-digest` drops the digest block |
 | narrow a run to a project/session | `--filter 'Project X'` or `--sessions ses_…` | also the menu's session picker / plan override |

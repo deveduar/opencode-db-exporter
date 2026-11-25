@@ -1,4 +1,3 @@
-# Memory product: memory corpus (corpus.jsonl, streamed line by line).
 import json
 from datetime import datetime, timezone
 
@@ -124,7 +123,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         disabled=args.no_progress,
     )
     progress.start()
-    with (out_dir / "corpus.jsonl").open("w", encoding="utf-8") as corpus:
+    with (out_dir / "memory.jsonl").open("w", encoding="utf-8") as corpus:
         for rid in roots:
             root = sessions[rid]
             subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
@@ -184,14 +183,14 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
         f"| Tuning | `--cap {'0 (unlimited)' if not args.cap else args.cap}` · `--files {'on' if args.files else 'off'}` |",
         f"| Sanitize | `{'on' if args.sanitize else 'off'}` |",
         f"| Tokens backfilled from step-finish | {total_backfilled} session(s) |",
-        "| Corpus | [`corpus.jsonl`](corpus.jsonl) - one JSON object per root session |",
+        "| Memory | [`memory.jsonl`](memory.jsonl) - one JSON object per root session |",
         "",
     ]
     product_artifact_path(out_dir, "index.md", args).write_text(
         "\n".join(idx_rows), encoding="utf-8"
     )
 
-    corpus_bytes = (out_dir / "corpus.jsonl").stat().st_size
+    corpus_bytes = (out_dir / "memory.jsonl").stat().st_size
 
     lb = last_backup_info()
     meta = {
@@ -227,7 +226,7 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
 
     print(f"[OK] Exported ({'preset ' + args.preset + ' → ' if args.preset else ''}memory) to: {out_dir}")
     print(f"   Root sessions : {n_root}")
-    print(f"   Corpus lines  : {n_root} (corpus.jsonl)")
+    print(f"   Memory lines  : {n_root} (memory.jsonl)")
     print(f"   Subagents     : {n_subs} (summarized inline)")
     if hidden:
         flag = "--no-subagents" if args.no_subagents else "--no-orphan-subagents"
@@ -235,6 +234,6 @@ def memory_export(con, sessions, roots, children_of, out_dir, args, db_path, hid
     print(f"   Last backup   : {lb['file'] if lb else 'none'}")
     if not args.cap and corpus_bytes > 50 * 1024 * 1024:
         print(
-            f"   [!] corpus.jsonl is {corpus_bytes / 1e6:.1f} MB with unlimited text:"
+            f"   [!] memory.jsonl is {corpus_bytes / 1e6:.1f} MB with unlimited text:"
             " bound it with --cap N before feeding it to a strict model."
         )

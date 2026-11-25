@@ -1,9 +1,4 @@
 # CLI entry: argument parsing, read-only DB access and run orchestration.
-# Products (transcript | memory | digest | faithful):
-#   transcript  markdown transcript with verbosity toggles
-#   memory      memory corpus (corpus.jsonl, one entry per root session)
-#   digest      the compacted-context digests (markdown)
-#   faithful    native {info, messages} JSON, one file per session (the lossless copy)
 # Global flags: --filter, --sanitize (redact secrets), --stamp. Transcript toggles:
 # --sub, --tool-output, --patch, --no-reasoning, --mark-compactions,
 # --summary-diffs, --role.
@@ -43,6 +38,7 @@ from exportlib.db import (
     since_ms,
     walk_subagents,
 )
+from exportlib.corpus import corpus_export
 from exportlib.faithful import faithful_export
 from exportlib.memory import memory_export
 from exportlib.presets import bundle_child_argv, resolve_profile, scope_meta
@@ -68,9 +64,10 @@ from exportlib.writers import (
     make_outdir_final,
     product_artifact_path,
     product_artifact_files,
-    session_folder_name,
     session_file_stem,
+    session_layouts,
     session_product_filename,
+    session_product_path,
     write_index,
 )
 from exportlib.flags import FLAGS, effective_flags
@@ -173,7 +170,7 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("profile", nargs="?", default="transcript",
-                    help="product or named preset: transcript | memory | digest | faithful | full | <preset from the presets file>")
+                    help="product or named preset: transcript | memory | corpus | digest | faithful | full | <preset from the presets file>")
 
     # Selection + output root come from FLAGS (single source of truth): exactly
     # ONE selection rule per run (--filter | --sessions | --last | --since, all in
@@ -245,14 +242,14 @@ def build_argparser() -> argparse.ArgumentParser:
 def _session_records(written: list, sessions: dict) -> list[dict]:
     """One record per session actually WRITTEN, in export order.
 
-    Derived from `written` — the very list of `(root, subs, folder)` tuples that
-    created the directories — so the records cannot disagree with what is on
+    Derived from `written` — the very list of `(root, subs, project, family)`
+    tuples that created the folders — so the records cannot disagree with what is on
     disk, and a run that cascaded or dropped subagents records exactly the
     result. Requested explicit ids belong to `.selection.ids`; all other rules
     are represented by their `.selection.rule` and value.
     """
     out: list[dict] = []
-    for root, subs, _folder in written:
+    for root, subs, _project, _family in written:
         out.append(session_record(root, "root"))
         for sid in subs:
             out.append(session_record(sessions[sid], "subagent"))
@@ -888,9 +885,15 @@ def _main() -> None:
     for rid in roots:
         written_ids.update(sid for sid, _depth in walk_subagents(rid, children_of))
     scope, excluded = _scope_excluded(con, args, written_ids, db_ids)
+    layouts = session_layouts(sessions, roots, children_of)
 
     if args.profile == "memory":
         memory_export(con, sessions, roots, children_of, out_dir, args, db_path,
+                      hidden=n_hidden, scope=scope, excluded=excluded)
+        return
+
+    if args.profile == "corpus":
+        corpus_export(con, sessions, roots, children_of, out_dir, args, db_path,
                       hidden=n_hidden, scope=scope, excluded=excluded)
         return
 
@@ -912,14 +915,13 @@ def _main() -> None:
     progress.start()
     for root_id in roots:
         root = sessions[root_id]
-        sub_tree = list(walk_subagents(root_id, children_of))
-        subs = [sid for sid, _depth in sub_tree]
-        sub_depth = dict(sub_tree)
-        rfolder = out_dir / session_folder_name(root)
-        rfolder.mkdir(exist_ok=args.bundle_child)
+        project, family, subs = layouts[root_id]
+        sub_depth = {sid: depth for sid, depth in walk_subagents(root_id, children_of)}
+        pdir = out_dir / project
+        pdir.mkdir(parents=True, exist_ok=True)
 
         stem = session_file_stem(root)
-        rfile = rfolder / session_product_filename(stem, "transcript", ".md", args)
+        rfile = pdir / session_product_filename(stem, args.profile, ".md", args)
         message_sizes = []
         n_msgs, n_comp = write_transcript(
             con, renderer, root, rfile, chunk=args.sub != "inline",
@@ -929,13 +931,13 @@ def _main() -> None:
         total_digest += root.get("digests") or 0
 
         if args.sub == "separate":
+            if family:
+                (pdir / family).mkdir(parents=True, exist_ok=True)
             for sid_ in subs:
                 sub = sessions[sid_]
-                subdir = rfolder / "subagents"
-                subdir.mkdir(exist_ok=True)
-                sstem = session_file_stem(sub)
-                sfile = subdir / session_product_filename(
-                    sstem, "transcript", ".md", args
+                sfile = session_product_path(
+                    out_dir, sub, args.profile, ".md", args,
+                    project=project, family=family, subagent=True,
                 )
                 sn, sc = write_transcript(con, renderer, sub, sfile)
                 total_msgs += sn
@@ -966,7 +968,7 @@ def _main() -> None:
                     ),
                 )
 
-        written.append((root, subs, rfolder))
+        written.append((root, subs, project, family))
         progress.advance(1 + len(subs))
     progress.finish()
 

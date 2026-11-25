@@ -1,10 +1,14 @@
 # Output helpers: stamp/profile dirs, the run index and backup-to-latest info.
+import hashlib
 import json
+import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from exportlib import TOOL_VERSION
 from exportlib.config import default_bkp_dir
+from exportlib.db import walk_subagents
 from exportlib.util import (
     safe_filename,
     selection_label,
@@ -54,13 +58,106 @@ def session_updated_date(session: dict) -> str:
         return "unknown-date"
 
 
+def project_key(session: dict) -> str:
+    directory = str(session.get("directory") or "")
+    normalized = re.sub(r"/+", "/", directory.replace("\\", "/")).rstrip("/")
+    if not normalized or re.fullmatch(r"[A-Za-z]:", normalized):
+        return "no-project"
+    windows_drive = re.match(r"^([A-Za-z]):/(.*)$", normalized)
+    wsl_drive = re.match(r"^/mnt/([A-Za-z])/(.*)$", normalized, flags=re.IGNORECASE)
+    if windows_drive:
+        return f"{windows_drive.group(1)}:/{windows_drive.group(2)}".casefold()
+    if wsl_drive:
+        return f"{wsl_drive.group(1)}:/{wsl_drive.group(2)}".casefold()
+    return normalized.casefold() if os.name == "nt" else normalized
+
+
+def project_id(session: dict) -> str:
+    return hashlib.sha256(project_key(session).encode("utf-8")).hexdigest()[:12]
+
+
 def session_file_stem(session: dict) -> str:
     title = session["title"] or session["slug"]
-    return f"{session_updated_date(session)}_{safe_filename(title)}_{session['id'][:8]}"
+    return f"{session_updated_date(session)}__{safe_filename(title)}_{session['id'][:8]}"
 
 
-def session_folder_name(session: dict) -> str:
-    return session_file_stem(session)
+def project_folder_name(session: dict) -> str:
+    directory = str(session.get("directory") or "")
+    parts = [part for part in directory.replace("\\", "/").split("/") if part]
+    name = parts[-1] if parts else ""
+    if not name or name.endswith(":"):
+        return "no-project"
+    return safe_filename(name, fallback="no-project")
+
+
+def _project_dates(sessions: dict) -> dict:
+    dates = {}
+    for session in sessions.values():
+        key = project_key(session)
+        date = session_updated_date(session)
+        if date != "unknown-date" and (key not in dates or date > dates[key]):
+            dates[key] = date
+    return dates
+
+
+def project_folder_name_with_date(session: dict, date: str) -> str:
+    return f"{date}_{project_folder_name(session)}_{project_id(session)}"
+
+
+def _unique_folder_name(name: str, used: set[str]) -> str:
+    if name not in used:
+        used.add(name)
+        return name
+    index = 2
+    candidate = f"{name}@{index}"
+    while candidate in used:
+        index += 1
+        candidate = f"{name}@{index}"
+    used.add(candidate)
+    return candidate
+
+
+def subagent_family_folder(root: dict, subs: list[str], sessions: dict,
+                           project: str | None = None) -> str:
+    project = project or project_folder_name(root)
+    dates = [session_updated_date(sessions[sid]) for sid in subs]
+    date = max((d for d in dates if d != "unknown-date"), default="unknown-date")
+    title = safe_filename(root["title"] or root["slug"], fallback="session")
+    return f"{date}__{project}__{root['id'][:8]}_{title}__subagents"
+
+
+def session_layouts(sessions: dict, roots: list[str], children_of: dict) -> dict:
+    layouts = {}
+    used_families: set[str] = set()
+    ordered = sorted(roots, key=lambda sid: sessions[sid]["id"])
+    projects = {}
+    dates = _project_dates(sessions)
+    for rid in ordered:
+        session = sessions[rid]
+        key = project_key(session)
+        projects[rid] = project_folder_name_with_date(
+            session, dates.get(key, session_updated_date(session))
+        )
+    for rid in ordered:
+        root = sessions[rid]
+        subs = [sid for sid, _depth in walk_subagents(rid, children_of)]
+        project = projects[rid]
+        family = subagent_family_folder(root, subs, sessions, project) if subs else None
+        if family:
+            family = _unique_folder_name(family, used_families)
+        layouts[rid] = (project, family, subs)
+    return {rid: layouts[rid] for rid in roots}
+
+
+def session_product_path(out_dir, session: dict, product: str, suffix: str, args,
+                         project: str, family: str | None = None,
+                         subagent: bool = False):
+    folder = Path(project)
+    if subagent and family:
+        folder = folder / family
+    return out_dir / folder / session_product_filename(
+        session_file_stem(session), product, suffix, args
+    )
 
 
 def product_artifact_path(out_dir, filename: str, args):
@@ -72,9 +169,7 @@ def product_artifact_path(out_dir, filename: str, args):
 
 
 def session_product_filename(stem: str, product: str, suffix: str, args) -> str:
-    if getattr(args, "bundle_child", False):
-        return f"{stem}.{product}{suffix}"
-    return f"{stem}{suffix}"
+    return f"{stem}.{product}{suffix}"
 
 
 def product_artifact_files(out_dir, args) -> list[str]:
@@ -90,7 +185,8 @@ def product_artifact_files(out_dir, args) -> list[str]:
             or path.name.endswith(f".{profile}.md")
             or path.name.endswith(f".{profile}.json")
             or (profile == "transcript" and path.parent.name.endswith(".transcript.parts"))
-            or (profile == "memory" and path.name == "corpus.jsonl")
+            or (profile == "memory" and path.name == "memory.jsonl")
+            or (profile == "corpus" and path.name == "corpus.jsonl")
         )
 
     return [
@@ -164,13 +260,12 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
         metadata_name = product_artifact_path(out_dir, "metadata.json", args).name
         f.write(f"| Full metadata | [`{metadata_name}`]({metadata_name}) |\n\n")
         f.write("## Sessions\n\n")
-        for i, (root, subs, rfolder) in enumerate(written, 1):
+        for i, (root, subs, project, family) in enumerate(written, 1):
             rt = root["title"] or root["slug"]
-            root_md = rfolder / session_product_filename(
-                session_file_stem(root), "transcript", ".md", args
+            root_md = Path(project) / session_product_filename(
+                session_file_stem(root), args.profile, ".md", args
             )
-            rel_d = root_md.relative_to(out_dir)
-            f.write(f"{i}. **[{rt}]({rel_d})**  — `{root['id']}`  · agent `{root.get('agent') or '?'}`\n")
+            f.write(f"{i}. **[{rt}]({root_md})**  — `{root['id']}`  · agent `{root.get('agent') or '?'}`\n")
             if children_of.get(root["id"]):
                 f.write("   \n   Subagents:\n")
 
@@ -182,13 +277,11 @@ def write_index(index_path, out_dir, args, db_path, sessions, written, total_msg
                         if getattr(args, "sub", "separate") == "separate":
                             sub_name = session_product_filename(
                                 session_file_stem(sub),
-                                "transcript",
+                                args.profile,
                                 ".md",
                                 args,
                             )
-                            rel_s = (rfolder / "subagents" / sub_name).relative_to(
-                                out_dir
-                            )
+                            rel_s = Path(project) / (family or "subagents") / sub_name
                             f.write(f"{indent}- [{st}]({rel_s})  `{sub['id'][:8]}`\n")
                         else:
                             f.write(f"{indent}- {st}  `{sub['id'][:8]}` (inline)\n")

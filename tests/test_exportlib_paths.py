@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import io
+import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -12,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from exportlib.chunking import chunk_markdown_file
+from exportlib.corpus import corpus_document
 from exportlib.config import (
     DatabasePathError,
     _REPO_ROOT,
@@ -22,12 +25,20 @@ from exportlib.config import (
 )
 from exportlib.progress import Progress
 from exportlib.util import yaml_frontmatter
-from exportlib.writers import session_folder_name
+from exportlib.writers import (
+    project_folder_name,
+    project_folder_name_with_date,
+    project_id,
+    project_key,
+    session_file_stem,
+    session_layouts,
+    subagent_family_folder,
+)
 from shrinklib.config import default_shrink_presets
 
 
 class ExportPathTests(unittest.TestCase):
-    def test_session_folder_uses_last_updated_utc_date_not_sequence_number(self):
+    def test_session_file_stem_uses_last_updated_utc_date_not_sequence_number(self):
         session = {
             "title": "Task name",
             "slug": "fallback",
@@ -38,17 +49,119 @@ class ExportPathTests(unittest.TestCase):
         }
         with patch.dict(os.environ, {"TZ": "America/Los_Angeles"}):
             self.assertEqual(
-                session_folder_name(session), "2026-06-21__Task-name_ses_1234"
+                session_file_stem(session), "2026-06-21__Task-name_ses_1234"
             )
 
         session["time_updated"] = None
         self.assertEqual(
-            session_folder_name(session), "unknown-date__Task-name_ses_1234"
+            session_file_stem(session), "unknown-date__Task-name_ses_1234"
         )
         session["time_updated"] = "not-a-timestamp"
         self.assertEqual(
-            session_folder_name(session), "unknown-date__Task-name_ses_1234"
+            session_file_stem(session), "unknown-date__Task-name_ses_1234"
         )
+
+    def test_project_folder_uses_directory_basename_on_posix_and_windows(self):
+        for directory in ("/work/projA", "/work/projA/", r"C:\Users\me\projA", "C:\\Users\\me\\projA\\"):
+            self.assertEqual(project_folder_name({"directory": directory}), "projA")
+        for directory in ("", "/", "C:\\", None):
+            self.assertEqual(project_folder_name({"directory": directory}), "no-project")
+        self.assertEqual(
+            project_folder_name({"directory": "/work/../odd:name"}),
+            "oddname",
+        )
+
+    def test_project_id_normalizes_windows_and_wsl_paths(self):
+        windows = {"directory": r"C:\work\projA"}
+        wsl = {"directory": "/mnt/c/work/projA/"}
+        self.assertEqual(project_key(windows), project_key(wsl))
+        self.assertEqual(project_id(windows), project_id(wsl))
+        self.assertEqual(len(project_id(windows)), 12)
+        self.assertRegex(project_id(windows), r"^[0-9a-f]{12}$")
+
+    def test_project_folder_uses_newest_session_date_and_id(self):
+        session = {
+            "directory": "/work/projA",
+            "time_updated": int(
+                datetime(2026, 6, 21, tzinfo=timezone.utc).timestamp() * 1000
+            ),
+        }
+        self.assertEqual(
+            project_folder_name_with_date(session, "2026-06-22"),
+            f"2026-06-22_projA_{project_id(session)}",
+        )
+
+    def test_subagent_family_uses_newest_child_date_and_collision_suffixes(self):
+        def make_session(sid, title, directory, updated):
+            return {
+                "id": sid,
+                "title": title,
+                "slug": title,
+                "directory": directory,
+                "time_updated": int(updated.timestamp() * 1000),
+            }
+
+        old = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        new = datetime(2026, 6, 22, tzinfo=timezone.utc)
+        sessions = {
+            "ses_root1": make_session("ses_root1", "Root", "/work/projA", old),
+            "ses_sub1": make_session("ses_sub1", "Sub", "/work/projA", new),
+            "ses_root2": make_session("ses_root2", "Root", r"C:\work\projA", old),
+            "ses_sub2": make_session("ses_sub2", "Sub", r"C:\work\projA", new),
+        }
+        children_of = {
+            "ses_root1": ["ses_sub1"],
+            "ses_root2": ["ses_sub2"],
+        }
+        layouts = session_layouts(
+            sessions, ["ses_root1", "ses_root2"], children_of
+        )
+        self.assertEqual(
+            subagent_family_folder(
+                sessions["ses_root1"], ["ses_sub1"], sessions, "projA"
+            ),
+            "2026-06-22__projA__ses_root_Root__subagents",
+        )
+        posix_folder = project_folder_name_with_date(sessions["ses_root1"], "2026-06-22")
+        windows_folder = project_folder_name_with_date(sessions["ses_root2"], "2026-06-22")
+        self.assertEqual(
+            layouts["ses_root1"][:2],
+            (
+                posix_folder,
+                f"2026-06-22__{posix_folder}__ses_root_Root__subagents",
+            ),
+        )
+        self.assertEqual(
+            layouts["ses_root2"][:2],
+            (
+                windows_folder,
+                f"2026-06-22__{windows_folder}__ses_root_Root__subagents",
+            ),
+        )
+        self.assertNotEqual(posix_folder, windows_folder)
+
+    def test_project_collision_suffixes_are_order_independent(self):
+        def make_session(sid, directory):
+            return {
+                "id": sid,
+                "title": sid,
+                "slug": sid,
+                "directory": directory,
+                "time_updated": int(datetime(2026, 6, 21, tzinfo=timezone.utc).timestamp() * 1000),
+            }
+
+        sessions = {
+            "ses_root1": make_session("ses_root1", "/work/projA"),
+            "ses_root2": make_session("ses_root2", r"C:\work\projA"),
+        }
+        children_of = {"ses_root1": [], "ses_root2": []}
+        for roots in (["ses_root1", "ses_root2"], ["ses_root2", "ses_root1"]):
+            layouts = session_layouts(sessions, roots, children_of)
+            first = project_folder_name_with_date(sessions["ses_root1"], "2026-06-21")
+            second = project_folder_name_with_date(sessions["ses_root2"], "2026-06-21")
+            self.assertEqual(layouts["ses_root1"][:2], (first, None))
+            self.assertEqual(layouts["ses_root2"][:2], (second, None))
+            self.assertNotEqual(first, second)
 
     def test_database_environment_override_wins(self):
         with patch.dict(os.environ, {"OPENCODE_DB": r"C:\OpenCode\data.db"}, clear=True):
@@ -126,6 +239,70 @@ class ExportPathTests(unittest.TestCase):
                 patch.dict(os.environ, {"OCED_OUT": "/custom/exports"}, clear=True),
             ):
                 self.assertEqual(default_out(), "/custom/exports")
+
+
+class CorpusDocumentTests(unittest.TestCase):
+    def test_corpus_document_inlines_every_part_with_labels(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, "
+            "time_created INTEGER, data TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, "
+            "session_id TEXT, time_created INTEGER, data TEXT)"
+        )
+        con.executemany(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            [
+                ("msg_root", "ses_root", 1, '{"role":"user"}'),
+                ("msg_sub", "ses_sub", 2, '{"role":"assistant"}'),
+            ],
+        )
+        con.executemany(
+            "INSERT INTO part VALUES (?, ?, ?, ?, ?)",
+            [
+                ("prt_text", "msg_root", "ses_root", 1,
+                 json.dumps({"type": "text", "text": "Hello"})),
+                ("prt_reasoning", "msg_root", "ses_root", 2,
+                 json.dumps({"type": "reasoning", "text": "Let me think first."})),
+                ("prt_tool", "msg_root", "ses_root", 3,
+                 json.dumps({"type": "tool", "tool": "read", "state": {
+                     "status": "success", "input": {"path": "src/a.py"},
+                     "output": "def hello(): pass",
+                 }})),
+                ("prt_compaction", "msg_root", "ses_root", 4,
+                 json.dumps({"type": "compaction", "auto": True})),
+                ("prt_step", "msg_root", "ses_root", 5,
+                 json.dumps({"type": "step-start", "tool": "plan"})),
+                ("prt_sub", "msg_sub", "ses_sub", 6,
+                 json.dumps({"type": "text", "text": "Here is the report."})),
+            ],
+        )
+        root = {
+            "id": "ses_root", "title": "Root", "slug": "root",
+            "directory": "/work/demo", "agent": "build", "model": "model-a",
+            "time_created": 1, "time_updated": 2, "parent_id": None,
+        }
+        sub = dict(root, id="ses_sub", title="Sub", slug="sub",
+                   parent_id="ses_root")
+
+        doc = corpus_document(con, root, {"ses_sub": sub}, ["ses_sub"])
+        content = doc["content"]
+        self.assertEqual(doc["text"], content)
+        for needle in (
+            "[root · user]", "[text] Hello", "[reasoning] Let me think first.",
+            "[tool · read · success]", "input:", "def hello(): pass",
+            "[compaction]", "[step-start]", "## Subagent: Sub",
+            "[subagent · assistant]", "[text] Here is the report.",
+        ):
+            self.assertIn(needle, content)
+
+        capped = corpus_document(con, root, {"ses_sub": sub}, ["ses_sub"], cap=8)
+        self.assertIn("[reasoning] Let me t", capped["content"])
+        self.assertNotIn("Let me think first.", capped["content"])
+        con.close()
 
 
 class MarkdownFrontmatterTests(unittest.TestCase):

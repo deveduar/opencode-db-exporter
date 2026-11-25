@@ -9,8 +9,8 @@ JSON-serializable artifacts have machine-checkable schemas where noted.
 
 Dates are always **ISO-8601 UTC** (`YYYY-MM-DDTHH:MM:SSZ`, epoch ms converted via
 `ts_iso`). Absent values are `null` (never `""`) in machine artifacts
-(`corpus.jsonl`, the `faithful` archives, `metadata.json`); `""` only appears
-in human markdown rendering.
+(`memory.jsonl`, `corpus.jsonl`, the `faithful` archives, `metadata.json`); `""`
+only appears in human markdown rendering.
 
 Legend: `R?` = optional key.
 
@@ -31,11 +31,11 @@ in sync by construction.
 > Per-key rules table (generated, checked in): [`generated/flags-table.md`](../generated/flags-table.md)
 > — regenerate with `python3 scripts/generate_schema.py --docs`; do not edit by hand.
 > The table below is only a summary of its non-obvious rows; the generated file is the
-> contract. The `product` / `products` values are `transcript` \| `memory` \| `digest` \|
+> contract. The `product` / `products` values are `transcript` \| `memory` \| `corpus` \| `digest` \|
 > `faithful` and nothing else: `full` is a CLI alias of `transcript` and `compactions` is a
 > deprecated alias of `digest` (both normalised at resolve time, so a run records `digest`).
 
-| `product` | string | `transcript` \| `memory` \| `digest` \| `faithful` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
+| `product` | string | `transcript` \| `memory` \| `corpus` \| `digest` \| `faithful` | single only (`full` is a CLI alias, **not** a preset product; `compactions` is the deprecated alias of `digest`) |
 | `products` | object | keys restricted to the products above | bundle only (exclusive with `product`) |
 | `description` | string | — | optional human one-liner (picker row / `--list-presets` / legend); it travels with the recipe, a preset without one shows no prose |
 | `filter` / `sessions` | string / string[] | — | selection (shared; exclusive, `not` both) |
@@ -53,8 +53,9 @@ phrase) — **lossless** iff the `faithful` product is part of the plan and no f
 data (`no_subagents` / `no_orphan_subagents`, or `sanitize`, which redacts
 best-effort), else **lossy** with the reasons. The reason depends on the product that
 carries the data: a content product (`transcript` / `digest`) without `faithful` is lossy
-for the filtered Markdown; a `memory`-only plan is lossy because the memory corpus is a
-distilled summary, never the full session. `sub: omit` is a loss only when no `faithful`
+for the filtered Markdown; a `memory`-only plan is lossy because memory profiles are a
+distilled summary, and a `corpus`-only plan is lossy because text is capped/filtered and
+does not preserve native parts. `sub: omit` is a loss only when no `faithful`
 copy carries the subagents. It is the line each
 `--explain` / `--show` / `--dry-run` / menu-confirm card prints after `flags:`. The same
 computation yields the **verdict column** of the preset picker row (`plan.py:_preset_row`)
@@ -68,18 +69,20 @@ every session runs it as configured, a partial one adds `--sessions <csv>` (iden
 the CLI override above, shared by every product of a bundle). A hidden-subagent run also
 pins `--no-subagents`. A selection that keeps a subagent whose session it dropped is
 named in the confirmation (`N subagent(s) will be exported standalone`), so the
-resulting `index.md`/`corpus.jsonl` is predictable. Therefore a plan never "owns" its selection: `setup_cli` clobbers
+resulting `index.md`/`memory.jsonl`/`corpus.jsonl` is predictable. Therefore a plan never "owns" its selection: `setup_cli` clobbers
 it only when no explicit CLI/selection is given.
 
 **Bundle semantics.** `products` = `{product: {flags}}`; the selection is
 top-level and shared. `run_bundle()` computes one collision-free shared stamp
 (`stamp@N` bumped when the run directory already exists), then runs one product
-writer per member with `--stamp <shared> --preset-name <name>`. Session files from
-all products share one folder named with the session's last-update date in UTC
-(`YYYY-MM-DD__<title>_<id>`) and carry a product suffix; product
-indexes and metadata are sibling files at the run root, alongside the bundle
-`index.md` and (for memory) `corpus.jsonl`. `exports list` still aggregates the
-product metadata as `transcript+memory`.
+writer per member with `--stamp <shared> --preset-name <name>`. The run root is shared;
+per-session products write into the same dated hashed project/family folders, while
+`memory` and `corpus` stay root-level JSONL artifacts. Per-session documents (`transcript`,
+`faithful`) carry a product suffix (`.transcript.md`, `.faithful.json`). Product
+indexes and metadata are sibling files at the run root
+(`index.<product>.md`, `metadata.<product>.json`), alongside the bundle `index.md`,
+`memory.jsonl`, and `corpus.jsonl`. `exports list` aggregates the product metadata
+as `transcript+memory+corpus+faithful` for `complete`.
 
 ---
 
@@ -88,48 +91,61 @@ product metadata as `transcript+memory`.
 `OCED_OUT/<stamp>/`:
 
 ```
-<stamp>/                                      transcript+memory+faithful bundle
+<stamp>[_<preset>][@N]/                        transcript+memory+corpus+faithful bundle
   index.md                                    bundle index
   index.transcript.md                         product index
   metadata.transcript.json                    product metadata
   index.memory.md
   metadata.memory.json
-  corpus.jsonl                                one entry per root, including subagent refs
+  memory.jsonl                                one structured profile per root
+  index.corpus.md
+  metadata.corpus.json
+  corpus.jsonl                                one flat text document per root
   index.faithful.md
   metadata.faithful.json
-  YYYY-MM-DD__<title>_<id>/                   one shared folder per root session, UTC date
-    <title>.transcript.md                     readable conversation
-    <title>.faithful.json                      lossless session archive
-    <title>.transcript.parts/                  only when transcript exceeds chunk_mb
-      <title>.transcript-part-001.md ...
+  <YYYY-MM-DD>_<project>_<hash12>/
+    YYYY-MM-DD__<title>_<id8>.transcript.md    readable conversation
+    YYYY-MM-DD__<title>_<id8>.faithful.json    lossless session archive
+    YYYY-MM-DD__<title>_<id8>.transcript.parts/  only when transcript exceeds chunk_mb
+      YYYY-MM-DD__<title>_<id8>.transcript-part-001.md
       index.md
-    subagents/                                 only when descendants are included
-      <descendant>_<id>.transcript.md
-      <descendant>_<id>.faithful.json
+    YYYY-MM-DD__<YYYY-MM-DD>_<project>_<hash12>__<parent-id8>_<parent-title>__subagents/
+      YYYY-MM-DD__<child>_<id8>.transcript.md
+      YYYY-MM-DD__<child>_<id8>.faithful.json
 ```
 
-The session-folder date is derived from `session.time_updated` (epoch milliseconds)
+The session-file date is derived from `session.time_updated` (epoch milliseconds)
 and formatted as a UTC calendar date. This is stable across machines and independent
-of each viewer's local timezone. The former sequence-number prefix is not used.
+of each viewer's local timezone. The project folder date is the newest included
+session in that project. `<project>` is the basename of `session.directory`,
+normalizing `/` and `\`, sanitized via `safe_filename()`; drive roots and empty
+directories use `no-project`. The `<hash12>` suffix is the first 12 hex digits of
+SHA-256 over the canonical directory key: path separators are normalized, `C:\x`
+and `/mnt/c/x` produce the same key, and all sessions from one directory share
+the project folder. A subagent family folder is emitted only when a root has
+included descendants; its date is the newest descendant's UTC update date
+(or `unknown-date`) and its `<project>` segment is the full dated hashed folder.
+Only colliding family names within a project get `@2`, `@3`, … suffixes.
 
-For a single-product export such as `conversation`, the same run-root layout is
-used without product suffixes:
+For a single-product export such as `conversation`, the run root is unsuffixed for
+indexes and metadata, but session documents still carry the product suffix:
 
 ```
-<stamp>__conversation/
+<stamp>[_<preset>][@N]/
   index.md
   metadata.json
-  YYYY-MM-DD__<title>_<id>/
-    <title>.md
-    subagents/                 only when descendants are included
+  memory.jsonl                 (only for memory)
+  corpus.jsonl                 (only for corpus)
+  <YYYY-MM-DD>_<project>_<hash12>/
+    YYYY-MM-DD__<title>_<id8>.transcript.md
+    YYYY-MM-DD__<title>_<id8>.faithful.json
 ```
 
-Every export writes directly into `<stamp>/`; there is no product-named directory.
-Single-product exports use unsuffixed filenames, while bundle products use product
-suffixes so their session files, indexes and metadata are siblings without collisions.
-The aggregate `corpus.jsonl` and product-level indexes/metadata stay at the run root.
-Only `subagents/` and transcript `.parts/` create deeper folders. Readers look only
-for metadata at the run root; the former `<stamp>/<product>/` layout is not supported.
+Every export writes directly into the stamp directory; there is no product-named
+subdirectory. Product indexes/metadata are suffixed only in bundles. `memory.jsonl`
+and `corpus.jsonl` live at the run root. Only per-session transcript `.parts/` and
+subagent family folders add deeper levels. Readers look only for metadata at the run
+root; the former `<stamp>/<product>/` layout is not supported.
 
 Long `transcript` Markdown is split near the configured rendered file size,
 after role and content filters (`--role`, `--no-reasoning`, `--patch`,
@@ -159,12 +175,12 @@ are separated by whitespace; the transcript does not add a horizontal rule
 after every message.
 
 Subagent relationships are traversed recursively. Transcript and faithful
-exports place each descendant session in the root's `subagents/` directory;
-the run index displays the parent-child hierarchy, and each session record keeps
-its `parent_id`. Forks have no subagent parent relation and remain separate root
-sessions with their own UTC last-updated-date session directory. Multiple root sessions can
-belong to the same OpenCode project or working directory; they are still
-exported independently by session ID.
+exports place each descendant session in the root's dated `<family>__subagents/`
+folder under the same project; the run index displays the parent-child hierarchy,
+and each session record keeps its `parent_id`. Forks have no subagent parent
+relation and remain separate root sessions. Multiple root sessions can belong to
+the same OpenCode project or working directory; they share the project folder but
+stay independent by session ID.
 
 ### `index.md` (human view of a run)
 
@@ -185,11 +201,11 @@ the run actually set them (same rule as `--no-subagents`) are:
 | `Tokens backfilled` | that many sessions had their tokens/cost summed from `step-finish` |
 
 `Compactions` and `Compaction digests` are the two distinct counters (markers vs
-summary texts, see below). The `memory` product writes its own `index.md` with a
-memory-shaped row set (root/subagent counts, `Tuning` for `--cap`/`--files`,
-`Compaction markers`/`Compaction digests`, `Tokens backfilled`) and
-the same conditional `Preset` row. It is a data table only: no explanatory prose,
-and no `Role filter` row (memory ignores `--role`).
+summary texts, see below). The `memory` and `corpus` products each write their own
+`index.md` with a JSONL-shaped row set (root/subagent counts, `Tuning` for
+`--cap`/`--files`, `Compaction markers`/`Compaction digests`, `Tokens backfilled`)
+and the same conditional `Preset` row. They are data tables only: no explanatory
+prose, and no `Role filter` row (both ignore `--role`).
 
 ### transcript / digest `metadata.json`
 
@@ -218,14 +234,14 @@ and no `Role filter` row (memory ignores `--role`).
                                          // flags.effective_flags(args): every FLAGS key with its resolved value. Always present.
   "updated_from": "2026-10-19_13-36",   // R?: present only on a REFRESHED run — the stamp it was refreshed from (== its own)
   "update_mode": "delta",               // R?: present only on a refreshed run — delta | accumulative
-  "profile": "transcript",              // product keyword: transcript | memory | digest | faithful (never a preset name)
+  "profile": "transcript",              // transcript | memory | corpus | digest | faithful (never a preset name)
   "preset": "complete",             // R?: preset/plan name that produced this run, else null
   "subagents_hidden": 0,            // how many subagents those two flags actually dropped from the MATCHED set
                                    // (0 for an exact --sessions selection: a subagent that was never selected cannot be dropped)
   "tokens_backfilled": 0,               // number of sessions whose token/cost rows were summed from step-finish parts
   "compactions": 2, "digests": 2, "messages": 21,
   "last_backup": {"file": "…", "date": "…"},   // R?: latest entry of the backup manifest, else null
-  "artifacts": ["index.md", "01-session/ses_….md"]
+  "artifacts": ["index.md", "2026-10-19__Title_ses_abc12345.transcript.md"]
 }
 ```
 
@@ -279,8 +295,8 @@ subagent flag) nothing in `metadata.json` recorded the resulting set, so
 `exports view --json` could not list what a run actually holds.
 
 - **One source of truth**: it is built from the same `written` list of
-  `(root, subagents, folder)` tuples that created the directories on disk, so the
-  records cannot disagree with the artifacts, and a cascaded or dropped subagent
+  `(root, subagents, project, family)` layout tuples that placed the files on disk, so
+  the records cannot disagree with the artifacts, and a cascaded or dropped subagent
   is recorded as the result — not as the intent.
 - **Identity only.** `id`, `title`, `kind`, `parent_id`, `created`, `updated`. There
   are no per-session `messages`/`compactions`: those totals already exist at the top
@@ -337,10 +353,11 @@ hierarchy is resolved, so `sessions`, the index and the printed counts always
 describe the same set:
 
 After inclusion, all selected descendants are walked recursively. Transcript and
-faithful exports write every descendant session under the root's `subagents/`
-folder, and the run index indents links by parent-child depth. Memory nests child
-references recursively inside each root record. Forks have no subagent `parent_id`
-and therefore stay independent root sessions.
+faithful exports write every descendant session under a dated
+`<family>__subagents/` folder in the root's project, and the run index indents links
+by parent-child depth. Memory nests child references recursively inside each root
+record; corpus flattens child messages inline into each root's text document. Forks
+have no subagent `parent_id` and therefore stay independent root sessions.
 
 | Flag | Effect |
 |---|---|
@@ -348,15 +365,17 @@ and therefore stay independent root sessions.
 | `--no-orphan-subagents` | a selected subagent survives only while its parent survives (fixpoint over nested chains), instead of being promoted to a root |
 | (neither, default) | a subagent selected without its parent is exported standalone, as a root |
 
-### memory `metadata.json`
+### memory / corpus `metadata.json`
 
-Same canonical header keys, with `"profile": "memory"` and an `artifacts` list
-such as `["corpus.jsonl", "index.md"]`. Product behavior is recorded in the
-common `flags` object; it is not mirrored as top-level `cap`, `touched_files`,
-or display-flag keys. Memory folds each subagent into its root's corpus line, so
-`--no-subagents` empties the
-`subagents` array of every entry (`index.md` also carries a
-`Subagents excluded` row).
+Same canonical header keys, with `"profile": "memory"` or `"corpus"` and an
+`artifacts` list such as `["index.md", "memory.jsonl"]` or
+`["corpus.jsonl", "index.md"]` (bundle runs add the product-suffixed index and
+metadata files). Product behavior is recorded in the common `flags` object; it is
+not mirrored as top-level `cap`, `touched_files`, or display-flag keys. Memory
+stores recursive child refs in every entry's `subagents` array, so
+`--no-subagents` empties it. Corpus flattens descendant messages into one
+document per root. Both `index.md` files carry a `Subagents excluded` row when a
+flag narrowed the set.
 
 ### faithful `metadata.json`
 
@@ -368,11 +387,11 @@ list (the `.json` files plus `index.md`). Its effective settings remain in
 
 ---
 
-## 3. corpus.jsonl (memory)
+## 3. memory.jsonl and corpus.jsonl
 
-One JSON object per root session (subagents ride inside), streamed line by line —
-file order is the only record order. Key shape (`exportlib/memory.py`,
-`memory_session_entry()`):
+Two distinct streamed artifacts, one JSON object per root session — file order is
+the only record order. `memory.jsonl` holds structured profiles with recursive
+subagent references (`exportlib/memory.py`, `memory_session_entry()`):
 
 ```jsonc
 {
@@ -410,67 +429,88 @@ Field notes:
 - `created`/`updated` and `compaction_digests[].created` / `todos` timestamps are
   ISO-8601 UTC; absent → `null`.
 
-### Consuming `corpus.jsonl` (retrieval, claims, supersession)
+`corpus.jsonl` is the separate flat-text artifact (`exportlib/corpus.py`,
+`corpus_document()`). It carries native root metadata plus a flattened body;
+`content` and `text` are identical aliases so both common loader conventions work:
 
-`corpus` is **not** a separate artifact: it is a named **preset** whose content is
-`{"product": "memory"}` (`presets.json`), so `export corpus` and `export memory`
-produce the **same** `corpus.jsonl`. The preset exists as the menu entry and to
-record provenance. Nothing here needs a change to be consumed — this section is the
-contract for *other tools*.
+```jsonc
+{
+  "schema_version": 1,
+  "id": "ses_…", "title": "…", "slug": "…", "directory": "/…",
+  "agent": "build",                       // or null
+  "model": "anthropic/claude-…",          // plain string id
+  "created": "…", "updated": "…",        // ISO-8601 UTC; null when absent
+  "parent_id": null,
+  "content": "[root · user]\n[text] …\n\n## Subagent: …\n\n[subagent · assistant]\n[text] …",
+  "text": "…",                             // identical to content
+  "files": ["src/a.py"]                   // R?, only with --files; root + descendants
+}
+```
 
-**Loading it.** Both artifacts are plain JSON and need no adapter:
+`--cap N` bounds every text block (0 = unlimited); `--sanitize` redacts before
+serializing. The `faithful` product remains the only lossless evidence source.
 
-- `corpus.jsonl` → one JSON object per line (`langchain_community.document_loaders.JSONLinesLoader`).
-- `<stamp>/YYYY-MM-DD__<title>_<id>/<title>.json` (single product) or
-  `<stamp>/YYYY-MM-DD__<title>_<id>/<title>.faithful.json` (bundle) → one document per session
-  (`JSONLoader` with a `jq_schema`).
+### Consuming the JSONL artifacts (retrieval, claims, supersession)
 
-**What the corpus is, and what it is not.** Each entry is a **summary of one root
-session** (the goal, the outcome, the compaction digests, the counts, the touched
-files) — it is **lossy** and is neither a transcript nor a claim store. The
-lossless source of truth is the `faithful` archive, which carries the whole session
-(messages and `part.data` verbatim). A consumer that needs facts *inside* a
-conversation reads `faithful`; a consumer that only needs to *locate* the session
-(which chat, which project, which files, when) reads the corpus.
+`memory` and `corpus` are different products with different purposes: `memory` is a
+structured index for locating sessions and summarizing their metadata; `corpus` is a
+flattened text document for retrieval. Neither is a claim store.
+
+**Loading them.** Both artifacts are plain JSON and need no adapter:
+
+- `memory.jsonl` / `corpus.jsonl` → one JSON object per line
+  (`langchain_community.document_loaders.JSONLinesLoader`; use `text`/`content`
+  from `corpus.jsonl`).
+- `<stamp>/<YYYY-MM-DD>_<project>_<hash12>/YYYY-MM-DD__<title>_<id8>.faithful.json` → one document per
+  session (`JSONLoader` with a `jq_schema`).
+
+**What the artifacts are, and what they are not.** Each `memory.jsonl` entry is a
+**summary of one root session** (goal, outcome, digests, counts, touched files);
+each `corpus.jsonl` entry is the conversation text with all root/descendant message parts inline.
+Both are **lossy** and neither is a transcript or a claim store. The lossless source
+of truth is the `faithful` archive, which carries the whole session (messages and
+`part.data` verbatim). A consumer that needs facts *inside* a conversation reads
+`faithful` or the text corpus; a consumer that only needs to *locate* the session
+(which chat, which project, which files, when) reads `memory.jsonl`.
 
 **Mapping to a claim/supersession store** (e.g. [`consolidation-memory`](https://github.com/charliee1w/consolidation-memory),
 which models `episodes` as evidence and `claims` as reusable beliefs with drift
 detection, `as_of` time queries and `namespace/project/app/agent/session` scopes):
 
-| consolidation-memory | comes from `corpus.jsonl` |
+| consolidation-memory | comes from the JSONL artifacts |
 |---|---|
-| episode (per root) | one JSON line |
+| episode (per root) | one line in `memory.jsonl` / `corpus.jsonl` |
 | scope `project` | `directory` |
 | scope `agent` | `agent` |
 | scope `session` | `id` (`parent_id` for the subagent relation) |
 | scope `namespace` | the export itself (global / one source) |
 | **file anchors** (for drift) | `files` — present only with `--files` |
-| time axis (`as_of`) | `created` / `updated` / `compaction_digests[].created` |
-| **claims / supersession / drift** | **NOT in the corpus** — this is the consumer's job |
+| time axis (`as_of`) | `created` / `updated` / `compaction_digests[].created` (memory) |
+| **claims / supersession / drift** | **NOT in the artifacts** — this is the consumer's job |
 
-The corpus deliberately stops at *evidence*: it keeps no claim identity
+Both JSONL artifacts deliberately stop at *evidence*: they keep no claim identity
 (subject/relation/object), no "old value superseded" state and no drift events.
 Extracting claims is a write-side, LLM-assisted step (the consumer's), and the
-**faithful archive is its evidence source** while the corpus is its index.
+**faithful archive is its evidence source** while memory/corpus are its indexes.
 
 **Provenance.** It already lives at the **run** level, not per line: each run's
 `metadata.json` records `db`, `db_sha256`, `date`, `preset`, `selection` and
 `session_records`, and the enclosing directory name is the run's `stamp`. A
-consumer that keeps a corpus together with its `metadata.json` (and the `stamp`)
-knows exactly where every line came from, so no per-line provenance field is added
-(the corpus carries only `schema_version` to pin the shape).
+consumer that keeps the JSONL files together with their `metadata.json` (and the
+`stamp`) knows exactly where every line came from, so no per-line provenance field is
+added (each line carries only `schema_version` to pin the shape).
 
 ---
 
 ## 4. Faithful JSON archive (the `faithful` product)
 
 For a single-product export, one
-`<stamp>/YYYY-MM-DD__<title>_<id>/<title>.json` per root session.
-In a bundle, the same file is
-`<stamp>/YYYY-MM-DD__<title>_<id>/<title>.faithful.json`, beside the
-other products for that session. Subagents remain under that session's
-`subagents/` folder, with `.faithful.json` suffixes in a bundle. Native shape,
-mirrors `{info, messages:[{info, parts}]}` (see `exportlib/faithful.py`):
+`<stamp>/<YYYY-MM-DD>_<project>_<hash12>/YYYY-MM-DD__<title>_<id8>.faithful.json`
+per root session.
+In a bundle, the same path sits beside the transcript files for that session.
+Subagents remain under the root's dated `<family>__subagents/` folder in the same
+project. Native shape mirrors `{info, messages:[{info, parts}]}`
+(see `exportlib/faithful.py`):
 
 ```jsonc
 {
@@ -504,8 +544,9 @@ Absent `agent`/`mode`/`parentId` are `null`.
 archive itself, as the message whose `info.mode = 'compaction'` with its `text` part.
 A consumer that wants the number counts those messages.
 
-This archive is the **lossless evidence source** for extraction pipelines; the `memory`
-corpus indexes the same run — see *Consuming `corpus.jsonl`* under §3.
+This archive is the **lossless evidence source** for extraction pipelines; the
+`memory`/`corpus` JSONL artifacts index the same run — see *Consuming the JSONL
+artifacts* under §3.
 
 ---
 

@@ -68,7 +68,8 @@ except ImportError:
 # the "use it when / size / redundancy" legend lives in the header (see menu.sh).
 PRODUCT_PICKER_LABEL = {
     "transcript": "READ / SHARE / AUDIT — the conversation as Markdown (per session, display-filtered)",
-    "memory": "FEED ANOTHER AI — machine-readable corpus (corpus.jsonl, one line per session)",
+    "memory": "FEED ANOTHER AI — structured memory profiles (memory.jsonl, one record per root)",
+    "corpus": "RETRIEVAL / VECTOR STORES — flattened text (corpus.jsonl, one document per root)",
     "digest": "QUICK KNOWLEDGE REVIEW — only the compaction summaries",
     "faithful": "LOSSLESS MACHINE ARCHIVE — the complete session as native JSON (info + messages)",
 }
@@ -77,10 +78,12 @@ PRODUCT_PICKER_LEGEND = [
     "Choose ONE product (runs with DEFAULT options; ESC: back):",
     "   transcript   HEAVY, human-readable: your asks, the answers, reasoning, every tool call + output",
     "                and the code patches, compaction digests inline (display-filtered).",
-    "   memory       LIGHT, machine-readable: tokens/cost, todos, tools, first ask + last answer and ALL",
-    "                compaction digests per session. For retrieval or another AI; streamed line by line.",
-    "   digest       TINY extract: only the compaction summaries (the knowledge arc of a session). Already",
-    "                inside transcript AND memory — standalone is just a fast skim.",
+    "   memory       LIGHT, structured: first ask + last answer, todos, tools, tokens, compaction",
+    "                digests and subagent refs per root. One JSON record per line.",
+    "   corpus       FLAT TEXT: every message of a root and its subagents in one document, ready for",
+    "                retrieval or a vector store. One document per line in corpus.jsonl.",
+    "   digest       TINY extract: only the compaction summaries (the knowledge arc of a session). Also",
+    "                present in transcript, memory and corpus — standalone is just a fast skim.",
     "   faithful     LOSSLESS: the native opencode JSON, one file per session, unfiltered (only --sanitize",
     "                redacts). The raw copy a filtered product cannot promise; pair it to be lossless.",
     "Tune flags via the presets file (plans) or the CLI.",
@@ -159,8 +162,9 @@ def fidelity_parts(
 
     The reason depends on WHICH product carries the data: a content product
     (`transcript`/`digest`) without `faithful` loses what its Markdown filters
-    out; `memory` is not a transcript but a distilled memory corpus, so its
-    reason is the corpus shape, not a missing copy. `sub: omit` only affects the
+    out; `memory`/`corpus` are not transcripts but distilled or flattened
+    documents, so their reason is the artifact shape, not a missing copy.
+    `sub: omit` only affects the
     Markdown layout (the subagents are still in the set), so it is a loss only
     when no `faithful` copy carries them.
 
@@ -174,8 +178,10 @@ def fidelity_parts(
     if not has_faithful:
         if content:
             reasons.append("no faithful JSON: the Markdown is filtered")
+        elif "corpus" in products:
+            reasons.append("the corpus is flat text, not the full session")
         elif products:
-            reasons.append("the memory corpus is a summary, not the full session")
+            reasons.append("the memory is a summary, not the full session")
     if has_sanitize:
         reasons.append("sanitized (best-effort)")
     if any(c.get("no_subagents") is True for c in configs):
@@ -331,30 +337,26 @@ def plan_text(
 
 def _session_tree(product: str, cfg: dict) -> dict:
     """Files and session folders written by one standalone product."""
-    if product == "memory":
-        return {"corpus.jsonl": None, "index.md": None, "metadata.json": None}
-    if product == "faithful":
-        # JSON only, always one folder per session with subagents/ inside (there
-        # is no `sub` layout: inline/omit only make sense for Markdown).
-        return {
-            "YYYY-MM-DD__<title>_<id>": {
-                "<title>.json": None,
-                "subagents": {"<descendant>_<id>.json": None},
-            },
-            "index.md": None,
-            "metadata.json": None,
-        }
-    # transcript and digest share the writer (and therefore the layout).
-    session: dict = {"<title>.md": None}
+    if product in ("memory", "corpus"):
+        name = f"{product}.jsonl"
+        return {name: None, "index.md": None, "metadata.json": None}
+    ext = "json" if product == "faithful" else "md"
+    session: dict = {f"YYYY-MM-DD__<title>_<id8>.{product}.{ext}": None}
     if product == "transcript" and cfg.get("chunk_mb", 1) > 0:
-        session["<title>.parts (only when over limit)"] = {
-            "<title>-part-NNN.md": None,
+        session["<stem>.transcript.parts (only when over limit)"] = {
+            "<stem>.transcript-part-NNN.md": None,
             "index.md": None,
         }
-    if cfg.get("sub", "separate") == "separate":
-        session["subagents"] = {"<descendant>_<id>.md": None}
+    if product != "faithful" and cfg.get("sub", "separate") == "separate":
+        session["<family>"] = {
+            f"YYYY-MM-DD__<descendant>_<id8>.{product}.md": None
+        }
+    elif product == "faithful":
+        session["<family>"] = {
+            "YYYY-MM-DD__<descendant>_<id8>.faithful.json": None
+        }
     return {
-        "YYYY-MM-DD__<title>_<id>": session,
+        "<project>": session,
         "index.md": None,
         "metadata.json": None,
     }
@@ -379,31 +381,26 @@ def example_tree(profile: str, presets: dict | None = None) -> list[str]:
     root: dict = {}
     if plan["bundle"]:
         root["index.md"] = None
-        sessions: dict = {}
+        project: dict = {}
         for item in plan["items"]:
             product = item["product"]
             root[f"index.{product}.md"] = None
             root[f"metadata.{product}.json"] = None
             cfg = item.get("config", {})
-            if product == "memory":
-                root["corpus.jsonl"] = None
+            if product in ("memory", "corpus"):
+                root[f"{product}.jsonl"] = None
                 continue
-            folder: dict = sessions.setdefault("YYYY-MM-DD__<title>_<id>", {})
-            if product == "faithful":
-                folder["<title>.faithful.json"] = None
-                folder.setdefault("subagents", {})["<descendant>_<id>.faithful.json"] = None
-            else:
-                folder[f"<title>.{product}.md"] = None
-                if product == "transcript" and cfg.get("chunk_mb", 1) > 0:
-                    folder["<title>.transcript.parts (only when over limit)"] = {
-                        "<title>.transcript-part-NNN.md": None,
-                        "index.md": None,
-                    }
-                if cfg.get("sub", "separate") == "separate":
-                    folder.setdefault("subagents", {})[
-                        f"<descendant>_<id>.{product}.md"
-                    ] = None
-        root.update(sessions)
+            ext = "json" if product == "faithful" else "md"
+            project[f"YYYY-MM-DD__<title>_<id8>.{product}.{ext}"] = None
+            if product == "transcript" and cfg.get("chunk_mb", 1) > 0:
+                project["<stem>.transcript.parts (only when over limit)"] = {
+                    "<stem>.transcript-part-NNN.md": None,
+                    "index.md": None,
+                }
+            if product == "faithful" or cfg.get("sub", "separate") == "separate":
+                family = project.setdefault("<family>", {})
+                family[f"YYYY-MM-DD__<descendant>_<id8>.{product}.{ext}"] = None
+        root["<project>"] = project
         return ["<stamp>/"] + _tree_lines(root)
     for item in plan["items"]:
         root.update(_session_tree(item["product"], item.get("config", {})))

@@ -84,7 +84,7 @@ def generate_schema() -> dict:
         "properties": {
             "presets": {
                 "type": "object",
-                "description": "Name -> preset. Names conflict with product keywords (transcript|memory|digest|full) are allowed as data, but `export <name>` always resolves a keyword first. 'compactions' is a deprecated alias of 'digest'.",
+                "description": "Name -> preset. Names conflict with product keywords (transcript|memory|corpus|digest|faithful|full) are allowed as data, but `export <name>` always resolves a keyword first. 'compactions' is a deprecated alias of 'digest'.",
                 "additionalProperties": {"$ref": "#/definitions/preset"}
             }
         },
@@ -105,7 +105,7 @@ def generate_schema() -> dict:
             },
             **flag_defs,
             "flagProps": {
-                "description": "Config flags accepted (single: at the preset's top level; bundle: per product). Product-flags that do not affect a product (e.g. cap/files on transcript, json on memory) are ignored.",
+                "description": "Config flags accepted (single: at the preset's top level; bundle: per product). Product-flags that do not affect a product (e.g. cap/files on transcript) are ignored.",
                 "type": "object",
                 "properties": {
                     **{f.name: {"$ref": f"#/definitions/flag{f.name.capitalize()}"} for f in FLAGS}
@@ -180,17 +180,17 @@ def _flag_type(allowed: str, f) -> tuple[str, str]:
 
 
 def _flag_applies(f) -> str:
+    if f.name == "snapshot":
+        return "single preset only (never per-product/bundle)"
     if f.products == ["*"]:
         return "any"
-    if f.name == "files":
-        return "memory (touched files)"
     return ", ".join(f.products)
 
 
 def flags_table() -> str:
     """Render the docs/schemas.md §1 per-key table from FLAGS (also written to generated/flags-table.md)."""
     rows = [
-        "| `product` | string | `transcript` \\| `memory` \\| `digest` \\| `faithful` | "
+        "| `product` | string | `transcript` \\| `memory` \\| `corpus` \\| `digest` \\| `faithful` | "
         "single only (`full` is a CLI alias, **not** a preset product) |",
         "| `products` | object | keys restricted to the products above | "
         "bundle only (exclusive with `product`) |",

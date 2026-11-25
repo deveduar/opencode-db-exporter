@@ -45,9 +45,9 @@ INSERT INTO session VALUES
   0,300,40,0,0,0,1789000300000,1789000400000,NULL,NULL);
 -- Root B with one subagent and one orphan (missing parent)
 INSERT INTO session VALUES
- ('ses_B0001','proj2','beta-bravo','/tmp/projB','Project Beta','1.0',NULL,NULL,'build','{"id":"model-a","providerID":"opencode"}',
+ ('ses_B0001','proj2','beta-bravo','C:\work\projB','Project Beta','1.0',NULL,NULL,'build','{"id":"model-a","providerID":"opencode"}',
   0,500,90,0,0,0,1789001000000,1789001600000,NULL,NULL),
- ('ses_B0002','proj2','beta-sub','/tmp/projB','Translate docs (@explore subagent)','1.0',NULL,'ses_B0001','explore','{"id":"model-b","providerID":"opencode"}',
+ ('ses_B0002','proj2','beta-sub','C:\work\projB','Translate docs (@explore subagent)','1.0',NULL,'ses_B0001','explore','{"id":"model-b","providerID":"opencode"}',
   0,50,10,0,0,0,1789001100000,1789001200000,NULL,NULL),
  -- the orphan is the newest ROOT on BOTH axes (so 'shrink --keep N' picks it
  -- first), but B was used more recently than A: the two axes disagree on the

@@ -238,7 +238,7 @@ oc_export_picker() {
     echo "   missing: $OCED_PRESETS"
     echo "   create it from the shipped presets:"
     echo "     cp \"$SCRIPT_DIR/../presets.json\" \"$OCED_PRESETS\""
-    echo "   meanwhile: opencode-db export transcript|memory|digest [flags]"
+    echo "   meanwhile: opencode-db export transcript|memory|corpus|digest [flags]"
     return 0
 }
 
@@ -355,7 +355,7 @@ oc_annotate_flags() {
 }
 
 # oc_export_plan <profile> -> the confirm's product block.
-# profile = preset name OR product keyword (transcript|memory|digest).
+# profile = preset name OR product keyword (transcript|memory|corpus|digest).
 # FLAT, no label and no leading indentation: the caller owns the layout. Wrapped
 # at a FIXED width (not `tput cols`) so the screen is deterministic across
 # terminals and the smoke suite can assert the exact column count.

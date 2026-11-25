@@ -133,8 +133,8 @@ rows_with_label() { local n=0 line; while IFS= read -r line; do
     [[ "$line" == *$'\t'* ]] || continue
     [ -n "${line%%$'\t'*}" ] && [ -n "${line#*$'\t'}" ] && n=$((n + 1))
 done; echo "$n"; }
-[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "4" ] && ok "plan.py products rows (4) have key+label" || bad "product rows: $PROD"
-printf '%s' "$PROD" | grep -qE '^(transcript|memory|digest|faithful)' && ok "product rows are transcript/memory/digest/faithful" || bad "product keys: $PROD"
+[ "$(printf '%s\n' "$PROD" | rows_with_label)" = "5" ] && ok "plan.py products rows (5) have key+label" || bad "product rows: $PROD"
+printf '%s' "$PROD" | grep -qE '^(transcript|memory|corpus|digest|faithful)' && ok "product rows are transcript/memory/corpus/digest/faithful" || bad "product keys: $PROD"
 printf '%s' "$PROD" | grep -q '^full\b' && bad "full leaked as a picker row (CLI alias only)" || ok "full is NOT a picker row"
 printf '%s' "$PROD" | grep -q -- "--tool-output" && bad "variant rows leaked into the product rows" || ok "product rows have NO variant rows"
 
@@ -602,7 +602,7 @@ rm -f "$OCED_PRESETS"
 GUIDE=$(oc_export_picker)
 [ ! -s "$CALLS" ] && ok "no-presets export picker dispatches nothing" || bad "no-presets export picker ran a command: $(cat "$CALLS")"
 printf '%s' "$GUIDE" | grep -q 'presets.json' && ok "no-presets export picker prints setup guidance" || bad "guidance: $GUIDE"
-printf '%s' "$GUIDE" | grep -q 'export transcript|memory|digest' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
+printf '%s' "$GUIDE" | grep -q 'export transcript|memory|corpus|digest' && ok "guidance points to the raw CLI as fallback" || bad "guidance CLI tip: $GUIDE"
 [ -z "$(oc_export_rows)" ] && ok "export rows empty without presets (no manual fallback)" || bad "export rows: $(oc_export_rows)"
 
 echo "== export presets picker (preset-first when OCED_PRESETS exists) =="
@@ -613,7 +613,8 @@ cat > "$OCED_PRESETS" <<'EOF'
    "everything": {"description": "everything bundle", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}}},
    "archive": {"description": "full backup: complete tool outputs + faithful JSON + memory with files (heavy)", "products": {"transcript": {"tool_output": "full"}, "memory": {"files": true}, "faithful": {}}},
    "notes": {"description": "plain transcript read", "product": "transcript"},
-   "corpus": {"description": "memory corpus", "product": "memory"},
+   "memory": {"description": "structured memory profiles", "product": "memory"},
+   "corpus": {"description": "flat text corpus", "product": "corpus"},
    "digest": {"description": "compaction digests", "product": "compactions"},
    "snappy": {"description": "fresh-backup transcript", "product": "transcript", "snapshot": "fresh"},
    "review": {"description": "review copy", "product": "transcript", "no_reasoning": true},
@@ -637,8 +638,10 @@ printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_notes.*plain transcript' 
     && ok "presets mode row of notes uses the description from the presets file" || bad "notes description: $(printf '%s\n' "$(oc_export_rows)" | grep notes)"
 printf '%s\n' "$(oc_export_rows)" | grep -q "transcript defaults" \
     && bad "a preset row still claims 'transcript defaults'" || ok "no preset row falls back to 'transcript defaults'"
-printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_corpus.*\[memory\]' \
-    && ok "presets mode lists default plan corpus [memory]" || bad "corpus row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_memory.*\[memory\]' \
+    && ok "presets mode lists a memory preset [memory]" || bad "memory row missing"
+printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_corpus.*\[corpus\]' \
+    && ok "presets mode lists default plan corpus [corpus]" || bad "corpus row missing"
 printf '%s\n' "$(oc_export_rows)" | grep -q '^__PRESET_digest.*\[compactions\]' \
     && ok "presets mode lists default plan digest [compactions]" || bad "digest row missing"
 printf '%s\n' "$(oc_export_rows)" | grep '^__PRESET_archive' | grep -q 'lossless' \
@@ -730,7 +733,7 @@ oc_exports_run_row bbb '{}' | grep -qE 'notes$' \
     || bad "preset column: $(oc_exports_run_row bbb)"
 # `aaa` has profile `full` and NO preset: the preset column (right after the
 # size) must be empty — the product lives in its own column, never here.
-oc_exports_run_row aaa '{}' | grep -qE '[0-9]B +$' \
+oc_exports_run_row aaa '{}' | grep -qE '[0-9][A-Za-z]*B +(\([^)]+\))? *$' \
     && ok "a canonical run with no preset leaves the preset column empty" \
     || bad "preset column not empty: $(oc_exports_run_row aaa)"
 mkdir -p "$OUT/bundle-run"
@@ -1108,11 +1111,17 @@ MA=$(newest_meta transcript)
 jq -e '.selection.rule == "all"' "$MA" >/dev/null && ok "preset ALL -> no filter" || bad "ALL filter not null"
 jq -e '(.session_records | length) == 6' "$MA" >/dev/null && ok "ALL exported 6 sessions" || bad "ALL sessions count: $(jq '(.session_records | length)' "$MA")"
 
-qset "__ALL__" "__MAKE__" "__PRESET_corpus"
+qset "__ALL__" "__MAKE__" "__PRESET_memory"
 oc_export_sessions_pick >/dev/null
 MEM=$(newest_meta memory); MEM=$(dirname "$MEM")
-[ -f "$MEM/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
-[ "$(wc -l < "$MEM/corpus.jsonl")" -eq 3 ] && ok "memory corpus: one line per root (3 roots)" || bad "memory corpus roots"
+[ -f "$MEM/memory.jsonl" ] && ok "preset flow wrote structured memory" || bad "preset flow memory"
+[ "$(wc -l < "$MEM/memory.jsonl")" -eq 3 ] && ok "memory profiles: one line per root (3 roots)" || bad "memory profile roots"
+
+qset "__ALL__" "__MAKE__" "__PRESET_corpus"
+oc_export_sessions_pick >/dev/null
+COR=$(newest_meta corpus); COR=$(dirname "$COR")
+[ -f "$COR/corpus.jsonl" ] && ok "preset flow wrote a corpus" || bad "preset flow corpus"
+[ "$(wc -l < "$COR/corpus.jsonl")" -eq 3 ] && ok "flat corpus: one line per root (3 roots)" || bad "corpus roots"
 export OCED_PRESETS="$TMP/no-presets.json"
 
 echo "== export sessions picker: hide-subagents toggle =="
@@ -1253,7 +1262,7 @@ jq -e '.flags.no_subagents == false and (.session_records | length) == 6
        and ([.session_records[] | select(.kind == "subagent")] | length) == 3' "$MH" >/dev/null \
     && ok "real untouched hidden run exports the whole DB (3 roots + 3 subagents)" || bad "hidden run: $(jq -c '{n:.flags.no_subagents,h:.subagents_hidden,s:.session_records}' "$MH")"
 MH=$(dirname "$MH")
-[ -d "$(find "$MH" -type d -name subagents 2>/dev/null | head -1)" ] && ok "subagents/ folder exists in a hidden run" || bad "subagents folder missing"
+[ -d "$(find "$MH" -type d -name '*__subagents' 2>/dev/null | head -1)" ] && ok "the subagent family folder exists in a hidden run" || bad "subagents family folder missing"
 # A NARROWED hidden run: the cascade is named in the confirm.
 reset; confirm_action() { return 0; }
 XOUT="$TMP/xconfirm.txt"
@@ -1328,13 +1337,15 @@ printf '%s\n' "$PLANOUT" | grep -qx '  fidelity: lossless (the faithful JSON kee
     && ok "the card states the derived fidelity (archive: lossless)" || bad "archive fidelity: $(grep 'fidelity:' <<<"$PLANOUT")"
 oc_export_plan notes | grep -qx '  fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
     && ok "a json-less content preset says lossy (notes)" || bad "notes fidelity: $(oc_export_plan notes | grep 'fidelity:')"
-oc_export_plan corpus | grep -qx '  fidelity: lossy (the memory corpus is a summary, not the full session)' \
-    && ok "a memory-only preset says lossy for the corpus, not a missing JSON (corpus)" || bad "corpus fidelity: $(oc_export_plan corpus | grep 'fidelity:')"
+oc_export_plan corpus | grep -qx '  fidelity: lossy (the corpus is flat text, not the full session)' \
+    && ok "a corpus-only preset says lossy for the flat text, not a missing JSON" || bad "corpus fidelity: $(oc_export_plan corpus | grep 'fidelity:')"
+oc_export_plan memory | grep -qx '  fidelity: lossy (the memory is a summary, not the full session)' \
+    && ok "a memory-only preset says lossy for the summary, not a missing JSON" || bad "memory fidelity: $(oc_export_plan memory | grep 'fidelity:')"
 oc_export_plan transcript | grep -qx 'fidelity: lossy (no faithful JSON: the Markdown is filtered)' \
     && ok "the keyword plan states its fidelity too (lossy)" || bad "keyword fidelity: $(oc_export_plan transcript | grep 'fidelity:')"
 # The tree names every file the writer really emits: a json preset writes the
 # subagent JSON next to its Markdown (cli.py), so the tree must show it.
-printf '%s\n' "$PLANOUT" | grep -q '<descendant>_<id>.faithful.json' \
+printf '%s\n' "$PLANOUT" | grep -q '<descendant>_<id8>.faithful.json' \
     && ok "the tree shows the bundle subagent JSON beside transcript files" \
     || bad "tree subagent outputs: $(grep '<descendant>' <<<"$PLANOUT")"
 # The bits are emitted verbatim: every one of them is present (the wrap may
@@ -2146,7 +2157,7 @@ else
     PTY_TS="$TMP/pty.ts"; PTY_TM="$TMP/pty.timing"
     printf '#!/usr/bin/env bash\necho "PTY_MARK_1 plan visible"\nread -r a\necho "PTY_GOT:$a"\n' > "$TMP/fake-dispatcher"
     chmod +x "$TMP/fake-dispatcher"
-    printf '#!/usr/bin/env bash\nset -uo pipefail\nexport OCED_DISPATCHER=%s\n. %s\nrun_oced_tool probe\n' \
+    printf '#!/usr/bin/env bash\nset -uo pipefail\nexport OCED_DISPATCHER="%s"\n. "%s"\nrun_oced_tool probe\n' \
         "$TMP/fake-dispatcher" "$MOD/menu/core.sh" > "$TMP/pty-probe.sh"
     chmod +x "$TMP/pty-probe.sh"
     rm -f "$PTY_TS" "$PTY_TM"

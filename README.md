@@ -21,7 +21,7 @@ interactive terminals and can be disabled with `--no-progress`.
 
 OpenCode's CLI binds sessions to Git states and working directories, so switching branches or HEAD can hide older sessions even though the data is still in the global SQLite file. The exporter reads that database directly, so every prompt history, agent path and metric stays reachable, including roots and subagents:
 
-- **Export** to readable Markdown (`transcript`), a  `corpus.jsonl` (`memory`), the compaction digests (`digest`) or a lossless native-JSON archive (`faithful`) — with named **presets** and **bundles**.
+- **Export** to readable Markdown (`transcript`), structured memory profiles (`memory.jsonl`), a flat searchable text corpus (`corpus.jsonl`), compaction digests (`digest`) or a lossless native-JSON archive (`faithful`) — with named **presets** and **bundles**.
 - The optional Bash suite can **back up** the DB with a WAL-safe snapshot and sha256 manifest, **shrink** a copy, manage export/shrink runs, and launch the **fzf menu**.
 
 ## Requirements
@@ -60,19 +60,25 @@ python3 opencode-db-export.py --list-sessions --json
 
 Every invocation selects **one product or one named preset**. A preset can combine
 products into a bundle; multiple independent preset names are not accepted in one run.
-`full` aliases the `transcript` product. The shipped named presets are:
+Products are `transcript`, `memory`, `corpus`, `digest`, and `faithful`; `full`
+aliases `transcript` and `compactions` aliases `digest`. `memory` writes one
+structured profile per root in `memory.jsonl`; `corpus` writes one flattened text
+document per root in `corpus.jsonl`. They are distinct artifacts, not aliases.
+
+The shipped named presets are:
 
 | Preset | Output |
 |---|---|
-| `complete` | `transcript` + `memory` + `faithful` bundle |
+| `complete` | `transcript` + `memory` + `corpus` + `faithful` bundle |
 | `conversation` | Dialogue-only Markdown |
 | `digest` | Compaction summaries |
 | `notes` | Markdown with truncated tool output |
 | `prompts` | User prompts only |
-| `corpus` | Memory corpus (`corpus.jsonl`) |
+| `memory` | memory.jsonl: one structured memory profile per root session — first ask, last answer, todos, tools, tokens and digests |
+| `corpus` | Flat searchable text (`corpus.jsonl`) |
 | `review` | Readable Markdown + faithful archive |
 | `source` | Faithful JSON archive |
-| `study` | Markdown + memory corpus |
+| `study` | Markdown + structured memory + flat text corpus |
 | `tool-output` | Tool calls and outputs |
 
 List products and presets or inspect a plan without reading the database:
@@ -125,8 +131,9 @@ python3 opencode-db-export.py transcript --no-reasoning --mark-compactions --sum
 # Digest content filters.
 python3 opencode-db-export.py digest --no-reasoning --mark-compactions --summary-diffs --role assistant
 
-# Memory: cap text values (0 = unlimited) and include touched files.
+# Memory/corpus: cap text values (0 = unlimited) and include touched files.
 python3 opencode-db-export.py memory --cap 3000 --files
+python3 opencode-db-export.py corpus --cap 0 --files
 
 # Discovery and automation (no export).
 python3 opencode-db-export.py --list-products
@@ -215,11 +222,15 @@ python3 opencode-db-export.py --list-sessions --filter '%refactor%' --order crea
 canonical `created_at` and `updated_at` UTC timestamps; `created` and
 `updated` remain compatibility aliases. `revision` is the source database's
 `time_updated` integer used by change-aware launchers. Use `updated_at` for
-display and ordering; the integer remains the equality token. Per-session
-folders and files begin with the UTC last-update date, followed by title and
-short session ID. Run folders use a UTC `YYYYMMDDTHHMMSSZ` stamp and append
-the preset name with one underscore (for example, `20261118T005834Z_complete`).
-Older run folders remain readable.
+display and ordering; the integer remains the equality token. Run folders use a
+UTC `YYYYMMDDTHHMMSSZ` stamp and append the preset name with one underscore (for
+example, `20261118T005834Z_complete`); collisions append `@N`. Inside a run,
+session files are grouped by a canonical project folder named
+`<YYYY-MM-DD>_<project>_<hash12>` and named from the session's UTC last-update
+date, title and short session ID with a product suffix. The project date is the
+newest included session in that project; the suffix is the first 12 hex digits
+of SHA-256 over the canonical `directory` key, so Windows drives and their WSL
+`/mnt/<drive>` forms group together. Older run folders remain readable.
 The text form prints
 `Sessions found: N` followed by one line per session. Exit codes match the contract
 above; an empty DB or an empty selection returns `3` with a `no_data_reason`, and a
@@ -227,6 +238,41 @@ missing/unreadable DB returns `1` with `"status":"error"`.
 
 Progress is written to stderr only on an interactive terminal. `--no-progress` disables
 it, including for bundle products. Export summaries remain available after completion.
+
+### Output layout
+
+Every run is a single folder; a bundle shares the run across products rather than
+creating a subdirectory per product. Session files are grouped by project, and all
+session files carry their product suffix (also in single-product runs):
+
+```text
+<stamp>[_<preset>][@N]/
+  index.md                              bundle index, or the single-product index
+  metadata.json                         single product only; bundles use the suffixed files below
+  index.<product>.md                    bundle product index
+  metadata.<product>.json               bundle product metadata
+  memory.jsonl                          one structured profile per root (memory product)
+  corpus.jsonl                          one flat text document per root (corpus product)
+  <YYYY-MM-DD>_<project>_<hash12>/
+    2026-11-24__<title>_<id8>.transcript.md
+    2026-11-24__<title>_<id8>.faithful.json
+    2026-11-24__<title>_<id8>.transcript.parts/
+      2026-11-24__<title>_<id8>.transcript-part-001.md
+      index.md
+    2026-11-24__<YYYY-MM-DD>_<project>_<hash12>__<parent-id8>_<parent-title>__subagents/
+      2026-11-24__<child>_<id8>.transcript.md
+      2026-11-24__<child>_<id8>.faithful.json
+```
+
+`<project>` is the basename of `session.directory` (both `/` and `\` are accepted),
+sanitized with `no-project` as the fallback. Every root from the same canonical
+directory shares one project folder even when earlier exports used `@N` to split
+the same directory. A subagent family folder is created only when a root has
+descendants; its date is the newest included subagent's UTC update date, and
+colliding family names within a project get `@2`, `@3`, … suffixes. Product
+indexes and metadata stay at the run root. `memory.jsonl` and `corpus.jsonl` are
+separate root-level artifacts. See [artifact schemas](docs/schemas.md) for exact
+shapes.
 
 ### Environment variables and configuration scope
 

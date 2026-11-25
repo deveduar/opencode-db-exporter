@@ -96,7 +96,7 @@ EOF
     if ! python3 "$SCRIPT_DIR/exportlib/flags.py" --help-exports 2>/dev/null; then
         cat <<'EOF'
 export products (default: transcript):
-  transcript | memory | digest        (see 'opencode-db export --help' for the flags)
+  transcript | memory | corpus | digest  (see 'opencode-db export --help' for the flags)
 
 EOF
     fi
@@ -120,9 +120,9 @@ Named presets (presets file, source of truth for the menu and the CLI):
                      The preset pins the product, its config flags and optionally
                      the selection ('filter' or exact 'sessions' ids, not both;
                      none = ALL). Explicit CLI flags (--filter/--sessions/--cap...)
-                     override the preset. 'export transcript'/'memory'/'digest'/
-                     'faithful' always mean the product (its aliases and flags are
-                     unchanged).
+                      override the preset. 'export transcript'/'memory'/'corpus'/
+                      'digest'/'faithful' always mean the product (its aliases and
+                      flags are unchanged).
   export --list-presets   list the named presets (no DB access)
   export --list-products  list the export products (document kinds) (no DB access)
   export <name> --show    print the resolved plan, static, without reading the DB

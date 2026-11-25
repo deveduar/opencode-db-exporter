@@ -12,7 +12,7 @@ oced_export_one() {
 }
 
 # oced_export [product] [flags]
-# product: transcript | memory | digest (see exportlib/cli.py).
+# product: transcript | memory | corpus | digest (see exportlib/cli.py).
 oced_export() {
     o_check_deps
     # Preview/discovery commands decide for themselves whether the DB is needed:
