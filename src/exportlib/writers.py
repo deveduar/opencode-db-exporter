@@ -18,9 +18,9 @@ from exportlib.util import (
 )
 
 
-def _preset_suffix_for_name(name: str | None) -> str:
+def _run_label_suffix(name: str | None) -> str:
     """Short human suffix to append to the run folder, e.g. _review.
-    The suffix is only used for naming; the preset name is still recorded in metadata."""
+    The suffix comes from the requested action label, not the resolved product."""
     if not name:
         return ""
     clean = str(name).strip().replace(" ", "-")
@@ -32,16 +32,17 @@ def _preset_suffix_for_name(name: str | None) -> str:
 def make_outdir_final(
     base,
     stamp: str | None = None,
-    preset_name: str | None = None,
+    run_label: str | None = None,
     *,
     bundle_child: bool = False,
 ):
+    generated_stamp = not stamp
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if bundle_child:
         target = base / stamp
         target.mkdir(parents=True, exist_ok=True)
         return target
-    suffix = _preset_suffix_for_name(preset_name)
+    suffix = _run_label_suffix(run_label) if generated_stamp else ""
     target = base / f"{stamp}{suffix}"
     n = 2
     while target.exists():

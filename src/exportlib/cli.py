@@ -59,7 +59,7 @@ from exportlib.util import (
     ts_iso,
 )
 from exportlib.writers import (
-    _preset_suffix_for_name,
+    _run_label_suffix,
     last_backup_info,
     make_outdir_final,
     product_artifact_path,
@@ -136,7 +136,7 @@ def _free_bundle_stamp(out_base, stamp: str) -> str:
     return cand
 
 
-def run_bundle(args) -> None:
+def run_bundle(args, run_label: str | None = None) -> None:
     """Run each bundle product into a shared run root and session folders."""
     db_path = Path(default_db())
     if not db_path.exists():
@@ -147,7 +147,7 @@ def run_bundle(args) -> None:
         base_stamp = args.stamp
     else:
         base_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        base_stamp += _preset_suffix_for_name(args.preset)
+        base_stamp += _run_label_suffix(run_label or args.preset)
     products = list(args.bundle)
     stamp = _free_bundle_stamp(out_base, base_stamp)
     entry = Path(__file__).resolve()  # this same file IS the CLI entry (no shim)
@@ -196,6 +196,7 @@ def build_argparser() -> argparse.ArgumentParser:
 
     # Hidden/internal args
     ap.add_argument("--stamp", help=argparse.SUPPRESS)
+    ap.add_argument("--run-label", help="Label appended to the generated run folder")
     ap.add_argument("--title", help="Short human label for this export run")
     ap.add_argument("--notes", help="Optional freeform context for this export run")
     ap.add_argument("--source", choices=("direct", "update", "shrink-discard"),
@@ -756,6 +757,7 @@ def _main() -> None:
         ap.error("--chunk-mb must be non-negative (0 disables chunking)")
 
     profile_arg = args.profile
+    run_label = (args.run_label or "").strip() or profile_arg
     resolve_profile(args, ap)
 
     if args.profile == "full":
@@ -772,7 +774,7 @@ def _main() -> None:
         sys.exit(_dry_run(args, profile_arg, args.json_output))
 
     if args.bundle:
-        run_bundle(args)
+        run_bundle(args, run_label)
         return
 
     if args.preset_name:
@@ -850,7 +852,7 @@ def _main() -> None:
     out_dir = make_outdir_final(
         out_base,
         args.stamp,
-        getattr(args, "preset", None),
+        run_label,
         bundle_child=args.bundle_child,
     )
 

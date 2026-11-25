@@ -26,6 +26,7 @@ from exportlib.config import (
 from exportlib.progress import Progress
 from exportlib.util import yaml_frontmatter
 from exportlib.writers import (
+    make_outdir_final,
     project_folder_name,
     project_folder_name_with_date,
     project_id,
@@ -90,6 +91,20 @@ class ExportPathTests(unittest.TestCase):
             project_folder_name_with_date(session, "2026-06-22"),
             f"2026-06-22_projA_{project_id(session)}",
         )
+
+    def test_make_outdir_final_uses_run_label_only_for_generated_stamps(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            generated = make_outdir_final(base, None, "corpus")
+            self.assertRegex(generated.name, r"^\d{8}T\d{6}Z_corpus$")
+            self.assertEqual(
+                make_outdir_final(base, "explicit-run", "corpus").name,
+                "explicit-run",
+            )
+            self.assertEqual(
+                make_outdir_final(base, "explicit-run-no-label", None).name,
+                "explicit-run-no-label",
+            )
 
     def test_subagent_family_uses_newest_child_date_and_collision_suffixes(self):
         def make_session(sid, title, directory, updated):

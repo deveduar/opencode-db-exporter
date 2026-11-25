@@ -222,9 +222,11 @@ python3 opencode-db-export.py --list-sessions --filter '%refactor%' --order crea
 canonical `created_at` and `updated_at` UTC timestamps; `created` and
 `updated` remain compatibility aliases. `revision` is the source database's
 `time_updated` integer used by change-aware launchers. Use `updated_at` for
-display and ordering; the integer remains the equality token. Run folders use a
-UTC `YYYYMMDDTHHMMSSZ` stamp and append the preset name with one underscore (for
-example, `20261118T005834Z_complete`); collisions append `@N`. Inside a run,
+display and ordering; the integer remains the equality token. Generated run
+folders use a UTC `YYYYMMDDTHHMMSSZ` stamp and append the requested action label
+with one underscore (for example, `20261118T005834Z_complete`); `--run-label`
+overrides the label and an explicit `--stamp` names the final folder verbatim.
+Collisions append `@N`. Inside a run,
 session files are grouped by a canonical project folder named
 `<YYYY-MM-DD>_<project>_<hash12>` and named from the session's UTC last-update
 date, title and short session ID with a product suffix. The project date is the
@@ -246,7 +248,7 @@ creating a subdirectory per product. Session files are grouped by project, and a
 session files carry their product suffix (also in single-product runs):
 
 ```text
-<stamp>[_<preset>][@N]/
+<stamp>[_<run-label>][@N]/
   index.md                              bundle index, or the single-product index
   metadata.json                         single product only; bundles use the suffixed files below
   index.<product>.md                    bundle product index

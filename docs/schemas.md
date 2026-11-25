@@ -90,8 +90,11 @@ as `transcript+memory+corpus+faithful` for `complete`.
 
 `OCED_OUT/<stamp>/`:
 
+Generated run folders append the requested action label; `--run-label` overrides
+the label, while an explicit `--stamp` names the final folder verbatim.
+
 ```
-<stamp>[_<preset>][@N]/                        transcript+memory+corpus+faithful bundle
+<stamp>[_<run-label>][@N]/                        transcript+memory+corpus+faithful bundle
   index.md                                    bundle index
   index.transcript.md                         product index
   metadata.transcript.json                    product metadata
@@ -131,7 +134,7 @@ For a single-product export such as `conversation`, the run root is unsuffixed f
 indexes and metadata, but session documents still carry the product suffix:
 
 ```
-<stamp>[_<preset>][@N]/
+<stamp>[_<run-label>][@N]/
   index.md
   metadata.json
   memory.jsonl                 (only for memory)
